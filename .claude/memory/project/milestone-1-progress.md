@@ -127,9 +127,25 @@ All constants from CLAUDE.md Risk Rules section present in `config.py`:
 - Returns `(nan, nan)` if no data available
 - Test coverage: all kill zones (including Asian midnight wrap), session ranges, edge cases
 
-## 📋 Task 6-8: Pending
+## ✅ Task 6: HTF Bias Detector — DONE (2026-04-07)
 
-- Task 6: HTF Bias (Weekly/Daily bias detection)
+**File:** `timeframes/htf_bias.py` (150 lines)
+**Tests:** `tests/test_htf_bias.py` (22 tests, 22/22 PASS)
+
+**Implementation:**
+- Dataclass `BiasResult` with fields: direction, premium_discount, htf_levels, confidence, weekly_bias, daily_bias
+- Class `HTFBiasDetector` with method `determine_bias(df_daily, df_weekly, current_price) -> BiasResult`
+- **Bias Logic:**
+  - price < 50% of candle range = discount zone = bullish bias
+  - price > 50% of candle range = premium zone = bearish bias
+  - price ≈ 50% (within 2% threshold) = equilibrium = neutral bias
+- **Direction Priority:** Weekly > Daily (institutional structure defines primary direction)
+- **Confidence:** high if both agree with direction; medium if one agrees; low if disagree or both neutral
+- **HTF Levels:** Collects weekly_high, weekly_low, weekly_mid, daily_high, daily_low, daily_mid, current_price
+- Test coverage: single candle bias, direction priority, confidence logic, HTF levels, trending up/down scenarios, empty DataFrame handling
+
+## 📋 Task 7-8: Pending
+
 - Task 7: Foundation Tests (verify all test files exist and pass)
 - Task 8: Init Memory (already done in this session)
 
@@ -145,7 +161,7 @@ All constants from CLAUDE.md Risk Rules section present in `config.py`:
 
 ## Summary
 
-**Milestone 1 Foundation is 62.5% complete (5/8 tasks).**
+**Milestone 1 Foundation is 75% complete (6/8 tasks).**
 
 ### Completed (This Session)
 - Task 1: Scaffold (config, requirements, structure)
@@ -153,12 +169,14 @@ All constants from CLAUDE.md Risk Rules section present in `config.py`:
 - Task 3: Data loader (continuous front-month, 2.56M bars, 16/16 tests)
 - Task 4: Timeframe manager (6 TFs, OHLCV aggregation, 20/20 tests)
 - Task 5: Session manager (kill zones, HTF ranges, 28/28 tests)
+- Task 6: HTF Bias detector (weekly/daily bias, 22/22 tests)
 
 ### Test Summary
-- **Total:** 64/64 PASS
+- **Total:** 86/86 PASS ✓
 - data_loader: 16/16
+- htf_bias: 22/22
 - tf_manager: 20/20
 - session_manager: 28/28
 
-### No Blockers
-All decisions documented in memory files. Ready for HTF Bias detector next.
+### Ready for Task 7
+Task 7: Foundation Tests verification — verify all test files exist and pass. All 86 tests passing.
