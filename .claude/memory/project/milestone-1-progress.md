@@ -94,39 +94,71 @@ All constants from CLAUDE.md Risk Rules section present in `config.py`:
 
 ---
 
-## 🔄 Task 4: Timeframe Manager — IN PROGRESS (Planned 2026-04-07)
+## ✅ Task 4: Timeframe Manager — DONE (2026-04-07)
 
-**Skill:** `/python-engine`  
-**File:** `timeframes/tf_manager.py` (to be created)  
-**Tests:** `tests/test_tf_manager.py` (to be created)
+**File:** `timeframes/tf_manager.py` (180 lines)
+**Tests:** `tests/test_tf_manager.py` (20 tests, 20/20 PASS)
 
-**Requirements:**
+**Implementation:**
 - Class `TimeframeManager` with `aggregate(df_1min, target_tf) -> pd.DataFrame`
-- Support: 5min, 15min, 1H (60min), 4H (240min), D (1440min), W (10080min)
-- OHLCV aggregation: `first(O), max(H), min(L), last(C), sum(V)`
-- Cache aggregated frames to avoid recomputation
-- Tests: Verify 5min has 1/5 candles, OHLCV correct
+- Support: 5min, 15min, 1H, 4H, D, W using pandas `resample()`
+- OHLCV: `first(O), max(H), min(L), last(C), sum(V)`
+- Daily/Weekly anchored at 18:00 CT (CME Globex session open) — correct for ICT
+- Cache dict; `clear_cache()` method
+- Validation: columns, DatetimeIndex, timezone-aware
+- Test coverage: OHLCV math, bar counts, daily/weekly aggregation, caching, validation
 
 ---
 
-## 📋 Task 5-8: Pending
+## ✅ Task 5: Session Manager — DONE (2026-04-07)
 
-- Task 5: Session Manager (kill zones, Asian/London ranges)
+**File:** `timeframes/session_manager.py` (150 lines)
+**Tests:** `tests/test_session_manager.py` (28 tests, 28/28 PASS)
+
+**Implementation:**
+- Class `SessionManager` with kill zone detection
+- `is_kill_zone(timestamp, zone) -> bool` — 'asian', 'london', 'ny_am', 'silver_bullet', 'ny_pm'
+- Kill zones read directly from `config.KILL_ZONES` (US/Central)
+- Asian zone wraps midnight (20:00–00:00 CT) — correct logic
+- All zones use `start <= time < end` (end exclusive)
+- `get_asian_range(date, df_1min) -> (high, low)` — 19:00 CT prev evening
+- `get_london_session(date, df_1min) -> (high, low)` — 02:00–04:59 CT (excludes 05:00)
+- `get_ny_am_session(date, df_1min)` — convenience helper 08:30–11:00 CT
+- Returns `(nan, nan)` if no data available
+- Test coverage: all kill zones (including Asian midnight wrap), session ranges, edge cases
+
+## 📋 Task 6-8: Pending
+
 - Task 6: HTF Bias (Weekly/Daily bias detection)
-- Task 7: Foundation Tests (all test files pass)
+- Task 7: Foundation Tests (verify all test files exist and pass)
 - Task 8: Init Memory (already done in this session)
 
 ---
 
 ## 🎯 Next Actions
 
-1. **Task 4:** Build `tf_manager.py` + tests (est. 1 hour)
-2. **Task 5-7:** Build session/bias managers + tests (est. 2 hours)
-3. **Commit:** Task 4 → commit separately
-4. **Commit:** Tasks 5-8 → final Milestone 1 commit
+1. **Task 6:** Build `htf_bias.py` + tests (est. 1 hour)
+2. **Task 7:** Verify all test files exist and pass
+3. **Task 8:** Memory already initialized
+4. **Commit:** Task 6 → commit
+5. **Commit:** Final Milestone 1 commit after Task 7
 
 ## Summary
 
-Milestone 1 Foundation is 37.5% complete. Core data pipeline (loading + parsing) is solid. All 16 tests pass for data_loader. Ready for timeframe aggregation next.
+**Milestone 1 Foundation is 62.5% complete (5/8 tasks).**
 
-No blockers. All decisions documented in `data-loader-decisions.md`.
+### Completed (This Session)
+- Task 1: Scaffold (config, requirements, structure)
+- Task 2: Config constants (hardcoded risk rules)
+- Task 3: Data loader (continuous front-month, 2.56M bars, 16/16 tests)
+- Task 4: Timeframe manager (6 TFs, OHLCV aggregation, 20/20 tests)
+- Task 5: Session manager (kill zones, HTF ranges, 28/28 tests)
+
+### Test Summary
+- **Total:** 64/64 PASS
+- data_loader: 16/16
+- tf_manager: 20/20
+- session_manager: 28/28
+
+### No Blockers
+All decisions documented in memory files. Ready for HTF Bias detector next.
