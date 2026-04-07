@@ -1,0 +1,234 @@
+"""
+AlgoICT Configuration — ALL constants, risk rules, kill zones, timeframes.
+Sensei Rule: These values are HARDCODED. No dynamic overrides in production.
+"""
+
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+# ---------------------------------------------------------------------------
+# Environment
+# ---------------------------------------------------------------------------
+BASE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = BASE_DIR.parent
+DATA_DIR = PROJECT_ROOT / "data"
+
+load_dotenv(BASE_DIR / ".env")
+
+# ---------------------------------------------------------------------------
+# Broker — TopstepX (MNQ Intraday)
+# ---------------------------------------------------------------------------
+TOPSTEPX_USERNAME = os.getenv("TOPSTEPX_USERNAME", "")
+TOPSTEPX_API_KEY = os.getenv("TOPSTEPX_API_KEY", "")
+TOPSTEPX_API_URL = os.getenv("TOPSTEPX_API_URL", "https://api.topstepx.com/api")
+TOPSTEPX_WS_URL = os.getenv("TOPSTEPX_WS_URL", "wss://realtime.topstepx.com/api")
+
+# ---------------------------------------------------------------------------
+# Broker — Alpaca (S&P 500 Swing)
+# ---------------------------------------------------------------------------
+ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "")
+ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "")
+ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+
+# ---------------------------------------------------------------------------
+# Supabase
+# ---------------------------------------------------------------------------
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
+
+# ---------------------------------------------------------------------------
+# AI / APIs
+# ---------------------------------------------------------------------------
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+ALPHA_VANTAGE_API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY", "")
+MENTHORQ_API_KEY = os.getenv("MENTHORQ_API_KEY", "")
+
+# ---------------------------------------------------------------------------
+# Telegram Alerts
+# ---------------------------------------------------------------------------
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+
+# ---------------------------------------------------------------------------
+# Risk Rules (HARDCODED — Sensei Rules)
+# ---------------------------------------------------------------------------
+RISK_PER_TRADE = 250          # $250 max risk per trade
+KILL_SWITCH_LOSSES = 3        # 3 consecutive losses = done for the day
+KILL_SWITCH_AMOUNT = 750      # $750 max daily loss from kill switch
+DAILY_PROFIT_CAP = 1500       # $1,500/day — stop trading after this
+HARD_CLOSE_HOUR = 15          # 3:00 PM CT — flatten everything
+HARD_CLOSE_MINUTE = 0
+MIN_CONFLUENCE = 7            # Minimum 7/20 to take a trade
+MAX_MNQ_TRADES_PER_DAY = 3   # Max 3 MNQ trades per day
+MAX_CONTRACTS = 50            # Max 50 MNQ contracts
+
+# Topstep Compliance
+TOPSTEP_MLL = 2000            # Maximum Loss Limit: $2,000
+TOPSTEP_DLL = 1000            # Daily Loss Limit: $1,000
+TOPSTEP_PROFIT_TARGET = 3000  # $50K Combine profit target
+TOPSTEP_ACCOUNT_SIZE = 50000  # $50K Combine
+
+# ---------------------------------------------------------------------------
+# Heartbeat
+# ---------------------------------------------------------------------------
+HEARTBEAT_INTERVAL_S = 5      # Write to Supabase every 5s
+HEARTBEAT_OFFLINE_S = 15      # 15s without heartbeat = OFFLINE
+HEARTBEAT_ALERT_S = 30        # 30s = RED ALERT
+HEARTBEAT_FLATTEN = True      # Flatten all on heartbeat failure
+
+# ---------------------------------------------------------------------------
+# VPIN Toxicity Levels
+# ---------------------------------------------------------------------------
+VPIN_CALM = 0.35              # < 0.35: Calm — normal trading
+VPIN_NORMAL = 0.45            # 0.35-0.45: Normal — normal trading
+VPIN_ELEVATED = 0.55          # 0.45-0.55: Elevated — alert only
+VPIN_HIGH = 0.70              # 0.55-0.70: High — tighten stops, -25% size, +1 min confluence
+VPIN_EXTREME = 0.70           # > 0.70: EXTREME — FLATTEN ALL. HALT TRADING.
+VPIN_HIGH_SIZE_REDUCTION = 0.25   # Reduce position size by 25% when VPIN high
+VPIN_HIGH_CONFLUENCE_BUMP = 1     # Add +1 to min confluence when VPIN high
+
+# ---------------------------------------------------------------------------
+# Confluence Scoring (max 20 pts)
+# ---------------------------------------------------------------------------
+CONFLUENCE_WEIGHTS = {
+    "liquidity_grab":       2,   # ICT
+    "fair_value_gap":       2,   # ICT
+    "order_block":          2,   # ICT
+    "market_structure_shift": 2, # ICT
+    "kill_zone":            1,   # Time
+    "ote_fibonacci":        1,   # ICT
+    "htf_bias_aligned":     1,   # ICT HTF
+    "htf_ob_fvg_alignment": 1,   # ICT HTF
+    "target_at_pdh_pdl":    1,   # ICT
+    "sentiment_alignment":  1,   # SWC
+    "gex_wall_alignment":   2,   # GEX
+    "gamma_regime":         1,   # GEX
+    "vpin_validated_sweep":  1,  # VPIN
+    "vpin_quality_session":  1,  # VPIN
+}
+MAX_CONFLUENCE = 20
+
+# Confluence tiers
+CONFLUENCE_A_PLUS = 12        # 12+ = A+ full position
+CONFLUENCE_HIGH = 9           # 9-11 = high confidence
+CONFLUENCE_STANDARD = 7       # 7-8 = standard
+# < 7 = NO TRADE
+
+# ---------------------------------------------------------------------------
+# Timeframes
+# ---------------------------------------------------------------------------
+TIMEFRAMES = {
+    "1min": 1,
+    "5min": 5,
+    "15min": 15,
+    "1H": 60,
+    "4H": 240,
+    "D": 1440,
+    "W": 10080,
+}
+
+# ---------------------------------------------------------------------------
+# Kill Zones (CT — Central Time)
+# ---------------------------------------------------------------------------
+KILL_ZONES = {
+    "asian": {
+        "start": (20, 0),    # 8:00 PM CT
+        "end": (0, 0),       # 12:00 AM CT
+    },
+    "london": {
+        "start": (2, 0),     # 2:00 AM CT
+        "end": (5, 0),       # 5:00 AM CT
+    },
+    "ny_am": {
+        "start": (8, 30),    # 8:30 AM CT
+        "end": (11, 0),      # 11:00 AM CT
+    },
+    "ny_pm": {
+        "start": (13, 30),   # 1:30 PM CT
+        "end": (15, 0),      # 3:00 PM CT
+    },
+    "silver_bullet": {
+        "start": (10, 0),    # 10:00 AM CT
+        "end": (11, 0),      # 11:00 AM CT
+    },
+}
+
+# ---------------------------------------------------------------------------
+# Strategy Parameters
+# ---------------------------------------------------------------------------
+STRATEGIES = {
+    "ny_am_reversal": {
+        "rr_ratio": 3.0,           # 1:3 Risk:Reward
+        "entry_tf": "5min",
+        "context_tf": "15min",
+        "bias_tf": ["D", "W"],
+        "kill_zone": "ny_am",
+        "max_trades_per_day": 2,
+    },
+    "silver_bullet": {
+        "rr_ratio": 2.0,           # 1:2 Risk:Reward
+        "entry_tf": "1min",
+        "context_tf": "5min",
+        "kill_zone": "silver_bullet",
+        "max_trades_per_day": 1,
+    },
+    "swing_htf": {
+        "rr_ratio": 2.0,           # 1:2 Risk:Reward
+        "entry_tf": "4H",
+        "context_tf": "D",
+        "bias_tf": ["W"],
+        "max_positions": 5,
+        "hold_days_min": 2,
+        "hold_days_max": 15,
+    },
+}
+
+# ---------------------------------------------------------------------------
+# Strategy Lab — 9 Anti-Overfit Gates
+# ---------------------------------------------------------------------------
+LAB_GATES = {
+    "sharpe_improvement": 0.1,        # >= +0.1
+    "win_rate_max_degradation": -0.02, # < -2%
+    "drawdown_max_increase": 0.10,     # < +10%
+    "walk_forward_positive": 0.70,     # >= 70% windows positive
+    "cross_instrument_min": 2,         # 2 out of 3 (NQ, ES, YM)
+    "cross_instrument_total": 3,
+    "noise_max_degradation": 0.30,     # < 30% degradation
+    "inversion_must_lose": True,
+    "occam_max_new_params": 2,         # <= 2 new parameters
+    "validation_must_improve": True,
+}
+
+# Data splits (LOCKED)
+LAB_DATA_SPLITS = {
+    "train": (2019, 2022),
+    "validation": (2023, 2023),
+    "test": (2024, 2025),             # LOCKED — requires auth code
+}
+LAB_TEST_AUTH_PREFIX = "JUAN_APPROVED_FINAL_TEST"
+
+# ---------------------------------------------------------------------------
+# GEX (Gamma Exposure)
+# ---------------------------------------------------------------------------
+GEX_REFRESH_INTERVAL_MIN = 30  # Refresh GEX data every 30 minutes
+
+# ---------------------------------------------------------------------------
+# Database Tables
+# ---------------------------------------------------------------------------
+DB_TABLES = [
+    "trades",
+    "signals",
+    "daily_performance",
+    "bot_state",
+    "market_levels",
+    "post_mortems",
+    "strategy_candidates",
+]
+
+# ---------------------------------------------------------------------------
+# Trading Mode
+# ---------------------------------------------------------------------------
+MODE_PAPER = "paper"
+MODE_LIVE = "live"
+MODE_BACKTEST = "backtest"

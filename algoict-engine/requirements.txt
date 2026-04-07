@@ -1,0 +1,35 @@
+# AlgoICT Engine — Python Dependencies
+# Install: pip install -r requirements.txt
+
+# Data & Analysis
+pandas>=2.2.0
+numpy>=1.26.0
+scipy>=1.12.0
+TA-Lib>=0.4.28
+
+# Brokers
+alpaca-py>=0.21.0
+signalrcore>=0.9.5
+websockets>=12.0
+httpx>=0.27.0
+
+# Database
+supabase>=2.3.0
+
+# AI Agents
+anthropic>=0.40.0
+
+# Alerts
+python-telegram-bot>=21.0
+
+# Market Data
+yfinance>=0.2.36
+
+# Utilities
+python-dotenv>=1.0.1
+pydantic>=2.6.0
+
+# Testing
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+pytest-cov>=4.1.0

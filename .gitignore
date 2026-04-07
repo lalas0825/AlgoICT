@@ -1,0 +1,29 @@
+# Environment
+.env
+algoict-engine/.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Data (large files — not in git)
+data/*.csv
+data/nq_options_oi/
+data/sp500/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node (dashboard)
+node_modules/
+.next/
