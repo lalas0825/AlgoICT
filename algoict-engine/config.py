@@ -209,6 +209,21 @@ LAB_DATA_SPLITS = {
 LAB_TEST_AUTH_PREFIX = "JUAN_APPROVED_FINAL_TEST"
 
 # ---------------------------------------------------------------------------
+# Swing Point Detection — lookback bars on each side
+# ICT: tighter lookback on lower TFs, wider on HTF
+# ---------------------------------------------------------------------------
+SWING_LOOKBACK = {
+    "1min":  3,
+    "5min":  5,
+    "15min": 4,
+    "1H":    3,
+    "4H":    3,
+    "D":     3,
+    "W":     2,
+}
+SWING_MAX_HISTORY = 50   # Keep last 50 swing points per detector instance
+
+# ---------------------------------------------------------------------------
 # GEX (Gamma Exposure)
 # ---------------------------------------------------------------------------
 GEX_REFRESH_INTERVAL_MIN = 30  # Refresh GEX data every 30 minutes
