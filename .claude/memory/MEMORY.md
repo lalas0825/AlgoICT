@@ -7,11 +7,12 @@
 - [user-profile.md](user/user-profile.md) — Juan, trading bot AlgoICT, $50K Combine target
 
 ## project/ — Proyectos y decisiones activas
-- [milestone-1-progress.md](project/milestone-1-progress.md) — Tasks 1-3 completadas, Task 4 en progreso
+- [milestone-1-progress.md](project/milestone-1-progress.md) — Foundation (8/8 tasks complete, 86 tests)
+- [milestone-2-progress.md](project/milestone-2-progress.md) — ICT Core detectors (7 detectors, 290 tests, complete ✅)
 - [data-loader-decisions.md](project/data-loader-decisions.md) — Continuous front-month building, RTH gap detection
 
 ## feedback/ — Correcciones y preferencias
-(vacio)
+- [milestone-2-lessons.md](feedback/milestone-2-lessons.md) — OB loop bug, dedup tuples, greedy clustering, test patterns
 
 ## reference/ — Donde encontrar cosas
 - [ict-rules.md](reference/ict-rules.md) — ICT detector patterns (placeholder)

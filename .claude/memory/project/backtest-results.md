@@ -17,13 +17,15 @@ _Baseline and comparative backtests stored here as milestones complete._
 
 ### Milestone 2 (ICT Detectors)
 
-**Status:** Pending  
-**Expected:** After Task 29 (Run Baseline Backtests)
+**Status:** Complete ✅ (2026-04-07)  
+**Deliverables:** 7 detectors + 290 tests passing
 
-**Planned Baselines:**
-- NY AM Reversal on MNQ 2023-2025
-- Silver Bullet on MNQ 2023-2025
-- Combine Simulator run
+**Next:** Ready for baseline backtests (Milestone 4)
+
+**Planned Baselines (M4):**
+- NY AM Reversal on MNQ 2023-2025 (confluence ≥ 7)
+- Silver Bullet on MNQ 2023-2025 (confluence ≥ 7)
+- Combine Simulator run ($50K target)
 - Risk audit (ZERO violations required)
 
 ---
