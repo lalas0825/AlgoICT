@@ -89,7 +89,7 @@ def generate_report(
     for t in trades:
         by_reason[t.reason] += 1
 
-    # ── Daily P&L → Sharpe ─────────────────────────────────────────────────
+    # Daily P&L -> Sharpe
     daily_pnl: dict[datetime.date, float] = defaultdict(float)
     for t in trades:
         try:
@@ -124,7 +124,7 @@ def generate_report(
             dow = t.entry_time.to_pydatetime().weekday()
         by_dow[_DAYS[dow]].append(t.pnl)
 
-    # ── Confluence bands ────────────────────────────────────────────────────
+    # Confluence bands
     bands = {"7-8": [], "9-11": [], "12+": []}
     for t in trades:
         s = t.confluence_score
@@ -135,14 +135,12 @@ def generate_report(
         else:
             bands["12+"].append(t.pnl)
 
-    # ── Duration stats ──────────────────────────────────────────────────────
+    # Duration stats
     durations = [t.duration_bars for t in trades]
     avg_dur = sum(durations) / len(durations) if durations else 0
     max_dur = max(durations) if durations else 0
 
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # Build report text
-    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     _h("=" * 60)
     _h("  AlgoICT Backtest Report")
     _h("=" * 60)
@@ -151,7 +149,7 @@ def generate_report(
         try:
             first_d = min(t.entry_time for t in trades)
             last_d  = max(t.entry_time for t in trades)
-            _h(f"  Period : {first_d.date()} → {last_d.date()}")
+            _h(f"  Period : {first_d.date()} to {last_d.date()}")
         except Exception:
             pass
 
@@ -160,14 +158,14 @@ def generate_report(
     _h("")
 
     # Core metrics
-    _h("── Overview ──────────────────────────────────────────────")
+    _h("-- Overview -------------------------------------------")
     _h(f"  Total Trades   : {total}")
     _h(f"  Wins / Losses  : {n_wins} / {n_losses}")
     _h(f"  Win Rate       : {win_rate:.1%}")
     _h(f"  Total P&L      : ${total_pnl:+.2f}")
     _h("")
     _h(f"  Avg Win        : ${avg_win:+.2f}")
-    _h(f"  Avg Loss       : ${avg_loss:+.2f}")
+    _h(f"  Avg Loss       : ${avg_loss:+.2f} ")
     _h(f"  Expectancy     : ${expectancy:+.2f} / trade")
     _h(f"  Profit Factor  : {profit_factor:.2f}")
     _h(f"  Sharpe (daily) : {sharpe:.2f}")
