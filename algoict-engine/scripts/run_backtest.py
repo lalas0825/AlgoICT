@@ -76,6 +76,7 @@ sys.path.insert(0, str(ENGINE_ROOT))
 
 from backtest.backtester import Backtester, BacktestResult  # noqa: E402
 from backtest.data_loader import load_data_csv  # noqa: E402
+from backtest.databento_loader import load_databento_ohlcv_1m  # noqa: E402
 from backtest.synthetic_data import generate_synthetic_data  # noqa: E402
 
 # Detectors
@@ -113,10 +114,18 @@ DEFAULT_SYNTHETIC_END = "2024-03-31"
 def load_or_generate_data(
     synthetic: bool,
     csv_path: Optional[str],
+    databento_path: Optional[str],
     start: Optional[str],
     end: Optional[str],
+    symbol_prefix: str = "NQ",
 ) -> pd.DataFrame:
-    """Either generate synthetic data or load an existing CSV."""
+    """
+    Data source dispatcher — one of three modes:
+      * synthetic: generate random-walk OHLCV via synthetic_data.py
+      * csv:       simple OHLCV CSV via load_data_csv (timestamp column)
+      * databento: full Databento OHLCV-1m dump via databento_loader
+                   (handles multi-contract files + front-month continuous)
+    """
     if synthetic:
         synth_start = start or DEFAULT_SYNTHETIC_START
         synth_end = end or DEFAULT_SYNTHETIC_END
@@ -127,15 +136,26 @@ def load_or_generate_data(
             start_date=synth_start,
             end_date=synth_end,
         )
-        # Round-trip through load_data_csv so the shape matches production
         df = load_data_csv(DEFAULT_SYNTHETIC_PATH)
+    elif databento_path:
+        path = Path(databento_path)
+        if not path.exists():
+            raise FileNotFoundError(f"Databento CSV not found: {path}")
+        print(f"▶ Loading Databento OHLCV-1m: {path.name} ({path.stat().st_size / 1024 / 1024:.0f} MB)")
+        print(f"  (filtering front-month continuous, prefix={symbol_prefix!r})")
+        df = load_databento_ohlcv_1m(
+            path,
+            start_date=start,
+            end_date=end,
+            symbol_prefix=symbol_prefix,
+        )
     else:
         if not csv_path:
-            raise ValueError("--csv is required when --synthetic is not set")
+            raise ValueError("one of --synthetic, --csv, --databento is required")
         path = Path(csv_path)
         if not path.exists():
             raise FileNotFoundError(f"CSV not found: {path}")
-        print(f"▶ Loading data from {path}")
+        print(f"▶ Loading simple OHLCV CSV: {path}")
         df = load_data_csv(path)
 
     print(f"  → {len(df):,} bars ({df.index[0]} → {df.index[-1]})")
@@ -144,27 +164,72 @@ def load_or_generate_data(
 
 # ─── Collaborator factory ───────────────────────────────────────────────
 
-def build_backtester(strategy_name: str) -> tuple[Backtester, dict]:
+def build_backtester(strategy_name: str, df_1min: Optional[pd.DataFrame] = None) -> tuple[Backtester, dict]:
     """
     Wire up every collaborator the backtester needs. Returns a ready-to-run
     Backtester + the config dict that will be stored alongside the result
     in Supabase for reproducibility.
+
+    If ``df_1min`` is supplied, we pre-compute daily PDH/PDL + weekly
+    PWH/PWL from the entire dataset and seed the ``tracked_levels`` list.
+    This is essential: both strategies require at least one *swept*
+    liquidity level to fire, and without pre-seeding, the list stays
+    empty for the whole run → zero signals. (See main.py:215 — the
+    comment ``populated by engine as PDH/PDL/equals are swept`` describes
+    the production engine's behavior; the standalone backtester CLI
+    never wired this up, which is why cli.py always returns 0 trades
+    on real data.)
     """
     print("▶ Building detectors...")
     # Note: SwingPointDetector takes an optional lookbacks DICT, not a TF string.
     # cli.py passes "1min" as a positional arg which is actually a bug there —
     # the default (config.SWING_LOOKBACK) is what we want here.
+    liquidity = LiquidityDetector()
     detectors = {
         "swing_entry": SwingPointDetector(),
         "swing_context": SwingPointDetector(),
         "structure": MarketStructureDetector(),
         "fvg": FairValueGapDetector(),
         "ob": OrderBlockDetector(),
-        "liquidity": LiquidityDetector(),
+        "liquidity": liquidity,
         "displacement": DisplacementDetector(),
         "confluence": ConfluenceScorer(),
         "tracked_levels": [],
     }
+
+    # Seed tracked_levels with PDH/PDL + PWH/PWL for the whole period.
+    # The backtester's _update_sweeps() will mark these as swept as the
+    # 1-min bars cross them, and the strategy will see sweeps.
+    if df_1min is not None and not df_1min.empty:
+        tmp_tf = TimeframeManager()
+        try:
+            df_daily = tmp_tf.aggregate(df_1min, "D")
+        except Exception:
+            df_daily = None
+        try:
+            df_weekly = tmp_tf.aggregate(df_1min, "W")
+        except Exception:
+            df_weekly = None
+
+        seeded: list = []
+        if df_daily is not None and not df_daily.empty:
+            # Build PDH/PDL pairs for every day using a 1-day trailing window.
+            # Each daily bar produces ONE pair (high/low of that day) which
+            # becomes the following day's PDH/PDL. We label them with the
+            # daily bar's own timestamp.
+            for i in range(len(df_daily)):
+                window = df_daily.iloc[i:i + 1]
+                pair = liquidity.build_key_levels(df_daily=window)
+                seeded.extend(pair)
+
+        if df_weekly is not None and not df_weekly.empty:
+            for i in range(len(df_weekly)):
+                window = df_weekly.iloc[i:i + 1]
+                pair = liquidity.build_key_levels(df_weekly=window)
+                seeded.extend(pair)
+
+        detectors["tracked_levels"] = seeded
+        print(f"  seeded tracked_levels: {len(seeded)} PDH/PDL/PWH/PWL levels")
 
     risk_mgr = RiskManager()
     tf_mgr = TimeframeManager()
@@ -341,8 +406,10 @@ def main() -> int:
         df = load_or_generate_data(
             synthetic=args.synthetic,
             csv_path=args.csv,
+            databento_path=args.databento,
             start=args.start,
             end=args.end,
+            symbol_prefix=args.symbol_prefix,
         )
     except Exception as e:
         print(f"✗ Data load failed: {e}")
@@ -352,9 +419,9 @@ def main() -> int:
         print("✗ Data frame is empty — nothing to backtest")
         return 1
 
-    # Step 2: backtester + collaborators
+    # Step 2: backtester + collaborators (seeds tracked_levels from df)
     try:
-        backtester, config = build_backtester(args.strategy)
+        backtester, config = build_backtester(args.strategy, df_1min=df)
     except Exception as e:
         print(f"✗ Build failed: {e}")
         import traceback; traceback.print_exc()
@@ -384,7 +451,13 @@ def main() -> int:
             args.run_id
             or f"{args.strategy}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
         )
-        notes = f"M11 first real backtest — {'synthetic' if args.synthetic else Path(args.csv).name}"
+        if args.synthetic:
+            source_label = "synthetic"
+        elif args.databento:
+            source_label = f"databento:{Path(args.databento).name}"
+        else:
+            source_label = Path(args.csv).name
+        notes = f"M11 run — {source_label}"
         write_to_supabase(
             result=result,
             config=config,
@@ -423,11 +496,21 @@ def _parse_args() -> argparse.Namespace:
     src.add_argument(
         "--synthetic",
         action="store_true",
-        help="Generate and use synthetic OHLCV data",
+        help="Generate and use synthetic OHLCV data (random walk)",
     )
     src.add_argument(
         "--csv",
-        help="Path to a 1-min OHLCV CSV file",
+        help="Path to a simple OHLCV CSV (columns: timestamp,open,high,low,close,volume)",
+    )
+    src.add_argument(
+        "--databento",
+        help="Path to a Databento OHLCV-1m CSV dump (multi-contract + spreads)",
+    )
+
+    p.add_argument(
+        "--symbol-prefix",
+        default="NQ",
+        help="Contract root filter for Databento files (default: NQ)",
     )
 
     p.add_argument(
