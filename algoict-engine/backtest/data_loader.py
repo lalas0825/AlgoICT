@@ -149,11 +149,8 @@ def load_data_csv(path) -> pd.DataFrame:
     if not required.issubset(df.columns):
         raise ValueError(f"CSV must contain columns: {required}")
 
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
     df.set_index("timestamp", inplace=True)
-
-    if df.index.tz is None:
-        df.index = df.index.tz_localize("UTC")
     df.index = df.index.tz_convert("America/Chicago")
 
     for col in ["open", "high", "low", "close"]:
