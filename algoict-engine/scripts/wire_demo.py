@@ -31,6 +31,7 @@ for automated coverage.
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import logging
 import sys
@@ -174,7 +175,7 @@ def make_candidate() -> dict:
     }
 
 
-def make_post_mortem(trade_id: str) -> dict:
+def make_post_mortem() -> dict:
     return {
         "category": "htf_misread",
         "severity": "medium",
@@ -324,14 +325,18 @@ class DemoStateProvider:
 
 # ─── Main ───────────────────────────────────────────────────────────────
 
-async def main() -> int:
+async def main(interval_s: float = 2.0, countdown: bool = True) -> int:
     client = get_lab_client()
     if client is None:
         print("✗ Could not build Supabase client. Check your .env")
         return 1
 
+    total_phases = len(DemoStateProvider.STATES)
+    total_duration = interval_s * total_phases
+
     print(f"✓ Connected to {client.url}")
     print(f"  Demo prefix: {DEMO_PREFIX}")
+    print(f"  Phase interval: {interval_s:.1f}s ({total_phases} phases = {total_duration:.0f}s total)")
     print()
 
     # Step 1: Trades
@@ -370,26 +375,39 @@ async def main() -> int:
     # Step 5: post_mortem
     print("\n=== Step 5: inserting post_mortem ===")
     ok = client.insert_post_mortem(
-        make_post_mortem(trades[2]["id"]),
+        make_post_mortem(),
         trade_id=trades[2]["id"],
     )
     print(f"  → {'✓' if ok else '✗'} post_mortems")
 
     # Step 6: Live state sync loop
-    print("\n=== Step 6: starting BotStateSync for 12 seconds ===")
+    print(f"\n=== Step 6: starting BotStateSync for ~{total_duration:.0f}s ===")
     print("  Watch the dashboard at http://localhost:3000 now!")
-    print("  The VPIN gauge, P&L, SWC mood, and GEX regime will change")
-    print("  every 2 seconds through 6 phases.")
+    print(f"  The VPIN gauge, P&L, SWC mood, and GEX regime will change")
+    print(f"  every {interval_s:.0f}s through {total_phases} phases:")
+    print("    1. calm       → Risk On,   VPIN 0.28, P&L +$120")
+    print("    2. elevated   → VPIN 0.42, P&L +$200, 2 wins")
+    print("    3. high       → VPIN 0.58, P&L -$30,  Event Driven")
+    print("    4. EXTREME    → VPIN 0.78, SHIELD ACTIVE 🛡")
+    print("    5. recovery   → VPIN 0.38, P&L +$250, Risk On")
+    print("    6. shutdown   → Bot stopped cleanly")
     print()
+
+    if countdown:
+        for n in (3, 2, 1):
+            print(f"  Starting in {n}…", end="\r", flush=True)
+            await asyncio.sleep(1.0)
+        print("  Starting now!      ")
 
     sync = BotStateSync(
         client,
         DemoStateProvider(),
-        interval_s=2.0,
+        interval_s=interval_s,
     )
 
     task = asyncio.create_task(sync.start())
-    await asyncio.sleep(13.0)  # Enough for all 6 phases + final stamp
+    # Enough for all phases + a small trailing buffer for the final write
+    await asyncio.sleep(total_duration + interval_s * 0.5)
     await sync.stop()
     await asyncio.wait_for(task, timeout=2.0)
 
@@ -432,9 +450,40 @@ async def main() -> int:
     return 0
 
 
+def _parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        prog="wire_demo",
+        description=(
+            "M10 engine wiring demo — writes synthetic data to every "
+            "Supabase table and streams live bot_state updates through "
+            "6 phases so you can watch the dashboard react."
+        ),
+    )
+    p.add_argument(
+        "--interval",
+        type=float,
+        default=2.0,
+        help="Seconds per phase (default: 2.0 = 12s total; try 5.0 for slow-mo)",
+    )
+    p.add_argument(
+        "--no-countdown",
+        action="store_true",
+        help="Skip the 3-2-1 countdown before Step 6",
+    )
+    return p.parse_args()
+
+
 if __name__ == "__main__":
+    args = _parse_args()
     try:
-        sys.exit(asyncio.run(main()))
+        sys.exit(
+            asyncio.run(
+                main(
+                    interval_s=args.interval,
+                    countdown=not args.no_countdown,
+                )
+            )
+        )
     except KeyboardInterrupt:
         print("\nInterrupted.")
         sys.exit(130)
