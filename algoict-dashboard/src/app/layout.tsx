@@ -1,22 +1,32 @@
 import type { Metadata } from 'next';
-import { Inter } from 'next/font/google';
+import { DM_Sans, IBM_Plex_Mono } from 'next/font/google';
 import './globals.css';
 
-const inter = Inter({ subsets: ['latin'] });
+const dmSans = DM_Sans({
+  subsets: ['latin'],
+  variable: '--font-dm-sans',
+  display: 'swap',
+});
+
+const ibmPlexMono = IBM_Plex_Mono({
+  weight: ['400', '500', '600'],
+  subsets: ['latin'],
+  variable: '--font-ibm-plex-mono',
+  display: 'swap',
+});
 
 export const metadata: Metadata = {
   title: 'AlgoICT Dashboard',
-  description: 'Automated trading engine with 6 layers of AI intelligence',
+  description: '6-layer AI trading intelligence — ICT + SWC + GEX + VPIN + Strategy Lab + Post-Mortem',
 };
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body className={inter.className}>{children}</body>
+    <html
+      lang="en"
+      className={`${dmSans.variable} ${ibmPlexMono.variable} antialiased`}
+    >
+      <body className="bg-zinc-950 text-zinc-50 font-sans min-h-screen">{children}</body>
     </html>
   );
 }
