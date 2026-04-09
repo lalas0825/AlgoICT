@@ -26,7 +26,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       lang="en"
       className={`${dmSans.variable} ${ibmPlexMono.variable} antialiased`}
     >
-      <body className="bg-zinc-950 text-zinc-50 font-sans min-h-screen">{children}</body>
+      <body
+        className="bg-zinc-950 text-zinc-50 font-sans min-h-screen"
+        suppressHydrationWarning
+      >
+        {children}
+      </body>
     </html>
   );
 }
