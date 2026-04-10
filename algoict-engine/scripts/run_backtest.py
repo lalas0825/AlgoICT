@@ -97,8 +97,136 @@ from timeframes.session_manager import SessionManager  # noqa: E402
 from strategies.ny_am_reversal import NYAMReversalStrategy  # noqa: E402
 from strategies.silver_bullet import SilverBulletStrategy  # noqa: E402
 
+# HTF bias detector for dynamic bias mode
+from timeframes.htf_bias import HTFBiasDetector, BiasResult  # noqa: E402
+
 # Supabase write path (M10)
 from db.supabase_lab_client import get_lab_client  # noqa: E402
+
+
+# ─── Dynamic HTF bias wrapper ───────────────────────────────────────────
+
+class DynamicBiasStrategy:
+    """
+    Strategy wrapper that replaces the static ``htf_bias_fn`` with a
+    real bias computed from past daily + weekly bars at every evaluate().
+
+    Why this exists
+    ---------------
+    The base strategies expect a callable ``htf_bias_fn(last_close) -> BiasResult``.
+    Our default (cli.py copy) hardcodes bullish, which biases the entire
+    backtest to long-only and inflates results during uptrending markets.
+
+    A real bias must be:
+      * derived from completed daily + weekly bars
+      * recomputed at every minute the strategy evaluates
+      * strictly look-ahead-free — only data that existed BEFORE the
+        current bar's timestamp is allowed
+
+    Implementation
+    --------------
+    The wrapper holds pre-computed daily + weekly aggregates of the
+    full backtest dataset (built once at construction). On each
+    ``evaluate()`` call:
+
+      1. Capture the current bar's timestamp from ``candles_5min.index[-1]``
+      2. Inject a closure into the inner strategy as ``htf_bias_fn``
+         that, when called by the strategy, slices ``df_daily`` and
+         ``df_weekly`` to bars whose label is strictly BEFORE
+         ``current_ts.normalize()`` (i.e. excludes today + this week)
+      3. Calls ``HTFBiasDetector.determine_bias(past_daily, past_weekly, price)``
+      4. Delegates to inner strategy's ``evaluate()``
+
+    All other attributes (ENTRY_TF, CONTEXT_TF, reset_daily, etc.)
+    pass through to the inner strategy via ``__getattr__``.
+    """
+
+    def __init__(
+        self,
+        inner: object,
+        df_daily: pd.DataFrame,
+        df_weekly: pd.DataFrame,
+        detector: Optional[HTFBiasDetector] = None,
+    ):
+        self._inner = inner
+        self._df_daily = df_daily
+        self._df_weekly = df_weekly
+        self._detector = detector or HTFBiasDetector()
+
+        self._current_ts: Optional[pd.Timestamp] = None
+        self._neutral_count = 0
+        self._bullish_count = 0
+        self._bearish_count = 0
+
+        # Wire the closure into the inner strategy
+        self._inner.htf_bias_fn = self._dynamic_bias
+
+    # ─── Stats ──────────────────────────────────────────────────────────
+
+    @property
+    def bias_stats(self) -> dict:
+        total = self._bullish_count + self._bearish_count + self._neutral_count
+        return {
+            "calls": total,
+            "bullish": self._bullish_count,
+            "bearish": self._bearish_count,
+            "neutral": self._neutral_count,
+            "bullish_pct": self._bullish_count / total if total else 0.0,
+            "bearish_pct": self._bearish_count / total if total else 0.0,
+            "neutral_pct": self._neutral_count / total if total else 0.0,
+        }
+
+    # ─── Core: dynamic bias closure ─────────────────────────────────────
+
+    def _dynamic_bias(self, current_price: float, *_args, **_kwargs) -> BiasResult:
+        """
+        Closure invoked by the inner strategy in place of its htf_bias_fn.
+        Reads the captured ``self._current_ts`` to determine which past
+        bars to use, then calls the detector.
+        """
+        if self._current_ts is None:
+            # Strategy called bias before evaluate() — defensive neutral
+            return self._detector._neutral_result()
+
+        # Cutoff: start of today (Chicago tz). Anything labeled before
+        # this is a fully-completed prior bar; today's in-progress bar
+        # is excluded.
+        cutoff = self._current_ts.normalize()
+
+        past_daily = self._df_daily[self._df_daily.index < cutoff]
+        past_weekly = self._df_weekly[self._df_weekly.index < cutoff]
+
+        if past_daily.empty or past_weekly.empty:
+            # Not enough HTF history yet — return neutral so the strategy
+            # rejects the trade rather than defaulting to bullish
+            self._neutral_count += 1
+            return self._detector._neutral_result()
+
+        result = self._detector.determine_bias(
+            df_daily=past_daily,
+            df_weekly=past_weekly,
+            current_price=float(current_price),
+        )
+
+        if result.direction == "bullish":
+            self._bullish_count += 1
+        elif result.direction == "bearish":
+            self._bearish_count += 1
+        else:
+            self._neutral_count += 1
+        return result
+
+    # ─── Strategy interface delegation ─────────────────────────────────
+
+    def evaluate(self, candles_entry: pd.DataFrame, candles_context: pd.DataFrame):
+        if not candles_entry.empty:
+            self._current_ts = candles_entry.index[-1]
+        return self._inner.evaluate(candles_entry, candles_context)
+
+    def __getattr__(self, name: str):
+        # Called only when normal attribute lookup fails — passes through
+        # ENTRY_TF, CONTEXT_TF, reset_daily, etc. to the inner strategy.
+        return getattr(self._inner, name)
 
 
 logger = logging.getLogger("run_backtest")
@@ -164,7 +292,11 @@ def load_or_generate_data(
 
 # ─── Collaborator factory ───────────────────────────────────────────────
 
-def build_backtester(strategy_name: str, df_1min: Optional[pd.DataFrame] = None) -> tuple[Backtester, dict]:
+def build_backtester(
+    strategy_name: str,
+    df_1min: Optional[pd.DataFrame] = None,
+    dynamic_bias: bool = False,
+) -> tuple[Backtester, dict]:
     """
     Wire up every collaborator the backtester needs. Returns a ready-to-run
     Backtester + the config dict that will be stored alongside the result
@@ -235,14 +367,11 @@ def build_backtester(strategy_name: str, df_1min: Optional[pd.DataFrame] = None)
     tf_mgr = TimeframeManager()
     session_mgr = SessionManager()
 
-    # Stub HTF bias — cli.py uses the same pattern. A real driver would
-    # compute bias from weekly/daily frames. For synthetic data it's fine
-    # to force bullish since the random walk has no real HTF structure.
-    def htf_bias_fn(*_args, **_kwargs):
-        # Stub bias: forced bullish with high confidence so synthetic random-walk
-        # data can still produce signals. A real driver would compute this from
-        # actual weekly/daily bars via timeframes.htf_bias.
-        from timeframes.htf_bias import BiasResult
+    # Static stub bias — used unless --dynamic-bias is set. Always returns
+    # bullish so the strategy will at least take long setups on synthetic
+    # data (which has no real HTF structure). For real data the dynamic
+    # branch below should be used.
+    def static_bullish_bias(*_args, **_kwargs):
         return BiasResult(
             direction="bullish",
             premium_discount="discount",
@@ -256,11 +385,11 @@ def build_backtester(strategy_name: str, df_1min: Optional[pd.DataFrame] = None)
     strategy_name_lc = strategy_name.lower()
     if strategy_name_lc == "ny_am_reversal":
         strategy = NYAMReversalStrategy(
-            detectors, risk_mgr, session_mgr, htf_bias_fn
+            detectors, risk_mgr, session_mgr, static_bullish_bias
         )
     elif strategy_name_lc == "silver_bullet":
         strategy = SilverBulletStrategy(
-            detectors, risk_mgr, session_mgr, htf_bias_fn
+            detectors, risk_mgr, session_mgr, static_bullish_bias
         )
     else:
         raise ValueError(
@@ -268,13 +397,34 @@ def build_backtester(strategy_name: str, df_1min: Optional[pd.DataFrame] = None)
             f"Valid: ny_am_reversal, silver_bullet"
         )
 
+    # Optional: wrap with DynamicBiasStrategy if requested + we have data
+    bias_label = "bullish (static stub)"
+    if dynamic_bias:
+        if df_1min is None or df_1min.empty:
+            print("  ⚠ --dynamic-bias requested but no df_1min — falling back to static")
+        else:
+            print("  ▶ Wrapping with DynamicBiasStrategy (computed from W/D bars)")
+            tmp_tf = TimeframeManager()
+            df_daily_for_bias = tmp_tf.aggregate(df_1min, "D")
+            df_weekly_for_bias = tmp_tf.aggregate(df_1min, "W")
+            print(
+                f"    daily bars:  {len(df_daily_for_bias)}  "
+                f"weekly bars: {len(df_weekly_for_bias)}"
+            )
+            strategy = DynamicBiasStrategy(
+                inner=strategy,
+                df_daily=df_daily_for_bias,
+                df_weekly=df_weekly_for_bias,
+            )
+            bias_label = "dynamic (HTFBiasDetector W+D)"
+
     backtester = Backtester(strategy, detectors, risk_mgr, tf_mgr, session_mgr)
 
     config = {
         "strategy": strategy_name_lc,
         "entry_tf": getattr(strategy, "ENTRY_TF", "5min"),
         "context_tf": getattr(strategy, "CONTEXT_TF", "15min"),
-        "htf_bias": "bullish (stub)",
+        "htf_bias": bias_label,
         "min_confluence": 7,
         "risk_per_trade": 250,
         "kill_switch_losses": 3,
@@ -421,7 +571,11 @@ def main() -> int:
 
     # Step 2: backtester + collaborators (seeds tracked_levels from df)
     try:
-        backtester, config = build_backtester(args.strategy, df_1min=df)
+        backtester, config = build_backtester(
+            args.strategy,
+            df_1min=df,
+            dynamic_bias=args.dynamic_bias,
+        )
     except Exception as e:
         print(f"✗ Build failed: {e}")
         import traceback; traceback.print_exc()
@@ -444,6 +598,17 @@ def main() -> int:
 
     # Step 4: report
     print_report(result, elapsed)
+
+    # Optional: dynamic bias stats
+    strategy_obj = backtester.strategy
+    if isinstance(strategy_obj, DynamicBiasStrategy):
+        stats = strategy_obj.bias_stats
+        print()
+        print(f"  HTF bias distribution ({stats['calls']} calls):")
+        print(f"    bullish : {stats['bullish']:>6,}  ({stats['bullish_pct']:>5.1%})")
+        print(f"    bearish : {stats['bearish']:>6,}  ({stats['bearish_pct']:>5.1%})")
+        print(f"    neutral : {stats['neutral']:>6,}  ({stats['neutral_pct']:>5.1%})")
+        print()
 
     # Step 5: Supabase write
     if not args.no_supabase:
@@ -511,6 +676,15 @@ def _parse_args() -> argparse.Namespace:
         "--symbol-prefix",
         default="NQ",
         help="Contract root filter for Databento files (default: NQ)",
+    )
+    p.add_argument(
+        "--dynamic-bias",
+        action="store_true",
+        help=(
+            "Replace the hardcoded-bullish HTF bias stub with a real bias "
+            "computed from completed weekly + daily bars at every "
+            "evaluate() call. Look-ahead-free."
+        ),
     )
 
     p.add_argument(
