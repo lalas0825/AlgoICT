@@ -35,12 +35,34 @@ class RiskManager:
     """
     Tracks intraday P&L and enforces all risk rules.
 
+    Topstep Combine awareness (M14)
+    --------------------------------
+    When ``topstep_mode=True``, the manager tracks multi-day equity and
+    enforces MLL (Maximum Loss Limit) protection:
+
+      * ``peak_balance_eod``  — highest end-of-day balance ever reached
+      * ``current_drawdown``  — peak_balance_eod - current_balance (intraday)
+
+    Drawdown zones:
+      * < 80% of MLL ($1,600) — normal trading
+      * 80-95% of MLL ($1,600-$1,899) — CAUTION: position size halved,
+        min confluence +2
+      * >= 95% of MLL ($1,900) — STOP: no new trades until next session
+      * target reached ($53k) — PROTECTIVE: max 1 trade/day, size halved
+        (only applies with ``protective_after_target=True``, off by default
+        for combine sims — the combine ends when target is reached)
+
+    These compound with existing intraday rules (kill switch, profit cap,
+    VPIN halt). The tightest restriction always wins.
+
     Usage
     -----
     rm = RiskManager()
-    rm.record_trade(-250)   # lost $250
+    rm.enable_topstep_mode(starting_balance=50000)
+    rm.record_trade(-250)
     allowed, reason = rm.can_trade()
-    rm.reset_daily()        # call at start of each session
+    rm.end_of_day()       # call at session close to update EOD peak
+    rm.reset_daily()      # call at start of each session
     """
 
     def __init__(self):
@@ -57,6 +79,85 @@ class RiskManager:
         self._min_confluence_adj: int = 0    # +N added to min confluence
         self._position_multiplier: float = 1.0  # 0.75 = 25% reduction
         self._vpin_halted: bool = False
+
+        # ── Topstep Combine MLL tracking (M14) ──────────────────────────
+        self._topstep_mode: bool = False
+        self._current_balance: float = 0.0
+        self._peak_balance_eod: float = 0.0
+        self._starting_balance: float = 0.0
+        self._mll_limit: float = config.TOPSTEP_MLL            # $2,000
+        self._mll_caution_pct: float = 0.80                    # 80% = $1,600
+        self._mll_stop_pct: float = 0.95                       # 95% = $1,900
+        self._profit_target: float = config.TOPSTEP_PROFIT_TARGET  # $3,000
+        self._target_reached: bool = False
+        self._protective_after_target: bool = False  # for funded account, not combine
+        self._mll_zone: str = "normal"  # normal | caution | stop
+
+    # ------------------------------------------------------------------ #
+    # Public API — Topstep Combine mode                                    #
+    # ------------------------------------------------------------------ #
+
+    def enable_topstep_mode(
+        self,
+        starting_balance: float = config.TOPSTEP_ACCOUNT_SIZE,
+        mll: float = config.TOPSTEP_MLL,
+        profit_target: float = config.TOPSTEP_PROFIT_TARGET,
+        caution_pct: float = 0.80,
+        stop_pct: float = 0.95,
+        protective_after_target: bool = False,
+    ) -> None:
+        """
+        Enable Topstep Combine MLL-aware risk protection.
+
+        Parameters
+        ----------
+        protective_after_target : bool
+            If True, switch to 1-trade/day + halved size after target is
+            reached. This is for live funded-account protection, NOT for
+            combine simulations (the combine ends when target is reached,
+            so protective mode would just waste trades). Default False.
+        """
+        self._topstep_mode = True
+        self._starting_balance = starting_balance
+        self._current_balance = starting_balance
+        self._peak_balance_eod = starting_balance
+        self._mll_limit = mll
+        self._mll_caution_pct = caution_pct
+        self._mll_stop_pct = stop_pct
+        self._profit_target = profit_target
+        self._target_reached = False
+        self._protective_after_target = protective_after_target
+        self._mll_zone = "normal"
+        logger.info(
+            "Topstep mode ON: balance=$%.2f, MLL=$%.2f, target=$%.2f, protective=%s",
+            starting_balance, mll, profit_target, protective_after_target,
+        )
+
+    def end_of_day(self) -> None:
+        """
+        Called at session close to update end-of-day peak balance.
+
+        The MLL is a TRAILING limit from the highest EOD balance, so we
+        only update the watermark at session end (not intraday). This
+        matches Topstep's documented rules.
+        """
+        if not self._topstep_mode:
+            return
+        if self._current_balance > self._peak_balance_eod:
+            self._peak_balance_eod = self._current_balance
+            logger.info(
+                "Topstep: new EOD peak $%.2f", self._peak_balance_eod,
+            )
+        # Check if target reached
+        if (
+            not self._target_reached
+            and self._current_balance >= self._starting_balance + self._profit_target
+        ):
+            self._target_reached = True
+            logger.info(
+                "Topstep: PROFIT TARGET REACHED at $%.2f",
+                self._current_balance,
+            )
 
     # ------------------------------------------------------------------ #
     # Public API — state updates                                           #
@@ -101,6 +202,11 @@ class RiskManager:
                 "PROFIT CAP: daily target hit (daily_pnl=%.2f)", self.daily_pnl,
             )
 
+        # ── Topstep Combine: update running balance + MLL zone ──────────
+        if self._topstep_mode:
+            self._current_balance += pnl
+            self._update_mll_zone()
+
         logger.debug(
             "Trade recorded: pnl=%.2f | daily=%.2f | losses=%d | trades=%d",
             pnl, self.daily_pnl, self.consecutive_losses, self.trades_today,
@@ -123,6 +229,19 @@ class RiskManager:
             return False, "profit_cap"
         if self.trades_today >= config.MAX_MNQ_TRADES_PER_DAY:
             return False, "max_trades"
+
+        # ── Topstep MLL protection ──────────────────────────────────────
+        if self._topstep_mode:
+            if self._mll_zone == "stop":
+                return False, "mll_stop"
+            # Protective mode: max 1 trade/day after target (funded account only)
+            if (
+                self._protective_after_target
+                and self._target_reached
+                and self.trades_today >= 1
+            ):
+                return False, "target_protective"
+
         return True, "ok"
 
     def check_hard_close(self, current_time: datetime) -> bool:
@@ -202,6 +321,12 @@ class RiskManager:
 
     def reset_daily(self) -> None:
         """Reset all daily counters — call at session start (pre-market)."""
+        # EOD peak update happens at session close (end_of_day), but if
+        # reset_daily is called first (which the backtester does), we
+        # update the peak here too as a safety net.
+        if self._topstep_mode and self._current_balance > self._peak_balance_eod:
+            self._peak_balance_eod = self._current_balance
+
         self.daily_pnl = 0.0
         self.consecutive_losses = 0
         self.trades_today = 0
@@ -210,6 +335,13 @@ class RiskManager:
         self._min_confluence_adj = 0
         self._position_multiplier = 1.0
         self._vpin_halted = False
+
+        # MLL zone recalc at day start (the "stop" zone resets because
+        # a new day gives the trader a fresh chance, but the drawdown
+        # from peak doesn't reset — only daily flags do).
+        if self._topstep_mode:
+            self._update_mll_zone()
+
         logger.info("RiskManager: daily state reset")
 
     # ------------------------------------------------------------------ #
@@ -218,22 +350,106 @@ class RiskManager:
 
     @property
     def effective_min_confluence(self) -> int:
-        """config.MIN_CONFLUENCE + any active adjustments."""
-        return config.MIN_CONFLUENCE + self._min_confluence_adj
+        """config.MIN_CONFLUENCE + any active adjustments (incl. MLL caution)."""
+        adj = self._min_confluence_adj
+        if self._topstep_mode and self._mll_zone == "caution":
+            adj += 2  # MLL caution: +2 confluence required
+        return config.MIN_CONFLUENCE + adj
 
     @property
     def position_multiplier(self) -> float:
-        """Current position size multiplier (1.0 = normal, 0.75 = -25%)."""
-        return self._position_multiplier
+        """
+        Current position size multiplier (1.0 = normal, 0.5 = halved).
+
+        Compounds: the lowest of SWC, VPIN, and MLL multipliers wins.
+        """
+        mult = self._position_multiplier
+        if self._topstep_mode:
+            if self._mll_zone == "caution" or self._target_reached:
+                mult = min(mult, 0.5)  # halve in caution or protective mode
+        return mult
 
     @property
     def vpin_halted(self) -> bool:
         """True if VPIN extreme event has halted all trading."""
         return self._vpin_halted
 
+    # ── Topstep-specific properties ────────────────────────────────────
+
+    @property
+    def topstep_mode(self) -> bool:
+        return self._topstep_mode
+
+    @property
+    def current_balance(self) -> float:
+        return self._current_balance
+
+    @property
+    def peak_balance_eod(self) -> float:
+        return self._peak_balance_eod
+
+    @property
+    def current_drawdown(self) -> float:
+        """Dollar drawdown from EOD peak. Always >= 0."""
+        if not self._topstep_mode:
+            return 0.0
+        return max(0.0, self._peak_balance_eod - self._current_balance)
+
+    @property
+    def mll_zone(self) -> str:
+        """Current MLL zone: 'normal' | 'caution' | 'stop'."""
+        return self._mll_zone
+
+    @property
+    def target_reached(self) -> bool:
+        return self._target_reached
+
+    # ------------------------------------------------------------------ #
+    # Private — MLL zone computation                                       #
+    # ------------------------------------------------------------------ #
+
+    def _update_mll_zone(self) -> None:
+        """
+        Recompute the MLL zone based on current drawdown vs peak.
+
+        Zones:
+          normal  — drawdown < 80% of MLL      ($0–$1,599)
+          caution — drawdown 80%–95% of MLL     ($1,600–$1,899)
+          stop    — drawdown >= 95% of MLL      ($1,900+)
+
+        The 'stop' zone prevents new trades until the next session reset.
+        In 'caution' zone, position size is halved and min confluence +2.
+        """
+        dd = self.current_drawdown
+        caution_threshold = self._mll_limit * self._mll_caution_pct
+        stop_threshold = self._mll_limit * self._mll_stop_pct
+
+        old_zone = self._mll_zone
+
+        if dd >= stop_threshold:
+            self._mll_zone = "stop"
+        elif dd >= caution_threshold:
+            self._mll_zone = "caution"
+        else:
+            self._mll_zone = "normal"
+
+        if self._mll_zone != old_zone:
+            logger.warning(
+                "Topstep MLL zone: %s -> %s (dd=$%.2f, peak=$%.2f, bal=$%.2f)",
+                old_zone, self._mll_zone, dd,
+                self._peak_balance_eod, self._current_balance,
+            )
+
     def __repr__(self) -> str:
-        return (
+        base = (
             f"RiskManager(pnl={self.daily_pnl:.2f}, losses={self.consecutive_losses}, "
             f"trades={self.trades_today}, kill={self.kill_switch_active}, "
-            f"cap={self.profit_cap_active}, vpin_halt={self._vpin_halted})"
+            f"cap={self.profit_cap_active}, vpin_halt={self._vpin_halted}"
         )
+        if self._topstep_mode:
+            base += (
+                f", topstep=ON, bal={self._current_balance:.2f}, "
+                f"peak={self._peak_balance_eod:.2f}, "
+                f"dd={self.current_drawdown:.2f}, zone={self._mll_zone}"
+            )
+        return base + ")"

@@ -296,6 +296,7 @@ def build_backtester(
     strategy_name: str,
     df_1min: Optional[pd.DataFrame] = None,
     dynamic_bias: bool = False,
+    topstep_mode: bool = False,
 ) -> tuple[Backtester, dict]:
     """
     Wire up every collaborator the backtester needs. Returns a ready-to-run
@@ -364,6 +365,9 @@ def build_backtester(
         print(f"  seeded tracked_levels: {len(seeded)} PDH/PDL/PWH/PWL levels")
 
     risk_mgr = RiskManager()
+    if topstep_mode:
+        risk_mgr.enable_topstep_mode()
+        print("  Topstep $50K Combine mode ON (MLL-aware risk protection)")
     tf_mgr = TimeframeManager()
     session_mgr = SessionManager()
 
@@ -425,6 +429,7 @@ def build_backtester(
         "entry_tf": getattr(strategy, "ENTRY_TF", "5min"),
         "context_tf": getattr(strategy, "CONTEXT_TF", "15min"),
         "htf_bias": bias_label,
+        "topstep_mode": topstep_mode,
         "min_confluence": 7,
         "risk_per_trade": 250,
         "kill_switch_losses": 3,
@@ -575,6 +580,7 @@ def main() -> int:
             args.strategy,
             df_1min=df,
             dynamic_bias=args.dynamic_bias,
+            topstep_mode=args.topstep,
         )
     except Exception as e:
         print(f"✗ Build failed: {e}")
@@ -608,6 +614,18 @@ def main() -> int:
         print(f"    bullish : {stats['bullish']:>6,}  ({stats['bullish_pct']:>5.1%})")
         print(f"    bearish : {stats['bearish']:>6,}  ({stats['bearish_pct']:>5.1%})")
         print(f"    neutral : {stats['neutral']:>6,}  ({stats['neutral_pct']:>5.1%})")
+        print()
+
+    # Optional: Topstep MLL stats
+    rm = backtester.risk
+    if rm.topstep_mode:
+        print()
+        print(f"  Topstep Combine stats:")
+        print(f"    Final balance   : ${rm.current_balance:>10,.2f}")
+        print(f"    Peak EOD balance: ${rm.peak_balance_eod:>10,.2f}")
+        print(f"    Current DD      : ${rm.current_drawdown:>10,.2f}")
+        print(f"    MLL zone        : {rm.mll_zone}")
+        print(f"    Target reached  : {'YES' if rm.target_reached else 'NO'}")
         print()
 
     # Step 5: Supabase write
@@ -684,6 +702,15 @@ def _parse_args() -> argparse.Namespace:
             "Replace the hardcoded-bullish HTF bias stub with a real bias "
             "computed from completed weekly + daily bars at every "
             "evaluate() call. Look-ahead-free."
+        ),
+    )
+    p.add_argument(
+        "--topstep",
+        action="store_true",
+        help=(
+            "Enable Topstep $50K Combine MLL-aware risk protection. "
+            "Halves position at 75%% MLL drawdown, stops at 90%%, "
+            "enters protective mode after profit target reached."
         ),
     )
 
