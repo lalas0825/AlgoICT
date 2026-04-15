@@ -47,7 +47,8 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-_MODEL = "claude-sonnet-4-20250514"
+# Default model comes from config.AI_MODEL_MOOD_SYNTHESIS — never hardcode.
+from config import AI_MODEL_MOOD_SYNTHESIS as _MODEL
 _MAX_TOKENS = 600
 
 # News blackout: minutes before/after a high-impact event
@@ -161,6 +162,7 @@ class MoodSynthesizer:
         news_sentiment: float = 0.0,
         fedwatch_cut_prob: float = 50.0,
         fedwatch_shift: float = 0.0,
+        headlines: Optional[list] = None,
     ) -> DailyMoodReport:
         """
         Generate a Daily Mood Report.
@@ -177,6 +179,9 @@ class MoodSynthesizer:
             Current probability of a rate cut at next FOMC (0-100).
         fedwatch_shift : float
             Change in cut probability vs yesterday (+ = more dovish).
+        headlines : list, optional
+            Top Headline objects (or dicts) from NewsScanner. When provided,
+            they are fed into the Claude prompt for richer context.
 
         Returns
         -------
@@ -196,6 +201,7 @@ class MoodSynthesizer:
                 news_sentiment=news_sentiment,
                 fedwatch_cut_prob=fedwatch_cut_prob,
                 fedwatch_shift=fedwatch_shift,
+                headlines=headlines or [],
             )
 
             return DailyMoodReport(
@@ -262,21 +268,27 @@ class MoodSynthesizer:
         news_sentiment: float,
         fedwatch_cut_prob: float,
         fedwatch_shift: float,
+        headlines: Optional[list] = None,
     ) -> dict:
         """Call Claude API and return parsed JSON response."""
         events_str = self._format_events(events)
+        headlines_str = self._format_headlines(headlines or [])
 
         prompt = f"""You are a senior macro trader assessing today's market conditions for NQ/MNQ futures trading.
 
 TODAY'S CONTEXT:
-- Economic events today: {events_str}
+- Economic events today:
+{events_str}
 - Event risk level: {event_risk}
-- News sentiment (tech sector): {news_sentiment:+.2f} (-1.0 = very bearish, +1.0 = very bullish)
+- Top market headlines:
+{headlines_str}
+- Aggregate news sentiment: {news_sentiment:+.2f} (-1.0 = very bearish, +1.0 = very bullish)
 - FedWatch rate cut probability: {fedwatch_cut_prob:.1f}%
 - FedWatch daily shift: {fedwatch_shift:+.1f}% (positive = more dovish)
 
 INSTRUCTIONS:
-Based ONLY on this context, determine the daily market mood for NQ/MNQ intraday trading.
+Weigh the economic calendar AND the headlines together to produce one daily
+assessment for NQ/MNQ intraday trading.
 
 Respond ONLY in valid JSON with exactly these keys:
 {{
@@ -334,15 +346,34 @@ market_mood rules:
     def _format_events(self, events: list) -> str:
         """Format events list for the prompt."""
         if not events:
-            return "None"
+            return "  None"
 
         lines = []
         for e in events:
             if hasattr(e, "name"):
-                lines.append(f"- {e.name} [{e.risk}] at {e.time_ct} CT")
+                lines.append(f"  - {e.name} [{e.risk}] at {e.time_ct} CT")
             elif isinstance(e, dict):
-                lines.append(f"- {e.get('name', '?')} [{e.get('risk', '?')}] at {e.get('time_ct', '?')} CT")
-        return "\n".join(lines) if lines else "None"
+                lines.append(f"  - {e.get('name', '?')} [{e.get('risk', '?')}] at {e.get('time_ct', '?')} CT")
+        return "\n".join(lines) if lines else "  None"
+
+    def _format_headlines(self, headlines: list) -> str:
+        """Format top-N Headline objects (or dicts) for the Claude prompt."""
+        if not headlines:
+            return "  None"
+        lines = []
+        for h in headlines:
+            title = getattr(h, "title", None) or (h.get("title") if isinstance(h, dict) else "")
+            label = getattr(h, "sentiment_label", None) or (h.get("sentiment_label") if isinstance(h, dict) else "")
+            score = getattr(h, "sentiment_score", None)
+            if score is None and isinstance(h, dict):
+                score = h.get("sentiment_score", 0.0)
+            try:
+                score = float(score)
+            except (TypeError, ValueError):
+                score = 0.0
+            if title:
+                lines.append(f"  - \"{title}\" [{label} {score:+.2f}]")
+        return "\n".join(lines) if lines else "  None"
 
     def _build_blackout_windows(self, events: list) -> list:
         """

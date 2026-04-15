@@ -1,0 +1,13 @@
+=== Strategy Lab — Session 1 ===
+Importing...
+OK
+
+Loading training data (Databento 2019-2022)...
+  Training: 1,406,618 bars
+Loading validation data (2023)...
+  Validation: 101,660 bars
+  Stress test (2022): 354,116 bars
+
+=================================================================
+  BASELINE: NY AM Reversal on Training 2019-2022
+=================================================================

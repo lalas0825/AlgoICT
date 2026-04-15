@@ -41,8 +41,12 @@ logger = logging.getLogger(__name__)
 
 _BASE_URL = "https://www.alphavantage.co/query"
 
-# Tickers that are most relevant to NQ/MNQ performance
-_DEFAULT_TICKERS = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "QQQ"]
+# Tickers most relevant to NQ/MNQ performance.
+# Alpha Vantage quirk: mixing ETFs (QQQ/SPY) with individual stocks in the
+# comma-separated `tickers` filter returns zero articles. We keep only the
+# top-3 NDX-weighted stocks — they drive >20% of the index and their news
+# correlates strongly with NQ price action.
+_DEFAULT_TICKERS = ["AAPL", "MSFT", "NVDA"]
 
 # Alpha Vantage sentiment label -> numeric score
 _LABEL_SCORES = {
@@ -94,6 +98,21 @@ class NewsSentimentResult:
         elif self.score <= -0.15:
             return "somewhat_bearish"
         return "neutral"
+
+    @property
+    def overall_sentiment(self) -> str:
+        """Compact 3-way label used by MoodSynthesizer: bullish|bearish|neutral."""
+        if self.score >= 0.15:
+            return "bullish"
+        if self.score <= -0.15:
+            return "bearish"
+        return "neutral"
+
+    def top_headlines(self, n: int = 5) -> list:
+        """Return top-N headlines sorted by |sentiment_score| × relevance."""
+        def _rank(h: "Headline") -> float:
+            return abs(h.sentiment_score) * max(h.relevance, 0.5)
+        return sorted(self.headlines, key=_rank, reverse=True)[:n]
 
 
 # ---------------------------------------------------------------------------

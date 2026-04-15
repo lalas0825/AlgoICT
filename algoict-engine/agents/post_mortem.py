@@ -52,7 +52,7 @@ try:
 except ImportError:
     ANTHROPIC_AVAILABLE = False
 
-from config import ANTHROPIC_API_KEY
+from config import ANTHROPIC_API_KEY, AI_MODEL_POST_MORTEM
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +60,8 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-_MODEL = "claude-sonnet-4-20250514"
+# Default model comes from config.AI_MODEL_POST_MORTEM — never hardcode.
+_MODEL = AI_MODEL_POST_MORTEM
 _MAX_TOKENS = 1500
 
 _VALID_CATEGORIES = {
@@ -366,11 +367,18 @@ Respond with this exact JSON structure:
             logger.error("Failed to save post-mortem to DB: %s", exc)
 
     def _send_telegram(self, result: PostMortemResult) -> None:
-        """Send post-mortem summary to Telegram."""
+        """Send post-mortem summary to Telegram (sync-safe wrapper over async API)."""
+        import asyncio
+
+        coro = self._telegram.send_emergency_alert(result.as_telegram_message())
         try:
-            self._telegram.send_emergency_alert(result.as_telegram_message())
-        except Exception as exc:
-            logger.error("Failed to send post-mortem to Telegram: %s", exc)
+            loop = asyncio.get_running_loop()
+            loop.create_task(coro)  # fire-and-forget inside running loop
+        except RuntimeError:
+            try:
+                asyncio.run(coro)
+            except Exception as exc:
+                logger.error("Failed to send post-mortem to Telegram: %s", exc)
 
     def _fallback_result(self, trade: dict, error: str) -> PostMortemResult:
         """Return a minimal result when AI analysis fails."""

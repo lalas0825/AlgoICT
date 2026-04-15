@@ -318,3 +318,90 @@ def _safe_date(y, m, d):
         return datetime.date(y, m, d)
     except ValueError:
         return None
+
+
+# ---------------------------------------------------------------------------
+# Finnhub live fetcher — mocked HTTP
+# ---------------------------------------------------------------------------
+
+from unittest.mock import patch, MagicMock
+from sentiment.economic_calendar import FinnhubCalendar, get_live_events
+
+
+class TestFinnhubCalendarParsing:
+    def _fake_response(self, items):
+        resp = MagicMock()
+        resp.raise_for_status.return_value = None
+        resp.json.return_value = {"economicCalendar": items}
+        return resp
+
+    def test_parse_fomc_bumps_to_extreme(self):
+        cal = FinnhubCalendar(api_key="test-key")
+        items = [
+            {"country": "US", "event": "FOMC Meeting Statement",
+             "impact": "high", "time": "2026-04-30 18:00:00"},
+        ]
+        with patch("sentiment.economic_calendar.requests.get",
+                   return_value=self._fake_response(items)):
+            events = cal.fetch_events(datetime.date(2026, 4, 30))
+        assert len(events) == 1
+        assert events[0].risk == "extreme"
+        assert "FOMC" in events[0].name
+
+    def test_parse_cpi_bumps_to_high(self):
+        cal = FinnhubCalendar(api_key="test-key")
+        items = [
+            {"country": "US", "event": "CPI m/m",
+             "impact": "medium", "time": "2026-04-10 12:30:00"},
+        ]
+        with patch("sentiment.economic_calendar.requests.get",
+                   return_value=self._fake_response(items)):
+            events = cal.fetch_events(datetime.date(2026, 4, 10))
+        assert len(events) == 1
+        assert events[0].risk == "high"
+
+    def test_parse_filters_non_us(self):
+        cal = FinnhubCalendar(api_key="test-key")
+        items = [
+            {"country": "JP", "event": "GDP", "impact": "high", "time": "2026-04-10 00:00:00"},
+            {"country": "US", "event": "Retail Sales", "impact": "medium", "time": "2026-04-10 12:30:00"},
+        ]
+        with patch("sentiment.economic_calendar.requests.get",
+                   return_value=self._fake_response(items)):
+            events = cal.fetch_events(datetime.date(2026, 4, 10))
+        assert len(events) == 1
+        assert "Retail" in events[0].name
+
+    def test_api_failure_returns_empty(self):
+        cal = FinnhubCalendar(api_key="test-key")
+        with patch("sentiment.economic_calendar.requests.get",
+                   side_effect=RuntimeError("boom")):
+            events = cal.fetch_events(datetime.date(2026, 4, 10))
+        assert events == []
+
+    def test_missing_api_key_raises(self):
+        with patch("config.FINNHUB_API_KEY", ""):
+            with pytest.raises(ValueError):
+                FinnhubCalendar(api_key="")
+
+
+class TestGetLiveEvents:
+    def test_falls_back_to_hardcoded_when_finnhub_empty(self):
+        """No live data → hardcoded calendar is returned."""
+        fake_cal = MagicMock()
+        fake_cal.fetch_events.return_value = []
+        events = get_live_events(datetime.date(2024, 1, 31), calendar=fake_cal)
+        # 2024-01-31 is a known FOMC date in the hardcoded calendar
+        assert any(e.risk == "extreme" for e in events)
+
+    def test_uses_finnhub_when_available(self):
+        fake_cal = MagicMock()
+        fake_cal.fetch_events.return_value = [
+            EconomicEvent(
+                date=datetime.date(2026, 4, 15),
+                name="Live CPI", risk="high", time_ct="07:30",
+            )
+        ]
+        events = get_live_events(datetime.date(2026, 4, 15), calendar=fake_cal)
+        assert len(events) == 1
+        assert events[0].name == "Live CPI"

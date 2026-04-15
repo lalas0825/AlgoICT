@@ -37,6 +37,8 @@ import pandas as pd
 from toxicity.vpin_calculator import VPINCalculator, VPINReading, classify_toxicity
 from toxicity.toxicity_classifier import ToxicityClassifier, ToxicityLevel
 from toxicity.shield_actions import ShieldManager, ShieldAction
+from toxicity.volume_buckets import VolumeBucketizer
+from toxicity.bulk_classifier import BVCClassifier
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +99,13 @@ class VPINEngine:
             bucket_size=bucket_size,
             num_buckets=num_buckets,
         )
+        # VolumeBucketizer is parameterised by daily_volume + num_buckets.
+        # bucket_size = daily_volume / num_buckets, so we invert.
+        self._bucketizer = VolumeBucketizer(
+            daily_volume=float(bucket_size) * num_buckets,
+            num_buckets=num_buckets,
+        )
+        self._bvc = BVCClassifier()
         self._classifier = ToxicityClassifier()
         self._shield = ShieldManager(
             risk_manager=risk_manager,
@@ -118,29 +127,50 @@ class VPINEngine:
         """
         Process a new 1-minute bar and evaluate the shield.
 
-        Parameters
-        ----------
-        bar : pd.Series
-            OHLCV series with at least 'close' and 'volume' fields.
+        Full pipeline per bar:
+            bar -> VolumeBucketizer -> BVCClassifier -> VPINCalculator.add
+                -> ShieldManager.evaluate
 
-        Returns
-        -------
-        ShieldAction if VPIN is ready, None otherwise.
+        A single bar may emit zero, one or several completed volume buckets
+        depending on how much volume it carries. We advance the VPIN state
+        for every bucket and return the shield action from the most recent
+        reading.
         """
         try:
-            reading = self._calculator.update(bar)
-            self._bucket_count += 1
+            # Extract the fields we need. Accept both a pandas Series and a
+            # plain dict so callers can use either.
+            ts = bar.name if hasattr(bar, "name") else bar.get("timestamp")
+            if ts is None:
+                ts = pd.Timestamp.now("UTC")
+            open_price = float(bar["open"])
+            close_price = float(bar["close"])
+            volume = float(bar["volume"])
 
-            if reading is None:
-                return None  # Not enough data yet
+            completed = self._bucketizer.add_bar(
+                timestamp=ts,
+                open_price=open_price,
+                close_price=close_price,
+                volume=volume,
+            )
+            if not completed:
+                return self._last_action  # no new bucket, keep last state
 
-            self._last_reading = reading
-            action = self._shield.evaluate(reading.vpin)
+            latest_reading: Optional[VPINReading] = None
+            for vol_bucket in completed:
+                classified = self._bvc.classify(vol_bucket)
+                reading = self._calculator.add(classified)
+                self._bucket_count += 1
+                if reading is not None:
+                    latest_reading = reading
+
+            if latest_reading is None:
+                return self._last_action  # still warming up the window
+
+            self._last_reading = latest_reading
+            action = self._shield.evaluate(latest_reading.vpin)
             self._last_action = action
-
-            # Check if halt can be deactivated
-            self._shield.check_deactivate(reading.vpin)
-
+            # Auto-reset halt once VPIN drops back below the high threshold
+            self._shield.check_deactivate(latest_reading.vpin)
             return action
 
         except Exception as exc:
@@ -167,7 +197,7 @@ class VPINEngine:
         if self._last_reading is None:
             return VPINStatus(
                 vpin=None,
-                label="unknown",
+                label="calm",
                 is_ready=False,
                 is_halted=self._shield.is_halted,
                 bucket_count=self._bucket_count,

@@ -58,16 +58,16 @@ class TestNyAmKillZone:
         assert self.sm.is_kill_zone(_ts("09:45"), "ny_am") is True
 
     def test_inside_ny_am_end_exclusive(self):
-        """11:00 CT is NOT inside NY AM (end is exclusive)."""
-        assert self.sm.is_kill_zone(_ts("11:00"), "ny_am") is False
+        """12:00 CT is NOT inside NY AM (end is exclusive, window extended to 12:00)."""
+        assert self.sm.is_kill_zone(_ts("12:00"), "ny_am") is False
 
     def test_outside_ny_am_before(self):
         """08:29 CT is before NY AM kill zone."""
         assert self.sm.is_kill_zone(_ts("08:29"), "ny_am") is False
 
     def test_outside_ny_am_after(self):
-        """11:30 CT is after NY AM kill zone."""
-        assert self.sm.is_kill_zone(_ts("11:30"), "ny_am") is False
+        """12:30 CT is after NY AM kill zone (extended end = 12:00)."""
+        assert self.sm.is_kill_zone(_ts("12:30"), "ny_am") is False
 
     def test_outside_ny_am_overnight(self):
         """02:00 CT is overnight, not in NY AM."""
@@ -147,8 +147,8 @@ class TestLondonKillZone:
         assert self.sm.is_kill_zone(_ts("05:00"), "london") is False
 
     def test_outside_london_before(self):
-        """01:59 CT is before London."""
-        assert self.sm.is_kill_zone(_ts("01:59"), "london") is False
+        """00:59 CT is before London (new window starts 01:00)."""
+        assert self.sm.is_kill_zone(_ts("00:59"), "london") is False
 
 
 # ─── Tests: is_kill_zone — Invalid zone ──────────────────────────────────────
@@ -225,18 +225,17 @@ class TestLondonSession:
         assert high >= low
 
     def test_london_high_is_max(self):
-        """London high = max high of 02:00-05:00 CT bars."""
-        df = _make_session_df("2025-03-03", 2, 6)
-        # Only 02:00-05:00 bars (first 180 bars)
-        london_bars = df.between_time("02:00", "04:59")
+        """London high = max high of 01:00-04:00 CT bars."""
+        df = _make_session_df("2025-03-03", 1, 5)
+        london_bars = df.between_time("01:00", "03:59")
         expected_high = london_bars["high"].max()
         high, _ = self.sm.get_london_session(datetime.date(2025, 3, 3), df)
         assert high == pytest.approx(expected_high, rel=1e-6)
 
     def test_london_low_is_min(self):
-        """London low = min low of 02:00-05:00 CT bars."""
-        df = _make_session_df("2025-03-03", 2, 6)
-        london_bars = df.between_time("02:00", "04:59")
+        """London low = min low of 01:00-04:00 CT bars."""
+        df = _make_session_df("2025-03-03", 1, 5)
+        london_bars = df.between_time("01:00", "03:59")
         expected_low = london_bars["low"].min()
         _, low = self.sm.get_london_session(datetime.date(2025, 3, 3), df)
         assert low == pytest.approx(expected_low, rel=1e-6)

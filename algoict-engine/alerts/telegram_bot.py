@@ -33,7 +33,6 @@ import logging
 from typing import Optional
 
 try:
-    import telegram
     from telegram import Bot
     TELEGRAM_AVAILABLE = True
 except ImportError:
@@ -48,7 +47,7 @@ class TelegramBot:
     """
     Telegram bot for sending trading alerts.
 
-    All send methods are synchronous. For async usage, wrap in executor.
+    All send methods are async (python-telegram-bot v20+).
     """
 
     def __init__(
@@ -77,7 +76,7 @@ class TelegramBot:
     # Trade Alerts
     # ------------------------------------------------------------------ #
 
-    def send_trade_alert(
+    async def send_trade_alert(
         self,
         symbol: str,
         side: str,
@@ -132,7 +131,7 @@ Side: {side_upper} {contracts}x
             if confluence_score is not None:
                 msg += f"Confluence: {confluence_score}/20\n"
 
-            self._bot.send_message(chat_id=self._chat_id, text=msg)
+            await self._bot.send_message(chat_id=self._chat_id, text=msg)
             logger.info("Trade alert sent: %s %s %s", symbol, side_upper, status)
             return True
 
@@ -144,7 +143,7 @@ Side: {side_upper} {contracts}x
     # Kill Switch Alerts
     # ------------------------------------------------------------------ #
 
-    def send_kill_switch_alert(self, reason: str) -> bool:
+    async def send_kill_switch_alert(self, reason: str) -> bool:
         """
         Send a critical kill switch activation alert.
 
@@ -164,7 +163,7 @@ Reason: {reason}
 
 Trading HALTED for remainder of day.
 """
-            self._bot.send_message(chat_id=self._chat_id, text=msg)
+            await self._bot.send_message(chat_id=self._chat_id, text=msg)
             logger.warning("Kill switch alert sent: %s", reason)
             return True
 
@@ -176,7 +175,7 @@ Trading HALTED for remainder of day.
     # Heartbeat Alerts
     # ------------------------------------------------------------------ #
 
-    def send_heartbeat_alert(
+    async def send_heartbeat_alert(
         self,
         status: str,
         age_seconds: Optional[float] = None,
@@ -203,7 +202,7 @@ Trading HALTED for remainder of day.
             if age_seconds is not None:
                 msg += f"Age: {age_seconds:.1f}s\n"
 
-            self._bot.send_message(chat_id=self._chat_id, text=msg)
+            await self._bot.send_message(chat_id=self._chat_id, text=msg)
             logger.info("Heartbeat alert sent: %s", status)
             return True
 
@@ -215,7 +214,7 @@ Trading HALTED for remainder of day.
     # Daily Summaries
     # ------------------------------------------------------------------ #
 
-    def send_daily_summary(
+    async def send_daily_summary(
         self,
         date_str: str,
         trades_count: int,
@@ -265,7 +264,7 @@ Sharpe: {sharpe:.2f}
             if total_pnl < -1000:
                 msg += "\n⚠️ NEGATIVE DAY — Monitor closely\n"
 
-            self._bot.send_message(chat_id=self._chat_id, text=msg)
+            await self._bot.send_message(chat_id=self._chat_id, text=msg)
             logger.info("Daily summary sent: %s | P&L: %.2f", date_str, total_pnl)
             return True
 
@@ -277,7 +276,7 @@ Sharpe: {sharpe:.2f}
     # VPIN / Toxicity Alerts
     # ------------------------------------------------------------------ #
 
-    def send_vpin_alert(
+    async def send_vpin_alert(
         self,
         vpin: float,
         toxicity_level: str,
@@ -313,7 +312,7 @@ Value: {vpin:.3f}
             elif toxicity_level == "high":
                 msg += "\nPosition size reduced 25%. Tighter stops.\n"
 
-            self._bot.send_message(chat_id=self._chat_id, text=msg)
+            await self._bot.send_message(chat_id=self._chat_id, text=msg)
             logger.info("VPIN alert sent: %s (%.3f)", toxicity_level, vpin)
             return True
 
@@ -322,10 +321,51 @@ Value: {vpin:.3f}
             return False
 
     # ------------------------------------------------------------------ #
+    # Daily Mood (SWC pre-market)
+    # ------------------------------------------------------------------ #
+
+    async def send_daily_mood(
+        self,
+        date_str: str,
+        mood: str,
+        min_confluence: int,
+        position_size_pct: float,
+        summary: str,
+    ) -> bool:
+        """
+        Send the SWC daily mood briefing (pre-market).
+
+        Non-alert message — uses 📊 emoji and normal formatting.
+        Sent once per trading day.
+
+        Parameters
+        ----------
+        date_str : str — 'YYYY-MM-DD'
+        mood : str — e.g. 'Choppy', 'Risk On', 'Risk Off'
+        min_confluence : int — required confluence points (out of 20)
+        position_size_pct : float — 0.0–1.0, rendered as percentage
+        summary : str — one-line mood summary from SWC
+        """
+        try:
+            msg = (
+                f"📊 SWC DAILY MOOD — {date_str}\n"
+                f"Mood: {mood}\n"
+                f"Min confluence: {min_confluence}/20\n"
+                f"Position size: {position_size_pct:.0%}\n"
+                f"{summary}"
+            )
+            await self._bot.send_message(chat_id=self._chat_id, text=msg)
+            logger.info("Daily mood sent: %s", mood)
+            return True
+        except Exception as exc:
+            logger.error("Failed to send daily mood: %s", exc)
+            return False
+
+    # ------------------------------------------------------------------ #
     # Emergency Alerts
     # ------------------------------------------------------------------ #
 
-    def send_emergency_alert(self, message: str) -> bool:
+    async def send_emergency_alert(self, message: str) -> bool:
         """
         Send a critical emergency alert.
 
@@ -344,7 +384,7 @@ Value: {vpin:.3f}
 
 Immediate action required!
 """
-            self._bot.send_message(chat_id=self._chat_id, text=msg)
+            await self._bot.send_message(chat_id=self._chat_id, text=msg)
             logger.critical("Emergency alert sent: %s", message)
             return True
 

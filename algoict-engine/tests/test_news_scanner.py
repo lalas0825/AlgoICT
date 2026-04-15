@@ -329,3 +329,30 @@ class TestNewsSentimentResult:
     def test_is_valid_false_with_no_headlines(self):
         r = NewsSentimentResult(score=0.3, headline_count=0)
         assert not r.is_valid
+
+    def test_overall_sentiment_bullish(self):
+        r = NewsSentimentResult(score=0.3, headline_count=5)
+        assert r.overall_sentiment == "bullish"
+
+    def test_overall_sentiment_neutral(self):
+        r = NewsSentimentResult(score=0.05, headline_count=5)
+        assert r.overall_sentiment == "neutral"
+
+    def test_overall_sentiment_bearish(self):
+        r = NewsSentimentResult(score=-0.25, headline_count=5)
+        assert r.overall_sentiment == "bearish"
+
+    def test_top_headlines_sorted_by_strength(self):
+        from sentiment.news_scanner import Headline
+        headlines = [
+            Headline(title="mild", source="", published="", sentiment_label="",
+                     sentiment_score=0.1, relevance=0.5),
+            Headline(title="strong", source="", published="", sentiment_label="",
+                     sentiment_score=0.8, relevance=0.9),
+            Headline(title="neutral", source="", published="", sentiment_label="",
+                     sentiment_score=0.0, relevance=1.0),
+        ]
+        r = NewsSentimentResult(score=0.3, headlines=headlines, headline_count=3)
+        top = r.top_headlines(2)
+        assert top[0].title == "strong"
+        assert len(top) == 2

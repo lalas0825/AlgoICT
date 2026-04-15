@@ -286,8 +286,19 @@ class TestRejectionGates:
 
     def test_max_trades_reached_returns_none(self):
         strat, c5, c15 = _build_full_setup()
-        strat.trades_today = 2   # MAX_TRADES = 2
+        # The ny_am zone's cap has been reached (2 trades in ny_am)
+        strat._trades_by_zone["ny_am"] = strat.MAX_TRADES_PER_ZONE
+        strat.trades_today = strat.MAX_TRADES_PER_ZONE
         assert strat.evaluate(c5, c15) is None
+
+    def test_london_cap_does_not_block_ny_am(self):
+        """London cap hit → bar in ny_am should still fire (per-zone caps)."""
+        strat, c5, c15 = _build_full_setup()
+        strat._trades_by_zone["london"] = strat.MAX_TRADES_PER_ZONE
+        strat._trades_by_zone["ny_am"] = 0
+        strat.trades_today = strat.MAX_TRADES_PER_ZONE
+        # _build_full_setup uses an ny_am timestamp → this should still fire
+        assert strat.evaluate(c5, c15) is not None
 
     def test_past_hard_close_returns_none(self):
         """Timestamp at 15:30 CT — past 3 PM hard close."""

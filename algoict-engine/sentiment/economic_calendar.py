@@ -366,3 +366,204 @@ def get_upcoming_events(
 def is_high_impact_day(date: datetime.date) -> bool:
     """True if the date has any high or extreme risk event."""
     return get_event_risk(date) in ("high", "extreme")
+
+
+# ---------------------------------------------------------------------------
+# Finnhub live fetcher
+# ---------------------------------------------------------------------------
+# The hardcoded calendar above is a reliable offline source for historical
+# backtests. For LIVE pre-market scans we prefer Finnhub — it returns the
+# current day's events with real release times and impact ratings.
+#
+# Finnhub impact rating → our risk levels:
+#   low     → low
+#   medium  → medium
+#   high    → high  (bumped to 'extreme' for FOMC-style events)
+#   (empty) → low
+# ---------------------------------------------------------------------------
+
+try:
+    import requests
+    _REQUESTS_AVAILABLE = True
+except ImportError:
+    _REQUESTS_AVAILABLE = False
+
+
+_FINNHUB_URL = "https://finnhub.io/api/v1/calendar/economic"
+_FINNHUB_IMPACT_TO_RISK = {
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+}
+# Event names that should be bumped to 'extreme' regardless of Finnhub's rating
+_EXTREME_EVENT_KEYWORDS = ("fomc", "fed interest rate", "fed funds", "rate decision")
+# Event keywords that should be bumped to 'high' (CPI/NFP can show as medium)
+_HIGH_EVENT_KEYWORDS = ("cpi", "consumer price", "non farm", "non-farm", "nonfarm payrolls")
+
+
+class FinnhubCalendar:
+    """
+    Fetches the economic calendar from Finnhub for a given date range.
+
+    Parameters
+    ----------
+    api_key : str
+        Finnhub API key. Required — raises ValueError if missing.
+    timeout : int
+        HTTP timeout in seconds.
+    """
+
+    def __init__(self, api_key: Optional[str] = None, timeout: int = 10):
+        if not _REQUESTS_AVAILABLE:
+            raise ImportError("requests package not installed")
+        # Lazy import to avoid circular issues when config is partially loaded
+        from config import FINNHUB_API_KEY as _DEFAULT_KEY
+        key = api_key or _DEFAULT_KEY
+        if not key:
+            raise ValueError(
+                "Finnhub API key required. Set FINNHUB_API_KEY in .env"
+            )
+        self._api_key = key
+        self._timeout = timeout
+
+    def fetch_events(
+        self,
+        from_date: datetime.date,
+        to_date: Optional[datetime.date] = None,
+    ) -> list[EconomicEvent]:
+        """
+        Fetch economic events in the given date range (inclusive).
+
+        Returns an empty list on API failure — callers should treat empty
+        as "no live data available" and fall back to the hardcoded calendar.
+        """
+        if to_date is None:
+            to_date = from_date
+        if isinstance(from_date, datetime.datetime):
+            from_date = from_date.date()
+        if isinstance(to_date, datetime.datetime):
+            to_date = to_date.date()
+
+        params = {
+            "from": from_date.isoformat(),
+            "to": to_date.isoformat(),
+            "token": self._api_key,
+        }
+        try:
+            resp = requests.get(_FINNHUB_URL, params=params, timeout=self._timeout)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            logger.warning("Finnhub fetch failed: %s", exc)
+            return []
+
+        # Finnhub shape: {"economicCalendar": [{country, event, impact, time, ...}]}
+        raw = data.get("economicCalendar", [])
+        if not isinstance(raw, list):
+            logger.warning("Finnhub: unexpected response shape: %s", type(raw).__name__)
+            return []
+
+        events: list[EconomicEvent] = []
+        for item in raw:
+            ev = self._parse_item(item)
+            if ev is not None:
+                events.append(ev)
+        logger.info(
+            "Finnhub: fetched %d events from %s to %s", len(events), from_date, to_date,
+        )
+        return events
+
+    def _parse_item(self, item: dict) -> Optional[EconomicEvent]:
+        """Parse one Finnhub event. Only keep US events (impact US futures)."""
+        try:
+            country = str(item.get("country", "")).upper()
+            if country not in ("US", "USD", ""):
+                return None
+
+            name = str(item.get("event", "")).strip()
+            if not name:
+                return None
+
+            # Finnhub time format: "2026-04-14 12:30:00" UTC
+            time_str = str(item.get("time", ""))
+            try:
+                ts_utc = datetime.datetime.fromisoformat(time_str.replace("Z", "+00:00"))
+                if ts_utc.tzinfo is None:
+                    ts_utc = ts_utc.replace(tzinfo=datetime.timezone.utc)
+                # Convert to CT for display
+                ts_ct = ts_utc.astimezone(
+                    datetime.timezone(datetime.timedelta(hours=-6))  # CT (no DST handling)
+                )
+                date_val = ts_ct.date()
+                time_ct = ts_ct.strftime("%H:%M")
+            except (ValueError, TypeError):
+                # If time is unparseable, fall back to today's date without a time
+                date_val = datetime.date.today()
+                time_ct = ""
+
+            # Classify risk
+            impact = str(item.get("impact", "")).lower()
+            risk = _FINNHUB_IMPACT_TO_RISK.get(impact, "low")
+
+            name_lower = name.lower()
+            if any(k in name_lower for k in _EXTREME_EVENT_KEYWORDS):
+                risk = "extreme"
+            elif risk != "extreme" and any(k in name_lower for k in _HIGH_EVENT_KEYWORDS):
+                risk = "high"
+
+            return EconomicEvent(
+                date=date_val,
+                name=name,
+                risk=risk,
+                time_ct=time_ct,
+                notes=f"actual={item.get('actual')} estimate={item.get('estimate')}",
+            )
+        except Exception as exc:
+            logger.debug("Finnhub: failed to parse item %s: %s", item, exc)
+            return None
+
+
+# ---------------------------------------------------------------------------
+# Hybrid live API — prefer Finnhub, fall back to hardcoded
+# ---------------------------------------------------------------------------
+
+def get_live_events(
+    date: datetime.date,
+    calendar: Optional[FinnhubCalendar] = None,
+) -> list[EconomicEvent]:
+    """
+    Return events for the given date — live from Finnhub if possible, else
+    the hardcoded calendar.
+
+    Pass a pre-built FinnhubCalendar to reuse a single HTTP client. If None
+    and FINNHUB_API_KEY is configured, a default client is created.
+    Hardcoded fallback is returned when Finnhub fails or is not configured.
+    """
+    if isinstance(date, datetime.datetime):
+        date = date.date()
+
+    if calendar is None:
+        try:
+            calendar = FinnhubCalendar()
+        except (ImportError, ValueError) as exc:
+            logger.debug("Finnhub unavailable (%s) — using hardcoded calendar", exc)
+            return get_events_on_date(date)
+
+    live = calendar.fetch_events(from_date=date, to_date=date)
+    if live:
+        return live
+
+    # Finnhub returned nothing — fall back to hardcoded
+    logger.debug("Finnhub returned 0 events — falling back to hardcoded calendar")
+    return get_events_on_date(date)
+
+
+def get_live_event_risk(
+    date: datetime.date,
+    calendar: Optional[FinnhubCalendar] = None,
+) -> str:
+    """Return the highest risk level for events on `date` (live preferred)."""
+    events = get_live_events(date, calendar=calendar)
+    if not events:
+        return "none"
+    return _max_risk([e.risk for e in events])

@@ -52,7 +52,9 @@ async def start_heartbeat(
     while True:
         try:
             ts_utc = datetime.now(timezone.utc).isoformat()
-            await supabase_client.update_bot_state({"last_heartbeat": ts_utc})
+            await asyncio.to_thread(
+                supabase_client.update_bot_state, {"last_heartbeat": ts_utc}
+            )
             consecutive_failures = 0
             logger.debug("Heartbeat written at %s", ts_utc)
 
@@ -97,7 +99,7 @@ async def monitor_heartbeat(
 
     while True:
         try:
-            state = await supabase_client.get_bot_state()
+            state = await asyncio.to_thread(supabase_client.get_bot_state)
             if not state or "last_heartbeat" not in state:
                 await asyncio.sleep(5)
                 continue

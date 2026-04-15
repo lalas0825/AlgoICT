@@ -295,3 +295,58 @@ class TestGetTradesToday:
 
         levels = sb.get_market_levels("MNQ")
         assert levels is not None or levels is None  # Either is OK
+
+
+# ---------------------------------------------------------------------------
+# WinError 10035 (WSAEWOULDBLOCK) retry logic in update_bot_state
+# ---------------------------------------------------------------------------
+
+def _wsaewouldblock() -> OSError:
+    exc = OSError("A non-blocking socket operation could not be completed immediately")
+    exc.winerror = 10035  # type: ignore[attr-defined]
+    return exc
+
+
+class TestUpdateBotStateRetry:
+
+    def _make_client(self, fail_times: int = 0):
+        """MockSupabaseClientLib whose bot_state table raises WinError on first N calls."""
+        calls = {"n": 0}
+
+        class RetryTable(MockSupabaseTable):
+            def execute(self_):
+                calls["n"] += 1
+                if calls["n"] <= fail_times:
+                    raise _wsaewouldblock()
+                return MockExecuteResult([{"id": "bot_1"}])
+
+        class RetryClientLib(MockSupabaseClientLib):
+            def table(self_, name):
+                if name == "bot_state":
+                    t = RetryTable(name)
+                    return t
+                return super().table(name)
+
+        return RetryClientLib(), calls
+
+    def test_wsaewouldblock_first_attempt_retries_and_succeeds(self):
+        """Single WSAEWOULDBLOCK on first attempt → retry → success → returns True."""
+        mock_lib, calls = self._make_client(fail_times=1)
+        sb = SupabaseClient.__new__(SupabaseClient)
+        sb._client = mock_lib
+
+        result = sb.update_bot_state({"status": "running"})
+
+        assert result is True, "should return True after successful retry"
+        assert calls["n"] == 2, "should have attempted twice (1 fail + 1 success)"
+
+    def test_wsaewouldblock_all_retries_exhausted_returns_false(self):
+        """WSAEWOULDBLOCK on every attempt → exhausted → returns False (no exception)."""
+        mock_lib, calls = self._make_client(fail_times=99)
+        sb = SupabaseClient.__new__(SupabaseClient)
+        sb._client = mock_lib
+
+        result = sb.update_bot_state({"status": "running"})
+
+        assert result is False
+        assert calls["n"] == 4, "should try 4 times (1 initial + 3 retries)"

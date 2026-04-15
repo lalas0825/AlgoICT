@@ -23,7 +23,7 @@ class MockSupabaseClient:
         self.fail_count = fail_count
         self.last_state = None
 
-    async def update_bot_state(self, state):
+    def update_bot_state(self, state):
         self.call_count += 1
         if self.fail_count > 0 and self.call_count <= self.fail_count:
             raise Exception("Supabase down")

@@ -244,3 +244,72 @@ async def test_provider_heartbeat_not_overwritten():
     )
     await sync._tick()
     assert client.writes[0]["last_heartbeat"] == "2025-03-10T14:00:00+00:00"
+
+
+# ─── WinError 10035 (WSAEWOULDBLOCK) retry logic ───────────────────────
+
+
+def _make_wsaewouldblock() -> OSError:
+    """Build an OSError that looks like a real Windows WSAEWOULDBLOCK."""
+    exc = OSError("A non-blocking socket operation could not be completed immediately")
+    exc.winerror = 10035  # type: ignore[attr-defined]
+    return exc
+
+
+@pytest.mark.asyncio
+async def test_wsaewouldblock_retries_then_succeeds():
+    """First call raises WSAEWOULDBLOCK → retry → write succeeds (zero failures)."""
+    calls: list[int] = []
+
+    class FlakiClient:
+        def __init__(self):
+            self.writes: list[dict] = []
+
+        def upsert_bot_state(self, state: dict) -> bool:
+            calls.append(1)
+            if len(calls) == 1:
+                raise _make_wsaewouldblock()
+            self.writes.append(state)
+            return True
+
+    client = FlakiClient()
+    # Use tiny retry delays so the test completes fast
+    sync = BotStateSync(
+        client,
+        lambda: {"vpin": 0.5},
+        interval_s=0.1,
+        retry_delays=(0.001, 0.002, 0.003),
+    )
+    await sync._tick()
+
+    assert len(client.writes) == 1, "should have one successful write"
+    assert sync.stats["total_writes"] == 1
+    assert sync.stats["total_failures"] == 0, "transient retry should not count as failure"
+    assert len(calls) == 2, "should have attempted twice (1 fail + 1 success)"
+
+
+@pytest.mark.asyncio
+async def test_wsaewouldblock_all_retries_exhausted_counts_as_one_failure():
+    """Every attempt raises WSAEWOULDBLOCK → all retries exhausted → 1 failure total."""
+
+    class AlwaysBlockClient:
+        def __init__(self):
+            self.calls = 0
+
+        def upsert_bot_state(self, state: dict) -> bool:
+            self.calls += 1
+            raise _make_wsaewouldblock()
+
+    client = AlwaysBlockClient()
+    sync = BotStateSync(
+        client,
+        lambda: {"vpin": 0.5},
+        interval_s=0.1,
+        retry_delays=(0.001, 0.002, 0.003),
+    )
+    await sync._tick()
+
+    assert sync.stats["total_failures"] == 1
+    assert sync.stats["total_writes"] == 0
+    # 1 initial attempt + 3 retries = 4 total calls
+    assert client.calls == 4

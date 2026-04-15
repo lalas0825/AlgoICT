@@ -49,7 +49,10 @@ import logging
 import signal
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone, time as dt_time
+from datetime import datetime, timezone, timedelta, time as dt_time
+from zoneinfo import ZoneInfo
+
+_CT = ZoneInfo("US/Central")
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -65,12 +68,44 @@ import config  # noqa: E402
 # Logging
 # ---------------------------------------------------------------------------
 
+_LOG_FILE = Path(__file__).resolve().parent / "engine.log"
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[
+        logging.StreamHandler(),                          # stdout
+        logging.FileHandler(_LOG_FILE, encoding="utf-8"), # persistent
+    ],
 )
 logger = logging.getLogger("algoict.main")
+
+# Surface strategy reject reasons at INFO level — otherwise the DEBUG
+# logs inside NY AM / Silver Bullet are invisible and we can't tell why
+# signals aren't firing (bias neutral? no FVG? no swept level? etc.)
+logging.getLogger("strategies.ny_am_reversal").setLevel(logging.DEBUG)
+logging.getLogger("strategies.silver_bullet").setLevel(logging.DEBUG)
+
+# Persistence file for "SWC daily mood already sent today" — survives restarts
+_SWC_SENT_FILE = Path(__file__).resolve().parent / ".swc_mood_sent.txt"
+
+
+def _swc_mood_sent_date() -> Optional[str]:
+    """Return the ISO date ('YYYY-MM-DD') of the last SWC mood send, or None."""
+    try:
+        if _SWC_SENT_FILE.exists():
+            return _SWC_SENT_FILE.read_text(encoding="utf-8").strip() or None
+    except Exception:
+        pass
+    return None
+
+
+def _mark_swc_mood_sent(date_str: str) -> None:
+    """Persist the ISO date so we don't resend today's mood on restart."""
+    try:
+        _SWC_SENT_FILE.write_text(date_str, encoding="utf-8")
+    except Exception as exc:
+        logger.warning("Could not persist SWC-sent marker: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -107,12 +142,15 @@ from strategies.silver_bullet import SilverBulletStrategy  # noqa: E402
 SupabaseClient = _try_import("db.supabase_client", "SupabaseClient")
 TelegramBot = _try_import("alerts.telegram_bot", "TelegramBot")
 start_heartbeat = _try_import("core.heartbeat", "start_heartbeat")
+BotStateSync = _try_import("core.state_sync", "BotStateSync")
 
 # Intelligence layers — may not exist yet
 _SWC_RUN = _try_import("sentiment.swc_engine", "run_premarket_scan")
-_GEX_RUN = _try_import("gamma.gex_engine", "run_premarket_scan")
-VPINCalculator = _try_import("toxicity.vpin_calculator", "VPINCalculator")
-_POST_MORTEM = _try_import("agents.post_mortem", "analyze_loss")
+_GEX_ENGINE = _try_import("gamma.gex_engine", "GEXEngine")
+_GEX_SCORE = _try_import("gamma.gex_confluence", "score_gex_alignment")
+VPINEngine = _try_import("toxicity.vpin_engine", "VPINEngine")
+_VPIN_SCORE = _try_import("toxicity.vpin_confluence", "score")
+PostMortemAgent = _try_import("agents.post_mortem", "PostMortemAgent")
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +158,11 @@ _POST_MORTEM = _try_import("agents.post_mortem", "analyze_loss")
 # ---------------------------------------------------------------------------
 
 ROLLING_1MIN_BARS = 5000        # Keep ~3 days of 1-min data in memory
+WARMUP_BARS = 1000              # Historical bars to preload before WS starts
+WARMUP_LOOKBACK_DAYS = 5        # How far back to scan for warm-up bars
 PREMARKET_HOUR = 6              # 6:00 AM CT — SWC + GEX pre-market scan
+VPIN_WARN_THRESHOLD = 0.55      # log warning above this
+VPIN_EXTREME_THRESHOLD = 0.70   # flatten everything above this
 HARD_CLOSE_HOUR = config.HARD_CLOSE_HOUR
 HARD_CLOSE_MIN = config.HARD_CLOSE_MINUTE
 
@@ -147,10 +189,12 @@ class EngineState:
     premarket_done: bool = False
     hard_close_done: bool = False
     daily_summary_sent: bool = False
+    swc_mood_sent_today: bool = False
 
     # Intelligence snapshots
-    swc_snapshot: Optional[dict] = None
-    gex_snapshot: Optional[dict] = None
+    swc_snapshot: Optional[Any] = None     # DailyMoodReport
+    gex_snapshot: Optional[Any] = None     # GEXOverlay
+    vpin_status: Optional[Any] = None      # latest VPINStatus
 
     # Open position tracking — {order_id: {...}}
     open_positions: dict = None
@@ -187,7 +231,9 @@ class Components:
 
     supabase: Optional[Any] = None
     telegram: Optional[Any] = None
-    vpin: Optional[Any] = None
+    vpin: Optional[Any] = None            # VPINEngine
+    gex_engine: Optional[Any] = None      # GEXEngine
+    post_mortem: Optional[Any] = None     # PostMortemAgent
 
 
 # ---------------------------------------------------------------------------
@@ -302,14 +348,40 @@ def _init_components(mode: str) -> Components:
         except Exception as exc:
             logger.warning("Telegram unavailable: %s", exc)
 
-    # ── Optional: VPIN calculator ─────────────────────────────────────
+    # ── Optional: VPIN engine (shield-enabled) ────────────────────────
     vpin = None
-    if VPINCalculator is not None:
+    if VPINEngine is not None:
         try:
-            vpin = VPINCalculator(num_buckets=50)
-            logger.info("VPIN calculator ready")
+            vpin = VPINEngine(
+                risk_manager=risk,
+                telegram_bot=telegram,
+                bucket_size=1000,
+                num_buckets=50,
+            )
+            logger.info("VPIN engine ready (shield-enabled)")
         except Exception as exc:
             logger.warning("VPIN unavailable: %s", exc)
+
+    # ── Optional: GEX engine ──────────────────────────────────────────
+    gex_engine = None
+    if _GEX_ENGINE is not None:
+        try:
+            gex_engine = _GEX_ENGINE()  # options_loader=None → skips gracefully
+            logger.info("GEX engine ready (options_loader=None, will skip if no data)")
+        except Exception as exc:
+            logger.warning("GEX unavailable: %s", exc)
+
+    # ── Optional: Post-Mortem agent ───────────────────────────────────
+    post_mortem = None
+    if PostMortemAgent is not None:
+        try:
+            post_mortem = PostMortemAgent(
+                supabase_client=supabase,
+                telegram_bot=telegram,
+            )
+            logger.info("PostMortemAgent ready")
+        except Exception as exc:
+            logger.warning("PostMortemAgent unavailable: %s", exc)
 
     components = Components(
         broker=broker,
@@ -323,6 +395,8 @@ def _init_components(mode: str) -> Components:
         supabase=supabase,
         telegram=telegram,
         vpin=vpin,
+        gex_engine=gex_engine,
+        post_mortem=post_mortem,
     )
 
     # Stash the state_ref on components so run() can wire it up
@@ -336,9 +410,12 @@ def _init_components(mode: str) -> Components:
 
 async def _run_premarket_scan(components: Components, state: EngineState) -> None:
     """
-    Run SWC and GEX scans at 06:00 CT. Apply results to RiskManager.
+    Run SWC and GEX scans at 06:00 CT. Apply results to RiskManager,
+    broadcast briefings to Telegram.
 
-    Both modules are optional and independently fail-safe.
+    Both modules are optional and independently fail-safe:
+      - If SWC fails → log warning, keep default min_confluence
+      - If GEX has no options data → skip cleanly, 0 bonus confluence
     """
     logger.info("=" * 60)
     logger.info("  PRE-MARKET SCAN (%s)", datetime.now().strftime("%Y-%m-%d %H:%M"))
@@ -347,33 +424,108 @@ async def _run_premarket_scan(components: Components, state: EngineState) -> Non
     # ── SWC (sentiment) ───────────────────────────────────────────────
     if _SWC_RUN is not None:
         try:
-            swc = await _maybe_await(_SWC_RUN())
-            state.swc_snapshot = swc
-            if isinstance(swc, dict):
-                min_conf_adj = int(swc.get("min_confluence_adj", 0))
-                pos_mult = float(swc.get("position_multiplier", 1.0))
-                components.risk.set_swc_overrides(min_conf_adj, pos_mult)
-                logger.info("SWC applied: adj=+%d mult=%.2f", min_conf_adj, pos_mult)
+            report = await _maybe_await(_SWC_RUN())
+            state.swc_snapshot = report
+
+            # DailyMoodReport has min_confluence_override + position_size_multiplier
+            min_conf = int(getattr(report, "min_confluence_override",
+                                   config.MIN_CONFLUENCE))
+            pos_mult = float(getattr(report, "position_size_multiplier", 1.0))
+            min_conf_adj = max(0, min_conf - config.MIN_CONFLUENCE)
+            components.risk.set_swc_overrides(min_conf_adj, pos_mult)
+
+            summary = getattr(report, "one_line_summary", "mood report generated")
+            logger.info(
+                "SWC applied: min_conf=%d (+%d) pos_mult=%.2f — %s",
+                min_conf, min_conf_adj, pos_mult, summary,
+            )
+
+            # Send SWC mood ONCE per trading day (survives restarts via marker file)
+            today_iso = datetime.now(_CT).strftime("%Y-%m-%d")
+            if state.swc_mood_sent_today or _swc_mood_sent_date() == today_iso:
+                state.swc_mood_sent_today = True
+                logger.info("SWC mood already sent today (%s) — skipping", today_iso)
+            elif components.telegram is not None:
+                try:
+                    mood_label = str(getattr(report, "mood", "Unknown")).title()
+                    await components.telegram.send_daily_mood(
+                        date_str=today_iso,
+                        mood=mood_label,
+                        min_confluence=min_conf,
+                        position_size_pct=pos_mult,
+                        summary=summary,
+                    )
+                    state.swc_mood_sent_today = True
+                    _mark_swc_mood_sent(today_iso)
+                except Exception as tx_exc:
+                    logger.debug("SWC Telegram briefing failed: %s", tx_exc)
         except Exception as exc:
-            logger.warning("SWC pre-market scan failed: %s", exc)
+            logger.warning("SWC pre-market scan failed: %s — using defaults", exc)
     else:
         logger.info("SWC module not available — skipping sentiment scan")
 
     # ── GEX (gamma) ───────────────────────────────────────────────────
-    if _GEX_RUN is not None:
+    if components.gex_engine is not None:
         try:
-            gex = await _maybe_await(_GEX_RUN())
-            state.gex_snapshot = gex
-            logger.info("GEX snapshot captured")
+            # Derive spot from the last 1-min bar if we already have warm-up data
+            spot = None
+            if not state.bars_1min.empty:
+                spot = float(state.bars_1min["close"].iloc[-1])
+            overlay = components.gex_engine.run_premarket_scan(spot_price=spot)
+            state.gex_snapshot = overlay
+
+            if getattr(overlay, "is_valid", False):
+                logger.info(
+                    "GEX: regime=%s call_wall=%.0f put_wall=%.0f flip=%.0f",
+                    overlay.regime, overlay.call_wall,
+                    overlay.put_wall, overlay.gamma_flip,
+                )
+                if components.telegram is not None:
+                    try:
+                        msg = (
+                            f"GEX Pre-Market\n"
+                            f"Regime    : {overlay.regime}\n"
+                            f"Call wall : {overlay.call_wall:.0f}\n"
+                            f"Put wall  : {overlay.put_wall:.0f}\n"
+                            f"Gamma flip: {overlay.gamma_flip:.0f}"
+                        )
+                        await components.telegram.send_emergency_alert(msg)
+                    except Exception as tx_exc:
+                        logger.debug("GEX Telegram briefing failed: %s", tx_exc)
+            else:
+                logger.info("GEX: no options data, skipping (0 bonus confluence)")
         except Exception as exc:
-            logger.warning("GEX pre-market scan failed: %s", exc)
+            logger.warning("GEX pre-market scan failed: %s — skipping", exc)
     else:
         logger.info("GEX module not available — skipping gamma scan")
 
-    # Alert
+    # ── Seed tracked_levels with PDH/PDL/PWH/PWL ──────────────────────
+    # The NY AM strategy needs swept liquidity levels to fire — without
+    # this seed, `tracked_levels` stays [] forever and every kill-zone
+    # evaluation rejects on "no aligned liquidity sweep".
+    try:
+        if not state.bars_1min.empty:
+            tf_mgr = components.tf_manager
+            df_daily = tf_mgr.aggregate(state.bars_1min, "D")
+            df_weekly = tf_mgr.aggregate(state.bars_1min, "W")
+            levels = components.detectors["liquidity"].build_key_levels(
+                df_daily=df_daily, df_weekly=df_weekly,
+            )
+            components.detectors["tracked_levels"] = levels
+            logger.info(
+                "tracked_levels seeded: %d levels (%s)",
+                len(levels),
+                ", ".join(f"{lvl.type}@{lvl.price:.2f}" for lvl in levels),
+            )
+        else:
+            logger.warning("tracked_levels: no bars yet, skipping seed")
+    except Exception as exc:
+        logger.warning("tracked_levels seed failed: %s", exc)
+
+    # Heartbeat alert at end of scan
     if components.telegram is not None:
         try:
-            components.telegram.send_heartbeat_alert("OK")
+            await components.telegram.send_heartbeat_alert("OK")
         except Exception:
             pass
 
@@ -385,6 +537,107 @@ async def _maybe_await(result):
     if asyncio.iscoroutine(result):
         return await result
     return result
+
+
+# ---------------------------------------------------------------------------
+# Warm-up: preload historical bars so detectors have context on WS tick #1
+# ---------------------------------------------------------------------------
+
+async def _warmup_historical_bars(
+    components: "Components",
+    state: "EngineState",
+    bars_wanted: int = WARMUP_BARS,
+    lookback_days: int = WARMUP_LOOKBACK_DAYS,
+) -> int:
+    """
+    Fetch recent 1-min bars from the broker and seed the rolling buffer.
+
+    Without this the first N WebSocket bars arrive into an empty detector
+    state — no swing points, no FVGs, no structure — and the bot is blind
+    until enough bars accumulate. Pre-loading the last session gives the
+    detectors real context before live trading begins.
+
+    Returns the number of bars seeded (0 on any failure — warm-up is
+    best-effort and must not block start-up).
+    """
+    broker = components.broker
+    if not hasattr(broker, "get_historical_bars") or not hasattr(broker, "lookup_contract"):
+        logger.warning("Broker does not support historical bars — skipping warm-up")
+        return 0
+
+    try:
+        contract = await broker.lookup_contract(state.symbol, live=False)
+        if contract is None:
+            logger.warning("Warm-up: contract %s not found", state.symbol)
+            return 0
+
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(days=lookback_days)
+        bars = await broker.get_historical_bars(
+            contract_id=contract["id"],
+            start=start,
+            end=end,
+            unit=2,
+            unit_number=1,
+            limit=bars_wanted,
+        )
+    except Exception as exc:
+        logger.warning("Warm-up fetch failed: %s", exc)
+        return 0
+
+    if not bars:
+        logger.warning("Warm-up: 0 bars returned")
+        return 0
+
+    # Keep only the tail we actually want
+    if len(bars) > bars_wanted:
+        bars = bars[-bars_wanted:]
+
+    # Seed the rolling buffer using the same append path the WS callback
+    # uses, so timezone conversion + schema stays consistent.
+    for bar in bars:
+        _append_bar(state, bar)
+
+    # Update strategy's HTF state cache so that `run()` sees the history
+    components._state_ref["bars_1min"] = state.bars_1min  # type: ignore[attr-defined]
+
+    # Run detector update once so swing/structure/FVG/OB are primed
+    try:
+        _update_detectors(components, state)
+    except Exception as exc:
+        logger.warning("Warm-up detector priming failed: %s", exc)
+
+    logger.info(
+        "Warm-up complete: %d bars seeded (%s -> %s)",
+        len(state.bars_1min),
+        state.bars_1min.index[0],
+        state.bars_1min.index[-1],
+    )
+
+    # Backfill market_data so the dashboard chart has history immediately
+    if components.supabase is not None:
+        df = state.bars_1min
+        written = 0
+        for ts_idx in df.index:
+            row = df.loc[ts_idx]
+            try:
+                components.supabase.write_market_data({
+                    "symbol": state.symbol,
+                    "timeframe": "1m",
+                    "timestamp": ts_idx.isoformat(),
+                    "open": float(row["open"]),
+                    "high": float(row["high"]),
+                    "low": float(row["low"]),
+                    "close": float(row["close"]),
+                    "volume": int(row["volume"]),
+                    "vpin_level": None,
+                })
+                written += 1
+            except Exception:
+                pass
+        logger.info("Warm-up: %d/%d bars written to market_data", written, len(df))
+
+    return len(state.bars_1min)
 
 
 # ---------------------------------------------------------------------------
@@ -454,6 +707,22 @@ def _update_detectors(
             components.detectors["displacement"].detect(df_5min, timeframe="5min")
             components.detectors["fvg"].update_mitigation(float(df_5min.iloc[-1]["close"]))
             components.detectors["ob"].update_mitigation(df_5min)
+
+            # ── Liquidity: check sweeps on the just-closed 5min candle ──
+            # `tracked_levels` is seeded in _run_premarket_scan with PDH/PDL/PWH/PWL.
+            # Without this call, the NY AM strategy never sees a swept level
+            # and rejects every bar silently — the cause of 0 signals for 2 days.
+            tracked = components.detectors.get("tracked_levels", [])
+            if tracked:
+                newly_swept = components.detectors["liquidity"].check_sweep(
+                    df_5min.iloc[-1], tracked,
+                )
+                if newly_swept:
+                    logger.info(
+                        "LIQUIDITY SWEEP on 5min [%s]: %s",
+                        last_5_ts,
+                        ", ".join(f"{lvl.type}@{lvl.price:.2f}" for lvl in newly_swept),
+                    )
         except Exception as exc:
             logger.warning("5min detector update failed: %s", exc)
         state.last_completed_tf_ts["5min"] = last_5_ts
@@ -461,13 +730,63 @@ def _update_detectors(
 
     if last_15_ts is not None and last_15_ts != state.last_completed_tf_ts.get("15min"):
         try:
-            components.detectors["structure"].update(df_15min, "15min")
+            # Prime swings on 15min before feeding them to the structure
+            # detector — MarketStructureDetector.update() walks the swing
+            # point list to confirm BOS/CHoCH against the context TF.
+            swing = components.detectors["swing"]
+            swing.detect(df_15min, "15min")
+            components.detectors["structure"].update(df_15min, swing, "15min")
         except Exception as exc:
             logger.warning("15min structure update failed: %s", exc)
         state.last_completed_tf_ts["15min"] = last_15_ts
         updated["15min"] = True
 
     return updated
+
+
+def _log_bar_snapshot(components: Components, state: EngineState, ts) -> None:
+    """
+    Emit one INFO line per 1-min bar with the full detector/strategy context.
+
+    Without this, the log shows only WS bars + heartbeat and we can't tell
+    if detectors ran, if tracked_levels is populated, or why signals never fire.
+    """
+    try:
+        bars = state.bars_1min
+        close = float(bars.iloc[-1]["close"]) if len(bars) else 0.0
+
+        # Session context
+        in_rth = 8 <= ts.hour < 15 or (ts.hour == 8 and ts.minute >= 30)
+        sess = components.session
+        kz = "none"
+        for zone in ("london", "london_silver_bullet", "ny_am", "silver_bullet"):
+            if sess.is_kill_zone(ts, zone):
+                kz = zone
+                break
+
+        # Detector counts (safe best-effort getters)
+        det = components.detectors
+        all_swings = getattr(det["swing"], "swing_points", [])
+        sw_count = sum(1 for sp in all_swings if getattr(sp, "timeframe", "") == "5min")
+        fvg_count = len(det["fvg"].get_active(timeframe="5min"))
+        ob_count = len(det["ob"].get_active(timeframe="5min"))
+        struct_events = det["structure"].get_events(timeframe="15min")
+        struct_count = len(struct_events)
+        tracked = det.get("tracked_levels", [])
+        liq_total = len(tracked)
+        liq_swept = sum(1 for lvl in tracked if getattr(lvl, "swept", False))
+
+        vpin_val = getattr(state.vpin_status, "vpin", None) if state.vpin_status else None
+        vpin_str = f"{vpin_val:.3f}" if vpin_val is not None else "—"
+
+        logger.info(
+            "BAR [%s CT] close=%.2f rth=%s kz=%s | sw=%d fvg=%d ob=%d struct=%d liq=%d(swept=%d) | VPIN=%s",
+            ts.strftime("%H:%M"), close, "Y" if in_rth else "N", kz,
+            sw_count, fvg_count, ob_count, struct_count, liq_total, liq_swept,
+            vpin_str,
+        )
+    except Exception as exc:
+        logger.debug("bar-snapshot log failed: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -544,7 +863,7 @@ async def _execute_signal(
     # Telegram alert
     if components.telegram is not None:
         try:
-            components.telegram.send_trade_alert(
+            await components.telegram.send_trade_alert(
                 symbol=signal.symbol,
                 side=side.upper(),
                 contracts=signal.contracts,
@@ -558,6 +877,173 @@ async def _execute_signal(
 # ---------------------------------------------------------------------------
 # Trading loop — called on every new 1-min bar
 # ---------------------------------------------------------------------------
+
+async def _update_vpin(
+    components: Components,
+    state: EngineState,
+    bar: dict,
+) -> None:
+    """
+    Feed the freshly-arrived bar into the VPIN engine. If the shield
+    returns an action with should_flatten (VPIN > 0.70) we stop all
+    trading and alert Telegram. Warning threshold (> 0.55) is logged.
+    """
+    if components.vpin is None:
+        return
+
+    try:
+        # Build a pandas Series matching what VPINEngine expects
+        ts = bar.get("timestamp")
+        if ts is None and not state.bars_1min.empty:
+            ts = state.bars_1min.index[-1]
+        bar_series = pd.Series(
+            {
+                "open": bar["open"],
+                "high": bar["high"],
+                "low": bar["low"],
+                "close": bar["close"],
+                "volume": bar["volume"],
+            },
+            name=ts,
+        )
+        components.vpin.on_new_bar(bar_series)
+        status = components.vpin.get_status()
+        state.vpin_status = status
+
+        if status.vpin is not None:
+            if status.vpin >= VPIN_EXTREME_THRESHOLD:
+                logger.critical(
+                    "VPIN EXTREME: %.3f — flattening all positions", status.vpin,
+                )
+                # Call the shield's execute_flatten so it also fires the
+                # telegram VPIN alert built into ShieldManager.
+                try:
+                    await components.vpin._shield.execute_flatten(  # type: ignore[attr-defined]
+                        reason=f"VPIN extreme {status.vpin:.3f}"
+                    )
+                except Exception as flat_exc:
+                    logger.error("Shield flatten failed: %s", flat_exc)
+                # Flatten open broker positions. ShieldManager has already
+                # called activate_vpin_halt() via execute_flatten() above,
+                # so no emergency kill switch needed — trading resumes
+                # automatically when VPIN normalizes below 0.55.
+                await _flatten_all(components, state, reason="vpin_extreme", emergency=False)
+            elif status.vpin >= VPIN_WARN_THRESHOLD:
+                logger.warning(
+                    "VPIN HIGH: %.3f (%s)", status.vpin, status.label,
+                )
+    except Exception as exc:
+        logger.debug("VPIN update failed: %s", exc)
+
+
+def _update_edge_state(components: Components, state: EngineState) -> None:
+    """
+    Compute the current SWC/GEX/VPIN alignment flags and push them into
+    the ConfluenceScorer. Strategies don't need to know — the scorer
+    will OR-merge these flags with any explicit kwargs on `score()`.
+    """
+    scorer = components.detectors.get("confluence")
+    if scorer is None or not hasattr(scorer, "set_edge_state"):
+        return
+
+    # ── SWC ───────────────────────────────────────────────────────────
+    # We treat "sentiment aligned" as: min_confluence_override <= default
+    # AND position_size_multiplier >= 1.0 (i.e. the day is neutral or
+    # positively rated). Genuine news risk lowers pos_mult below 1.0.
+    swc_aligned = False
+    swc = state.swc_snapshot
+    if swc is not None:
+        try:
+            pos_mult = float(getattr(swc, "position_size_multiplier", 1.0))
+            min_override = int(getattr(swc, "min_confluence_override",
+                                       config.MIN_CONFLUENCE))
+            swc_aligned = (pos_mult >= 1.0) and (min_override <= config.MIN_CONFLUENCE)
+        except Exception:
+            swc_aligned = False
+
+    # ── GEX ───────────────────────────────────────────────────────────
+    # Use the raw is_valid flag as the "regime aligned" signal. True wall
+    # alignment depends on the concrete entry price and direction of a
+    # pending signal — strategies can still pass that explicitly.
+    gex_regime_aligned = False
+    gex = state.gex_snapshot
+    if gex is not None and getattr(gex, "is_valid", False):
+        gex_regime_aligned = True
+
+    # ── VPIN ──────────────────────────────────────────────────────────
+    # "Quality session" = VPIN in the healthy elevated band (>= 0.45 and
+    # below the high threshold). "Validated sweep" is kept False here; a
+    # richer version would track recent liquidity sweeps and their VPIN.
+    vpin_quality_session = False
+    vpin_status = state.vpin_status
+    if vpin_status is not None and vpin_status.vpin is not None:
+        v = vpin_status.vpin
+        vpin_quality_session = (0.45 <= v < VPIN_WARN_THRESHOLD)
+
+    scorer.set_edge_state(
+        swc_sentiment_aligned=swc_aligned,
+        gex_wall_aligned=False,          # needs entry price context
+        gex_regime_aligned=gex_regime_aligned,
+        vpin_validated_sweep=False,      # needs sweep detector hook
+        vpin_quality_session=vpin_quality_session,
+    )
+
+
+async def _on_trade_closed(
+    components: Components,
+    state: EngineState,
+    trade: dict,
+) -> None:
+    """
+    Record a realized trade. Must be called from the fill/close path
+    (currently not auto-wired — the WS fill stream is the pending piece).
+
+    Responsibilities:
+      1. risk.record_trade(pnl) so daily limits update
+      2. Write to Supabase `trades` table if available
+      3. If pnl < 0 → run PostMortemAgent.analyze_loss, save + alert
+
+    `trade` dict shape (matches PostMortemAgent expectations):
+        {id, strategy, direction, entry_price, exit_price,
+         entry_time, exit_time, pnl, confluence_score,
+         ict_concepts, kill_zone, stop_points, contracts}
+    """
+    pnl = float(trade.get("pnl", 0.0))
+
+    # 1. risk accounting
+    try:
+        components.risk.record_trade(pnl)
+    except Exception as exc:
+        logger.warning("risk.record_trade failed: %s", exc)
+
+    # 2. supabase persistence
+    if components.supabase is not None:
+        try:
+            components.supabase.write_trade(trade)
+        except Exception as exc:
+            logger.warning("Supabase trade write failed: %s", exc)
+
+    # 3. post-mortem on losses
+    if pnl < 0 and components.post_mortem is not None:
+        try:
+            market_ctx = {
+                "weekly_bias": None,
+                "daily_bias": None,
+                "structure_15min": None,
+                "swc": state.swc_snapshot,
+                "gex": state.gex_snapshot,
+                "vpin": getattr(state.vpin_status, "vpin", None),
+            }
+            # analyze_loss is sync; run it on a thread so the event loop
+            # is not blocked by the Claude API call.
+            await asyncio.to_thread(
+                components.post_mortem.analyze_loss,
+                trade,
+                market_ctx,
+            )
+        except Exception as exc:
+            logger.error("Post-mortem analysis failed: %s", exc)
+
 
 async def _on_new_bar(
     bar: dict,
@@ -583,20 +1069,45 @@ async def _on_new_bar(
         # ── 2. Detector updates ───────────────────────────────────────
         _update_detectors(components, state)
 
-        # ── 3. VPIN update ────────────────────────────────────────────
-        if components.vpin is not None:
-            try:
-                pass   # VPIN operates on volume buckets, not raw bars — wired separately
-            except Exception as exc:
-                logger.debug("VPIN update failed: %s", exc)
+        # ── 3. VPIN update + shield ───────────────────────────────────
+        # Drives the toxicity pipeline end-to-end (bucketizer → BVC →
+        # VPINCalculator → ShieldManager). extreme → flatten + alert.
+        await _update_vpin(components, state, bar)
+
+        # ── 3b. Publish live edge state to the confluence scorer ──────
+        _update_edge_state(components, state)
 
         ts = state.bars_1min.index[-1]
 
+        # ── 3c. Persist bar to Supabase market_data (fire and forget) ─
+        if components.supabase is not None:
+            vpin_val: Optional[float] = None
+            vs = state.vpin_status
+            if vs is not None and vs.vpin is not None:
+                vpin_val = float(vs.vpin)
+            asyncio.create_task(asyncio.to_thread(
+                components.supabase.write_market_data,
+                {
+                    "symbol": state.symbol,
+                    "timeframe": "1m",
+                    "timestamp": ts.isoformat(),
+                    "open": float(bar["open"]),
+                    "high": float(bar["high"]),
+                    "low": float(bar["low"]),
+                    "close": float(bar["close"]),
+                    "volume": int(bar.get("volume", 0)),
+                    "vpin_level": vpin_val,
+                },
+            ))
+
+        # ── 3d. Bar-level visibility log (detector + session snapshot) ─
+        _log_bar_snapshot(components, state, ts)
+
         # ── 4. Hard close ─────────────────────────────────────────────
         if (not state.hard_close_done
-                and ts.hour == HARD_CLOSE_HOUR
-                and ts.minute >= HARD_CLOSE_MIN):
-            logger.warning("HARD CLOSE reached at %s — flattening all", ts)
+                and (ts.hour > HARD_CLOSE_HOUR
+                     or (ts.hour == HARD_CLOSE_HOUR and ts.minute >= HARD_CLOSE_MIN))):
+            logger.warning("HARD CLOSE reached at %s CT — flattening all", ts)
             await _flatten_all(components, state, reason="hard_close")
             state.hard_close_done = True
             return
@@ -616,9 +1127,18 @@ async def _on_new_bar(
             logger.debug("TF aggregation failed in strategy eval: %s", exc)
             return
 
-        # NY AM Reversal (5min entry)
+        sess = components.session
+
+        # NY AM Reversal — evaluates in london + ny_am windows
         try:
             signal = components.ny_am_strategy.evaluate(df_5min, df_15min)
+            ny_zones = getattr(components.ny_am_strategy, "KILL_ZONES", ("ny_am",))
+            if any(sess.is_kill_zone(ts, z) for z in ny_zones):
+                logger.info(
+                    "EVAL ny_am [%s]: signal=%s",
+                    ts.strftime("%H:%M"),
+                    "FIRE" if signal else "reject",
+                )
             if signal is not None:
                 allowed, reason = components.risk.can_trade()
                 if allowed:
@@ -628,9 +1148,16 @@ async def _on_new_bar(
         except Exception as exc:
             logger.exception("NY AM strategy raised: %s", exc)
 
-        # Silver Bullet (1min entry)
+        # Silver Bullet — evaluates in london_silver_bullet + silver_bullet windows
         try:
             signal = components.silver_bullet_strategy.evaluate(bars, df_5min)
+            sb_zones = getattr(components.silver_bullet_strategy, "KILL_ZONES", ("silver_bullet",))
+            if any(sess.is_kill_zone(ts, z) for z in sb_zones):
+                logger.info(
+                    "EVAL silver_bullet [%s]: signal=%s",
+                    ts.strftime("%H:%M"),
+                    "FIRE" if signal else "reject",
+                )
             if signal is not None:
                 allowed, reason = components.risk.can_trade()
                 if allowed:
@@ -652,15 +1179,28 @@ async def _flatten_all(
     components: Components,
     state: EngineState,
     reason: str,
+    emergency: bool = False,
 ) -> None:
-    """Close every open position via the broker."""
+    """
+    Close every open position via the broker.
+
+    Parameters
+    ----------
+    emergency : bool
+        When True, activates the kill switch via ``risk.emergency_flatten()``
+        (logs CRITICAL).  Use for real failures: unhandled exceptions, VPIN
+        extreme events, heartbeat loss.  Routine session closes (hard_close,
+        daily_hard_close) should pass ``emergency=False`` — the
+        ``state.hard_close_done`` flag already prevents new trades.
+    """
     logger.warning("FLATTEN ALL triggered: %s", reason)
     try:
         await components.broker.flatten_all()
     except Exception as exc:
         logger.error("Broker flatten failed: %s", exc)
     state.open_positions.clear()
-    components.risk.emergency_flatten()
+    if emergency:
+        components.risk.emergency_flatten()
 
 
 async def _send_daily_summary(components: Components, state: EngineState) -> None:
@@ -679,7 +1219,7 @@ async def _send_daily_summary(components: Components, state: EngineState) -> Non
 
     if components.telegram is not None:
         try:
-            components.telegram.send_daily_summary(
+            await components.telegram.send_daily_summary(
                 date_str=date_str,
                 trades_count=trades_count,
                 wins=wins,
@@ -717,6 +1257,30 @@ def _reset_for_new_day(components: Components, state: EngineState) -> None:
     state.premarket_done = False
     state.hard_close_done = False
     state.daily_summary_sent = False
+    state.swc_mood_sent_today = False
+
+    # ── Seed tracked_levels immediately so London KZ (01:00-04:00 CT)
+    # has PDH/PDL/PWH/PWL available before pre-market runs at 06:00 CT.
+    # Pre-market will re-seed with fresher data later.
+    try:
+        bars = state.bars_1min
+        if bars is not None and not bars.empty:
+            tf_mgr = components.tf_manager
+            df_daily = tf_mgr.aggregate(bars, "D")
+            df_weekly = tf_mgr.aggregate(bars, "W")
+            levels = components.detectors["liquidity"].build_key_levels(
+                df_daily=df_daily, df_weekly=df_weekly,
+            )
+            components.detectors["tracked_levels"] = levels
+            logger.info(
+                "tracked_levels seeded on daily reset: %d levels (%s)",
+                len(levels),
+                ", ".join(f"{lvl.type}@{lvl.price:.2f}" for lvl in levels),
+            )
+        else:
+            logger.warning("tracked_levels: no warm-up bars yet, deferring to pre-market")
+    except Exception as exc:
+        logger.warning("tracked_levels daily-reset seed failed: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -739,6 +1303,66 @@ class _RiskManagerAsyncAdapter:
         except Exception as exc:
             logger.error("Broker flatten in emergency failed: %s", exc)
         self._risk.emergency_flatten()
+
+
+# ---------------------------------------------------------------------------
+# Dashboard state snapshot
+# ---------------------------------------------------------------------------
+
+def _make_state_snapshot(components: "Components", state: "EngineState") -> dict:
+    """
+    Build the full bot_state payload that BotStateSync pushes to Supabase
+    every 5 seconds. The dashboard reads this to show live P&L, VPIN, etc.
+    """
+    risk = components.risk
+    vpin_status = state.vpin_status  # VPINStatus object or None
+    vpin_val = (vpin_status.vpin if vpin_status is not None and vpin_status.vpin is not None else 0.0)
+    tox_label = (vpin_status.label if vpin_status is not None and hasattr(vpin_status, "label") else "calm")
+
+    snap: dict = {
+        "is_running": True,
+        "vpin": vpin_val,
+        "toxicity_level": tox_label,
+        "shield_active": risk.vpin_halted,
+        "trades_today": risk.trades_today,
+        "pnl_today": risk.daily_pnl,
+        "position_count": len(state.open_positions),
+    }
+
+    # ── SWC mood (from pre-market scan) ──────────────────────────────
+    # Without this, bot_state stays at the startup defaults
+    # ("choppy", 0, "Engine starting…") and the dashboard never sees the
+    # real mood that Claude + Finnhub produced.
+    swc = state.swc_snapshot
+    if swc is not None:
+        mood_val = getattr(swc.market_mood, "value", None) or str(swc.market_mood)
+        conf_map = {"low": 25, "medium": 50, "high": 75}
+        snap["swc_mood"] = mood_val
+        snap["swc_confidence"] = conf_map.get(
+            str(swc.confidence).lower(), 50,
+        ) / 100.0   # bot_state stores 0-1 per CHECK constraint on the column
+        snap["swc_summary"] = swc.one_line_summary or ""
+
+    # ── GEX overlay (from pre-market scan) ───────────────────────────
+    gex = state.gex_snapshot
+    if gex is not None and getattr(gex, "is_valid", False):
+        regime = getattr(gex, "regime", "unknown")
+        snap["gex_regime"] = regime if regime in (
+            "positive", "negative", "flip", "unknown"
+        ) else "unknown"
+        snap["gex_call_wall"] = float(getattr(gex, "call_wall", 0.0) or 0.0)
+        snap["gex_put_wall"] = float(getattr(gex, "put_wall", 0.0) or 0.0)
+        snap["gex_flip_point"] = float(getattr(gex, "gamma_flip", 0.0) or 0.0)
+
+    # Last signal (most recent bar timestamp as a human-readable hint)
+    if not state.bars_1min.empty:
+        last_ts = state.bars_1min.index[-1]
+        snap["last_signal"] = (
+            f"Last bar: {last_ts.strftime('%H:%M CT')} | "
+            f"Bars loaded: {len(state.bars_1min)}"
+        )
+
+    return snap
 
 
 # ---------------------------------------------------------------------------
@@ -771,12 +1395,48 @@ async def run(mode: str = "paper") -> None:
     state = EngineState(mode=mode)
     components._state_ref["bars_1min"] = state.bars_1min  # type: ignore[attr-defined]
 
-    # ── 2. Connect broker ─────────────────────────────────────────────
+    # ── 2a. Register bar callback BEFORE connect so _on_open subscribes ─
+    def _bar_callback(bar: dict):
+        """Schedule async handling on the event loop."""
+        asyncio.create_task(_on_new_bar(bar, components, state))
+
+    components.broker.subscribe_bars(state.symbol, _bar_callback)
+    logger.info("Registered bar callback for %s", state.symbol)
+
+    # ── 2b. Connect broker (starts SignalR with symbols already registered) ─
     try:
         await components.broker.connect()
     except Exception as exc:
         logger.critical("Broker connect failed: %s", exc, exc_info=True)
         return
+
+    # ── 2c. Reset bot_state to clear stale values from prior runs ──────
+    if components.supabase is not None:
+        try:
+            components.supabase.update_bot_state({
+                "is_running": True,
+                "vpin": 0.0,
+                "toxicity_level": "calm",
+                "shield_active": False,
+                "trades_today": 0,
+                "pnl_today": 0.0,
+                "daily_high_pnl": 0.0,
+                "position_count": 0,
+                "wins_today": 0,
+                "losses_today": 0,
+                "swc_mood": "choppy",
+                "swc_confidence": 0.0,
+                "swc_summary": "Engine starting…",
+                "gex_regime": "unknown",
+                "gex_call_wall": None,
+                "gex_put_wall": None,
+                "gex_flip_point": None,
+                "last_signal": "Warming up…",
+                "last_heartbeat": datetime.now(timezone.utc).isoformat(),
+            })
+            logger.info("bot_state reset — stale values cleared")
+        except Exception as exc:
+            logger.warning("bot_state reset failed: %s", exc)
 
     # ── 3. Start heartbeat (if available + Supabase present) ──────────
     heartbeat_task: Optional[asyncio.Task] = None
@@ -790,13 +1450,29 @@ async def run(mode: str = "paper") -> None:
         except Exception as exc:
             logger.warning("Heartbeat start failed: %s", exc)
 
-    # ── 4. Subscribe to 1-min bars ────────────────────────────────────
-    def _bar_callback(bar: dict):
-        """Schedule async handling on the event loop."""
-        asyncio.create_task(_on_new_bar(bar, components, state))
+    # ── 3b. Start BotStateSync — full dashboard state every 5s ────────
+    state_sync: Optional[Any] = None
+    state_sync_task: Optional[asyncio.Task] = None
+    if BotStateSync is not None and components.supabase is not None:
+        try:
+            state_sync = BotStateSync(
+                client=components.supabase,
+                state_provider=lambda: _make_state_snapshot(components, state),
+                interval_s=5.0,
+            )
+            state_sync_task = asyncio.create_task(state_sync.start())
+            logger.info("BotStateSync started — dashboard will show RUNNING")
+        except Exception as exc:
+            logger.warning("BotStateSync start failed: %s", exc)
 
-    components.broker.subscribe_bars(state.symbol, _bar_callback)
-    logger.info("Subscribed to %s 1-min bars", state.symbol)
+    # ── 4. Warm-up: preload historical bars so detectors start primed ─
+    seeded = await _warmup_historical_bars(components, state)
+    if seeded == 0:
+        logger.warning(
+            "Running with cold detectors — first %d WS bars will be "
+            "used to build context before strategies can fire",
+            ROLLING_1MIN_BARS // 50,
+        )
 
     # ── 5. Main daily loop ────────────────────────────────────────────
     shutdown = False
@@ -814,22 +1490,44 @@ async def run(mode: str = "paper") -> None:
 
     try:
         while not shutdown:
-            now = datetime.now()
+            now = datetime.now(_CT)   # always CT — avoids machine-tz drift
             today = now.date()
 
             # New day detection
             if state.current_session_date != today:
                 state.current_session_date = today
                 _reset_for_new_day(components, state)
+                # If the engine starts (or restarts) after hard-close time with
+                # no tracked open positions, skip the routine end-of-day flatten.
+                # Without this, a cold start at 7 PM would immediately fire
+                # "FLATTEN ALL: daily_hard_close" against an account with nothing
+                # open — generating a spurious 404 and misleading CRITICAL log.
+                if (
+                    not state.open_positions
+                    and (
+                        now.hour > HARD_CLOSE_HOUR
+                        or (now.hour == HARD_CLOSE_HOUR and now.minute >= HARD_CLOSE_MIN)
+                    )
+                ):
+                    logger.info(
+                        "Engine started post-market (%02d:%02d CT) with no open "
+                        "positions — skipping hard-close flatten",
+                        now.hour, now.minute,
+                    )
+                    state.hard_close_done = True
 
-            # Pre-market scan at 06:00 CT (run once per day)
-            if not state.premarket_done and now.hour >= PREMARKET_HOUR:
+            # Pre-market scan — runs once per day. Fires on startup and on
+            # daily reset. Finnhub + Alpha Vantage + Claude all return valid
+            # data at any hour, so there's no reason to wait until 06:00 CT.
+            # (The PREMARKET_HOUR constant is kept only for documentation.)
+            if not state.premarket_done:
                 await _run_premarket_scan(components, state)
 
             # Hard close check (in addition to the per-bar check)
             if (not state.hard_close_done
-                    and now.hour >= HARD_CLOSE_HOUR
-                    and now.minute >= HARD_CLOSE_MIN):
+                    and (now.hour > HARD_CLOSE_HOUR
+                         or (now.hour == HARD_CLOSE_HOUR
+                             and now.minute >= HARD_CLOSE_MIN))):
                 await _flatten_all(components, state, reason="daily_hard_close")
                 state.hard_close_done = True
                 await _send_daily_summary(components, state)
@@ -840,10 +1538,29 @@ async def run(mode: str = "paper") -> None:
         logger.info("Main loop cancelled")
     except Exception as exc:
         logger.critical("Unhandled exception in main loop: %s", exc, exc_info=True)
-        await _flatten_all(components, state, reason="unhandled_exception")
+        await _flatten_all(components, state, reason="unhandled_exception", emergency=True)
 
     # ── 6. Graceful shutdown ──────────────────────────────────────────
     logger.info("Shutting down...")
+
+    # Mark bot offline in dashboard before tearing down
+    if components.supabase is not None:
+        try:
+            components.supabase.update_bot_state({
+                "is_running": False,
+                "shield_active": False,
+                "position_count": 0,
+            })
+        except Exception as exc:
+            logger.warning("Failed to mark bot offline: %s", exc)
+
+    if state_sync is not None:
+        await state_sync.stop()
+    if state_sync_task is not None:
+        try:
+            await state_sync_task
+        except asyncio.CancelledError:
+            pass
 
     if heartbeat_task is not None:
         heartbeat_task.cancel()

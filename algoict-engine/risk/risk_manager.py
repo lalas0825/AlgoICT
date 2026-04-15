@@ -79,6 +79,9 @@ class RiskManager:
         self._min_confluence_adj: int = 0    # +N added to min confluence
         self._position_multiplier: float = 1.0  # 0.75 = 25% reduction
         self._vpin_halted: bool = False
+        # Clearable VPIN extreme halt — resets when VPIN drops below 0.55.
+        # Distinct from kill_switch_active (which is permanent for the day).
+        self._vpin_halt_active: bool = False
 
         # ── Topstep Combine MLL tracking (M14) ──────────────────────────
         self._topstep_mode: bool = False
@@ -93,6 +96,15 @@ class RiskManager:
         self._protective_after_target: bool = False  # for funded account, not combine
         self._mll_zone: str = "normal"  # normal | caution | stop
 
+        # ── Cruise mode (post-target, accumulate trading days) ──────────
+        self._cruise_mode: bool = False
+        self._cruise_enabled: bool = False          # user opt-in
+        self._cruise_min_confluence: int = 9        # high-confidence tier (ICT-only max ~11)
+        self._cruise_max_risk: float = 100.0        # $100 max loss/trade
+        self._cruise_max_contracts: int = 1         # 1 MNQ
+        self._trading_days_set: set = set()         # dates with >=1 trade
+        self._min_trading_days: int = 5             # Topstep minimum
+
     # ------------------------------------------------------------------ #
     # Public API — Topstep Combine mode                                    #
     # ------------------------------------------------------------------ #
@@ -105,6 +117,7 @@ class RiskManager:
         caution_pct: float = 0.80,
         stop_pct: float = 0.95,
         protective_after_target: bool = False,
+        cruise_mode: bool = False,
     ) -> None:
         """
         Enable Topstep Combine MLL-aware risk protection.
@@ -128,9 +141,14 @@ class RiskManager:
         self._target_reached = False
         self._protective_after_target = protective_after_target
         self._mll_zone = "normal"
+        self._cruise_enabled = cruise_mode
+        self._cruise_mode = False
+        self._trading_days_set = set()
         logger.info(
-            "Topstep mode ON: balance=$%.2f, MLL=$%.2f, target=$%.2f, protective=%s",
+            "Topstep mode ON: balance=$%.2f, MLL=$%.2f, target=$%.2f, "
+            "protective=%s, cruise=%s",
             starting_balance, mll, profit_target, protective_after_target,
+            cruise_mode,
         )
 
     def end_of_day(self) -> None:
@@ -207,6 +225,29 @@ class RiskManager:
             self._current_balance += pnl
             self._update_mll_zone()
 
+            # Check if target just reached
+            if (
+                not self._target_reached
+                and self._current_balance
+                >= self._starting_balance + self._profit_target
+            ):
+                self._target_reached = True
+                logger.info(
+                    "Topstep: TARGET REACHED at $%.2f", self._current_balance,
+                )
+                # Activate cruise if enabled and not enough trading days
+                if (
+                    self._cruise_enabled
+                    and len(self._trading_days_set) < self._min_trading_days
+                ):
+                    self._cruise_mode = True
+                    logger.info(
+                        "Topstep: CRUISE MODE ON — %d/%d trading days, "
+                        "accumulating remaining days",
+                        len(self._trading_days_set),
+                        self._min_trading_days,
+                    )
+
         logger.debug(
             "Trade recorded: pnl=%.2f | daily=%.2f | losses=%d | trades=%d",
             pnl, self.daily_pnl, self.consecutive_losses, self.trades_today,
@@ -221,8 +262,17 @@ class RiskManager:
         (True, 'ok') if trading is allowed
         (False, reason) if blocked — reason is a short string key
         """
-        if self._vpin_halted:
+        if self._vpin_halt_active:
             return False, "vpin_halted"
+
+        # ── Cruise mode: max 1 trade/day, target already reached ────────
+        if self._cruise_mode:
+            if self.trades_today >= 1:
+                return False, "cruise_max_1"
+            # Cruise mode is gentle — skip kill switch / profit cap checks
+            # because we're just accumulating trading days
+            return True, "cruise"
+
         if self.kill_switch_active:
             return False, "kill_switch"
         if self.profit_cap_active:
@@ -303,7 +353,7 @@ class RiskManager:
         """
         self._vpin_halted = halted
         if halted:
-            logger.warning("VPIN HALT: trading suspended due to extreme toxicity")
+            self.activate_vpin_halt()  # also set the clearable flag
         self._position_multiplier = min(self._position_multiplier, pos_mult)
         logger.debug(
             "VPIN overrides: halted=%s, tighten=%.0f%%, pos_mult=%.2f",
@@ -318,6 +368,28 @@ class RiskManager:
         """
         self.kill_switch_active = True
         logger.critical("EMERGENCY FLATTEN triggered — kill switch activated")
+
+    def record_trading_day(self, date) -> None:
+        """
+        Record that a trade occurred on this date. Call from the
+        backtester whenever a trade closes.
+
+        Parameters
+        ----------
+        date : datetime.date — the calendar date of the trade
+        """
+        if self._topstep_mode:
+            self._trading_days_set.add(date)
+            # Check if cruise mode can deactivate
+            if (
+                self._cruise_mode
+                and len(self._trading_days_set) >= self._min_trading_days
+            ):
+                self._cruise_mode = False
+                logger.info(
+                    "Topstep: CRUISE MODE OFF — %d trading days reached",
+                    len(self._trading_days_set),
+                )
 
     def reset_daily(self) -> None:
         """Reset all daily counters — call at session start (pre-market)."""
@@ -335,6 +407,7 @@ class RiskManager:
         self._min_confluence_adj = 0
         self._position_multiplier = 1.0
         self._vpin_halted = False
+        self._vpin_halt_active = False
 
         # MLL zone recalc at day start (the "stop" zone resets because
         # a new day gives the trader a fresh chance, but the drawdown
@@ -351,6 +424,8 @@ class RiskManager:
     @property
     def effective_min_confluence(self) -> int:
         """config.MIN_CONFLUENCE + any active adjustments (incl. MLL caution)."""
+        if self._cruise_mode:
+            return self._cruise_min_confluence  # 12 — A+ trades only
         adj = self._min_confluence_adj
         if self._topstep_mode and self._mll_zone == "caution":
             adj += 2  # MLL caution: +2 confluence required
@@ -369,10 +444,57 @@ class RiskManager:
                 mult = min(mult, 0.5)  # halve in caution or protective mode
         return mult
 
+    # ── Cruise mode properties ────────────────────────────────────────
+
+    @property
+    def cruise_mode(self) -> bool:
+        """True if target reached and still accumulating trading days."""
+        return self._cruise_mode
+
+    @property
+    def cruise_max_risk(self) -> float:
+        """Max dollar risk per trade in cruise mode ($100)."""
+        return self._cruise_max_risk
+
+    @property
+    def cruise_max_contracts(self) -> int:
+        """Max contracts in cruise mode (1 MNQ)."""
+        return self._cruise_max_contracts
+
+    @property
+    def trading_days_count(self) -> int:
+        """Number of unique calendar days with at least 1 trade."""
+        return len(self._trading_days_set)
+
     @property
     def vpin_halted(self) -> bool:
         """True if VPIN extreme event has halted all trading."""
         return self._vpin_halted
+
+    @property
+    def vpin_halt_active(self) -> bool:
+        """True if the clearable VPIN extreme halt is active."""
+        return self._vpin_halt_active
+
+    def activate_vpin_halt(self) -> None:
+        """
+        Activate VPIN extreme halt.
+
+        Unlike ``emergency_flatten()`` this does NOT set ``kill_switch_active``.
+        Trading resumes automatically via ``deactivate_vpin_halt()`` when VPIN
+        drops back below the deactivation threshold (0.55).
+        """
+        self._vpin_halt_active = True
+        logger.warning("VPIN HALT: trading suspended due to extreme toxicity")
+
+    def deactivate_vpin_halt(self, vpin: float) -> None:
+        """
+        Deactivate VPIN halt — called by ShieldManager when VPIN normalizes.
+
+        Logs the resume message required by alert consumers.
+        """
+        self._vpin_halt_active = False
+        logger.info("VPIN normalized: %.2f — trading resumed", vpin)
 
     # ── Topstep-specific properties ────────────────────────────────────
 

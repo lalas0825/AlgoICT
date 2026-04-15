@@ -88,6 +88,32 @@ class ConfluenceScorer:
 
     def __init__(self, weights: Optional[dict] = None):
         self.weights: dict = weights if weights is not None else config.CONFLUENCE_WEIGHTS
+        # Live edge state set per bar by the engine (SWC/GEX/VPIN). Strategies
+        # don't know about it — the `score()` method OR-merges it with any
+        # explicit kwargs so existing call sites keep working unchanged.
+        self._live_edge: dict = {}
+
+    def set_edge_state(
+        self,
+        swc_sentiment_aligned: bool = False,
+        gex_wall_aligned: bool = False,
+        gex_regime_aligned: bool = False,
+        vpin_validated_sweep: bool = False,
+        vpin_quality_session: bool = False,
+    ) -> None:
+        """
+        Store the current live edge-module state. Called by main.py each
+        time a new bar primes SWC/GEX/VPIN, so any subsequent score() call
+        automatically picks up the latest flags without strategies having
+        to thread them through.
+        """
+        self._live_edge = {
+            "swc_sentiment_aligned": swc_sentiment_aligned,
+            "gex_wall_aligned": gex_wall_aligned,
+            "gex_regime_aligned": gex_regime_aligned,
+            "vpin_validated_sweep": vpin_validated_sweep,
+            "vpin_quality_session": vpin_quality_session,
+        }
 
     # ------------------------------------------------------------------ #
     # Public API                                                           #
@@ -220,6 +246,15 @@ class ConfluenceScorer:
                 score += pts
                 breakdown["target_at_pdh_pdl"] = pts
                 reasons.append("target at key level")
+
+        # Merge live edge state (set by main.py every bar) with any
+        # explicit kwargs — kwargs win when True.
+        if self._live_edge:
+            swc_sentiment_aligned = swc_sentiment_aligned or self._live_edge.get("swc_sentiment_aligned", False)
+            gex_wall_aligned = gex_wall_aligned or self._live_edge.get("gex_wall_aligned", False)
+            gex_regime_aligned = gex_regime_aligned or self._live_edge.get("gex_regime_aligned", False)
+            vpin_validated_sweep = vpin_validated_sweep or self._live_edge.get("vpin_validated_sweep", False)
+            vpin_quality_session = vpin_quality_session or self._live_edge.get("vpin_quality_session", False)
 
         # ── 10. SWC sentiment ──────────────────────────────────────────
         if swc_sentiment_aligned:

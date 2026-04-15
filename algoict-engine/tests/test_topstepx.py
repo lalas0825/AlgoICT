@@ -132,7 +132,7 @@ class TestAuthentication:
 
         mock_resp = AsyncMock()
         mock_resp.status = 200
-        mock_resp.json = AsyncMock(return_value={"token": jwt, "accountId": "ACC123"})
+        mock_resp.json = AsyncMock(return_value={"token": jwt, "success": True})
         mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
         mock_resp.__aexit__ = AsyncMock(return_value=False)
 
@@ -141,11 +141,13 @@ class TestAuthentication:
         mock_session.closed = False
         client._session = mock_session
 
-        await client._authenticate()
+        # _authenticate now calls _resolve_account after the login POST;
+        # stub it out so this unit test stays focused on token handling.
+        with patch.object(client, "_resolve_account", AsyncMock()):
+            await client._authenticate()
 
         assert client._token is not None
         assert client._token.token == jwt
-        assert client._account_id == "ACC123"
 
     @pytest.mark.asyncio
     async def test_auth_raises_on_401(self):
@@ -208,24 +210,66 @@ class TestValidateOrderParams:
 
 
 class TestBuildOrderPayload:
+    """
+    ProjectX wire format: integer type/side codes, numeric accountId,
+    fully qualified contractId, nullable price fields always present.
+    """
+
     def test_market_payload(self):
-        p = _build_order_payload("MNQ", "buy", 2, ORDER_MARKET, "ACC1")
-        assert p["symbol"] == "MNQ"
-        assert p["side"] == "buy"
+        p = _build_order_payload(
+            contract_id="CON.F.US.MNQ.M26",
+            side="buy",
+            contracts=2,
+            order_type=ORDER_MARKET,
+            account_id="999",
+        )
+        assert p["contractId"] == "CON.F.US.MNQ.M26"
+        assert p["accountId"] == 999
+        assert p["side"] == 0      # buy
         assert p["size"] == 2
-        assert p["type"] == ORDER_MARKET
-        assert "limitPrice" not in p
-        assert "stopPrice" not in p
+        assert p["type"] == 2      # market
+        assert p["limitPrice"] is None
+        assert p["stopPrice"] is None
+        assert "trailPrice" in p
+        assert "customTag" in p
+        assert "linkedOrderId" in p
 
     def test_limit_payload_has_price(self):
-        p = _build_order_payload("MNQ", "sell", 1, ORDER_LIMIT, "ACC1", limit_price=19500.0)
+        p = _build_order_payload(
+            contract_id="CON.F.US.MNQ.M26",
+            side="sell",
+            contracts=1,
+            order_type=ORDER_LIMIT,
+            account_id="999",
+            limit_price=19500.0,
+        )
+        assert p["type"] == 1      # limit
+        assert p["side"] == 1      # sell
         assert p["limitPrice"] == 19500.0
-        assert "stopPrice" not in p
+        assert p["stopPrice"] is None
 
     def test_stop_payload_has_price(self):
-        p = _build_order_payload("MNQ", "buy", 1, ORDER_STOP, "ACC1", stop_price=19000.0)
+        p = _build_order_payload(
+            contract_id="CON.F.US.MNQ.M26",
+            side="buy",
+            contracts=1,
+            order_type=ORDER_STOP,
+            account_id="999",
+            stop_price=19000.0,
+        )
+        assert p["type"] == 4      # stop
         assert p["stopPrice"] == 19000.0
-        assert "limitPrice" not in p
+        assert p["limitPrice"] is None
+
+    def test_invalid_side_raises(self):
+        with pytest.raises(TopstepXOrderError, match="side"):
+            _build_order_payload(
+                contract_id="CON.F.US.MNQ.M26",
+                side="bananas",
+                contracts=1,
+                order_type=ORDER_MARKET,
+                account_id="999",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -235,7 +279,11 @@ class TestBuildOrderPayload:
 def _mock_client_with_token() -> TopstepXClient:
     client = _make_client()
     client._token = AuthToken(token=_make_jwt(time.time() + 3600), expires_at=time.time() + 3600)
-    client._account_id = "ACC999"
+    # ProjectX requires a numeric accountId on the wire
+    client._account_id = "999"
+    # Pre-populate the contract cache so order tests don't have to mock
+    # the /Contract/search lookup.
+    client._contract_cache["MNQ"] = "CON.F.US.MNQ.M26"
     return client
 
 
@@ -257,15 +305,17 @@ class TestSubmitMarketOrder:
     async def test_returns_order_result(self):
         client = _mock_client_with_token()
         client._session = _mock_session_for_post({
-            "orderId": "ORD001", "status": "submitted"
+            "orderId": 123456, "success": True,
+            "errorCode": 0, "errorMessage": None,
         })
 
         result = await client.submit_market_order("MNQ", "buy", 1)
         assert isinstance(result, OrderResult)
-        assert result.order_id == "ORD001"
+        assert result.order_id == "123456"
         assert result.side == "buy"
         assert result.order_type == ORDER_MARKET
         assert result.contracts == 1
+        assert result.status == "submitted"
 
     @pytest.mark.asyncio
     async def test_bad_side_raises(self):
@@ -285,11 +335,13 @@ class TestSubmitLimitOrder:
     async def test_limit_order_accepted(self):
         client = _mock_client_with_token()
         client._session = _mock_session_for_post({
-            "orderId": "ORD002", "status": "pending"
+            "orderId": 222, "success": True,
+            "errorCode": 0, "errorMessage": None,
         })
         result = await client.submit_limit_order("MNQ", "sell", 2, limit_price=19500.0)
         assert result.order_type == ORDER_LIMIT
         assert result.contracts == 2
+        assert result.order_id == "222"
 
     @pytest.mark.asyncio
     async def test_zero_limit_price_raises(self):
@@ -303,48 +355,38 @@ class TestSubmitStopOrder:
     async def test_stop_order_accepted(self):
         client = _mock_client_with_token()
         client._session = _mock_session_for_post({
-            "orderId": "ORD003", "status": "pending"
+            "orderId": 333, "success": True,
+            "errorCode": 0, "errorMessage": None,
         })
         result = await client.submit_stop_order("MNQ", "sell", 1, stop_price=19000.0)
         assert result.order_type == ORDER_STOP
+        assert result.order_id == "333"
 
 
 class TestCancelOrder:
+    """
+    Cancel moved to POST /Order/cancel with {accountId, orderId} payload
+    and a {success, errorCode, errorMessage} response shape.
+    """
+
     @pytest.mark.asyncio
     async def test_cancel_success(self):
         client = _mock_client_with_token()
-
-        mock_resp = AsyncMock()
-        mock_resp.json = AsyncMock(return_value={"status": "cancelled"})
-        mock_resp.raise_for_status = MagicMock()
-        mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
-        mock_resp.__aexit__ = AsyncMock(return_value=False)
-
-        mock_session = MagicMock()
-        mock_session.delete = MagicMock(return_value=mock_resp)
-        client._session = mock_session
-
-        result = await client.cancel_order("ORD001")
+        client._session = _mock_session_for_post({
+            "success": True, "errorCode": 0, "errorMessage": None,
+        })
+        result = await client.cancel_order("123456")
         assert result is True
 
     @pytest.mark.asyncio
     async def test_cancel_not_found_returns_false(self):
-        import aiohttp
         client = _mock_client_with_token()
-
-        mock_resp = AsyncMock()
-        exc = aiohttp.ClientResponseError(
-            request_info=MagicMock(), history=(), status=404
-        )
-        mock_resp.raise_for_status = MagicMock(side_effect=exc)
-        mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
-        mock_resp.__aexit__ = AsyncMock(return_value=False)
-
-        mock_session = MagicMock()
-        mock_session.delete = MagicMock(return_value=mock_resp)
-        client._session = mock_session
-
-        result = await client.cancel_order("NONEXISTENT")
+        # errorCode=5 is what TopstepX returns when the order is already
+        # gone / never persisted — we report False, not raise.
+        client._session = _mock_session_for_post({
+            "success": False, "errorCode": 5, "errorMessage": None,
+        })
+        result = await client.cancel_order("999999")
         assert result is False
 
     @pytest.mark.asyncio
@@ -515,58 +557,10 @@ class TestParseBarMessage:
 
 
 # ---------------------------------------------------------------------------
-# WS dispatch (offline)
+# SignalR streaming (subscribe_bars still works the same way)
 # ---------------------------------------------------------------------------
 
-class TestDispatchWSMessage:
-    def test_bar_type_triggers_callback(self):
-        client = _make_client()
-        received = []
-        client._bar_callbacks.append(lambda b: received.append(b))
-
-        msg = {
-            "type": "bar",
-            "symbol": "MNQ",
-            "open": 19500.0, "high": 19520.0,
-            "low": 19490.0, "close": 19510.0,
-            "volume": 1000,
-        }
-        client._dispatch_ws_message(json.dumps(msg))
-        assert len(received) == 1
-        assert received[0]["symbol"] == "MNQ"
-
-    def test_unknown_type_no_callback(self):
-        client = _make_client()
-        received = []
-        client._bar_callbacks.append(lambda b: received.append(b))
-
-        client._dispatch_ws_message(json.dumps({"type": "heartbeat", "status": "ok"}))
-        assert len(received) == 0
-
-    def test_nested_data_triggers_callback(self):
-        client = _make_client()
-        received = []
-        client._bar_callbacks.append(lambda b: received.append(b))
-
-        msg = {
-            "type": "update",
-            "data": {
-                "symbol": "MNQ",
-                "open": 19500.0, "high": 19520.0,
-                "low": 19490.0, "close": 19510.0,
-                "volume": 800,
-            }
-        }
-        client._dispatch_ws_message(json.dumps(msg))
-        assert len(received) == 1
-
-    def test_malformed_json_ignored(self):
-        client = _make_client()
-        received = []
-        client._bar_callbacks.append(lambda b: received.append(b))
-        client._dispatch_ws_message("{not valid json")
-        assert len(received) == 0
-
+class TestSubscribeBars:
     def test_subscribe_bars_registers(self):
         client = _make_client()
         cb = lambda b: None

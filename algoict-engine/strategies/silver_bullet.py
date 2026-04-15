@@ -90,9 +90,16 @@ class Signal:
 class SilverBulletStrategy:
     """ICT Silver Bullet — 1min entry during 10:00–11:00 CT kill zone."""
 
+    # Evaluates in both the London SB and NY SB windows.
+    # Each kill zone has its own per-zone trade cap; daily total is the sum.
+    KILL_ZONES = ("london_silver_bullet", "silver_bullet")
+    MAX_TRADES_PER_ZONE = 1
+    # Kept for backward compat — reported on the signal if active zone lookup misses.
     KILL_ZONE = "silver_bullet"
+    ENTRY_TF = "1min"
+    CONTEXT_TF = "5min"
     RISK_REWARD = 2.0
-    MAX_TRADES = 1
+    MAX_TRADES = MAX_TRADES_PER_ZONE * 2  # 2 total (london_sb + ny_sb)
     SYMBOL = "MNQ"
 
     # Sweep type sets per direction
@@ -119,6 +126,7 @@ class SilverBulletStrategy:
         self.session = session_manager
         self.htf_bias_fn = htf_bias_fn
         self.trades_today: int = 0
+        self._trades_by_zone: dict[str, int] = {z: 0 for z in self.KILL_ZONES}
 
     # ------------------------------------------------------------------ #
     # Public API                                                           #
@@ -142,8 +150,14 @@ class SilverBulletStrategy:
         ts = candles_1min.index[-1]
         last_close = float(last_1["close"])
 
-        if not self.session.is_kill_zone(ts, self.KILL_ZONE):
-            logger.debug("Reject: outside kill zone %s at %s", self.KILL_ZONE, ts)
+        # Which of the active kill zones (if any) contains this bar?
+        active_zone: Optional[str] = None
+        for zone in self.KILL_ZONES:
+            if self.session.is_kill_zone(ts, zone):
+                active_zone = zone
+                break
+        if active_zone is None:
+            logger.debug("Reject: outside kill zones %s at %s", self.KILL_ZONES, ts)
             return None
 
         # Cancel check: no new entries at 10:50 CT or later (too close to close)
@@ -161,8 +175,12 @@ class SilverBulletStrategy:
             logger.debug("Reject: risk_manager blocked (%s)", reason)
             return None
 
-        if self.trades_today >= self.MAX_TRADES:
-            logger.debug("Reject: max trades %d reached", self.MAX_TRADES)
+        # Per-zone cap (MAX_TRADES_PER_ZONE in london_sb + MAX_TRADES_PER_ZONE in ny_sb)
+        if self._trades_by_zone.get(active_zone, 0) >= self.MAX_TRADES_PER_ZONE:
+            logger.debug(
+                "Reject: max trades %d reached in %s",
+                self.MAX_TRADES_PER_ZONE, active_zone,
+            )
             return None
 
         # ── 2. HTF bias ────────────────────────────────────────────────
@@ -287,13 +305,15 @@ class SilverBulletStrategy:
             confluence_score=conf.total_score,
             confluence_breakdown=dict(conf.breakdown),
             timestamp=ts,
-            kill_zone=self.KILL_ZONE,
+            kill_zone=active_zone,
         )
 
         self.trades_today += 1
+        self._trades_by_zone[active_zone] = self._trades_by_zone.get(active_zone, 0) + 1
         logger.info("SIGNAL: %s", signal)
         return signal
 
     def reset_daily(self) -> None:
-        """Reset trade counter — call at session start."""
+        """Reset trade counters — call at session start."""
         self.trades_today = 0
+        self._trades_by_zone = {z: 0 for z in self.KILL_ZONES}

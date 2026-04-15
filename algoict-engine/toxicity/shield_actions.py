@@ -29,8 +29,9 @@ from toxicity.toxicity_classifier import ToxicityClassifier, ToxicityLevel
 
 logger = logging.getLogger(__name__)
 
-# Hysteresis: once shield is active, VPIN must drop below this to deactivate
-_DEACTIVATE_THRESHOLD = 0.55   # "high" lower bound
+# Resume threshold: once halted, VPIN must drop to or below this to resume.
+# No hysteresis — mirrors the activate threshold exactly.
+_DEACTIVATE_THRESHOLD = 0.70   # resume as soon as VPIN exits extreme
 _FLATTEN_THRESHOLD = 0.70       # extreme threshold
 
 
@@ -152,7 +153,7 @@ class ShieldManager:
 
         if self._telegram is not None:
             try:
-                self._telegram.send_vpin_alert(
+                await self._telegram.send_vpin_alert(
                     vpin=self._classifier.classify(0.75).vpin,
                     toxicity_level="extreme",
                 )
@@ -161,14 +162,10 @@ class ShieldManager:
 
         if self._risk_manager is not None:
             try:
-                # Support both sync and async risk managers
-                flatten = getattr(self._risk_manager, "emergency_flatten", None)
-                if flatten is not None:
-                    import inspect
-                    if inspect.iscoroutinefunction(flatten):
-                        await flatten(reason=full_reason)
-                    else:
-                        flatten()
+                # Activate the clearable VPIN halt (not the permanent kill switch).
+                activate = getattr(self._risk_manager, "activate_vpin_halt", None)
+                if activate is not None:
+                    activate()
                 return True
             except Exception as exc:
                 logger.error("VPIN flatten failed: %s", exc)
@@ -180,11 +177,19 @@ class ShieldManager:
         """
         Check if the halt should be deactivated based on current VPIN.
 
+        When VPIN drops to or below the deactivation threshold (0.70), clears
+        the internal halt flag and tells the RiskManager to resume trading.
+
         Returns True if halt was deactivated.
         """
-        if self._halt_active and vpin < _DEACTIVATE_THRESHOLD:
+        if self._halt_active and vpin <= _DEACTIVATE_THRESHOLD:
             self._halt_active = False
-            logger.info("VPIN SHIELD: halt deactivated (vpin=%.3f < %.2f)", vpin, _DEACTIVATE_THRESHOLD)
+            logger.info("VPIN SHIELD: halt deactivated (vpin=%.3f <= %.2f)", vpin, _DEACTIVATE_THRESHOLD)
+            # Propagate resume to RiskManager so can_trade() unblocks.
+            if self._risk_manager is not None:
+                deactivate = getattr(self._risk_manager, "deactivate_vpin_halt", None)
+                if deactivate is not None:
+                    deactivate(vpin)
             return True
         return False
 

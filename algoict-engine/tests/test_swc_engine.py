@@ -148,6 +148,61 @@ class TestBuildBlackoutWindows:
 
 
 # ---------------------------------------------------------------------------
+# MoodSynthesizer — _format_headlines (Claude prompt input)
+# ---------------------------------------------------------------------------
+
+class TestFormatHeadlines:
+    def _make_synth(self):
+        s = MoodSynthesizer.__new__(MoodSynthesizer)
+        s._model = "claude-test"
+        s._client = MagicMock()
+        return s
+
+    def test_empty_list_returns_none_marker(self):
+        synth = self._make_synth()
+        assert synth._format_headlines([]) == "  None"
+
+    def test_formats_dict_headlines(self):
+        synth = self._make_synth()
+        out = synth._format_headlines([
+            {"title": "Fed signals more cuts", "sentiment_label": "Bullish",
+             "sentiment_score": 0.6},
+        ])
+        assert "Fed signals more cuts" in out
+        assert "Bullish" in out
+        assert "+0.60" in out
+
+    def test_formats_headline_objects(self):
+        from sentiment.news_scanner import Headline
+        synth = self._make_synth()
+        h = Headline(
+            title="NVDA earnings beat", source="X", published="",
+            sentiment_label="Bullish", sentiment_score=0.9, relevance=1.0,
+        )
+        out = synth._format_headlines([h])
+        assert "NVDA earnings beat" in out
+
+    def test_generate_passes_headlines_to_claude(self):
+        """generate() must thread `headlines` into _call_claude."""
+        synth = self._make_synth()
+        # Stub _call_claude to capture kwargs
+        captured = {}
+        def _fake(**kwargs):
+            captured.update(kwargs)
+            return {
+                "market_mood": "risk_on", "confidence": "high",
+                "one_line_summary": "ok", "key_risk": "none", "opportunity": "ict",
+            }
+        synth._call_claude = _fake
+        synth.generate(
+            events=[], event_risk="none",
+            headlines=[{"title": "h1", "sentiment_label": "Bullish", "sentiment_score": 0.5}],
+        )
+        assert "headlines" in captured
+        assert len(captured["headlines"]) == 1
+
+
+# ---------------------------------------------------------------------------
 # MoodSynthesizer — generate_from_ai_response (offline API test)
 # ---------------------------------------------------------------------------
 

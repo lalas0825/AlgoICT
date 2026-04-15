@@ -7,15 +7,16 @@ All kill zones are defined in US/Central (CT) in config.py.
 All input timestamps must be in US/Central timezone.
 
 Kill Zones (CT):
-    asian:          8:00 PM – 12:00 AM CT
-    london:         2:00 AM – 5:00 AM CT
-    ny_am:          8:30 AM – 11:00 AM CT  (NY AM session — primary)
-    silver_bullet:  10:00 AM – 11:00 AM CT
-    ny_pm:          1:30 PM – 3:00 PM CT
+    asian:                  8:00 PM – 12:00 AM CT
+    london:                 1:00 AM –  4:00 AM CT  (NY AM Reversal, London session)
+    london_silver_bullet:   2:00 AM –  3:00 AM CT  (Silver Bullet, London session)
+    ny_am:                  8:30 AM – 12:00 PM CT  (NY AM Reversal, primary)
+    silver_bullet:         10:00 AM – 11:00 AM CT  (Silver Bullet, NY session)
+    ny_pm:                  1:30 PM –  3:00 PM CT
 
 Session Ranges:
     Asian range:    7:00 PM – 12:00 AM CT of prior evening
-    London session: 2:00 AM – 5:00 AM CT
+    London session: 1:00 AM –  4:00 AM CT
 """
 
 import datetime
@@ -117,7 +118,7 @@ class SessionManager:
         """
         Calculate the London session high/low for *date*.
 
-        London window: 2:00 AM CT to 5:00 AM CT.
+        London window: 1:00 AM CT to 4:00 AM CT.
         Returns (high, low). Returns (nan, nan) if no data available.
 
         Parameters
@@ -125,8 +126,8 @@ class SessionManager:
         date    : datetime.date — the trading day
         df_1min : pd.DataFrame — full 1-min history with CT DatetimeIndex
         """
-        start = pd.Timestamp(date, tz=_CT).replace(hour=2, minute=0)
-        end = pd.Timestamp(date, tz=_CT).replace(hour=4, minute=59)  # exclusive of 05:00
+        start = pd.Timestamp(date, tz=_CT).replace(hour=1, minute=0)
+        end = pd.Timestamp(date, tz=_CT).replace(hour=3, minute=59)   # exclusive of 04:00
 
         session = df_1min.loc[start:end]
         if session.empty:

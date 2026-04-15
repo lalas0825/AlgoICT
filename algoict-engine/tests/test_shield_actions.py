@@ -342,7 +342,7 @@ class TestVPINEngine:
         status = engine.get_status()
         assert not status.is_ready
         assert status.vpin is None
-        assert status.label == "unknown"
+        assert status.label == "calm"
 
     def test_initial_is_safe_to_trade(self):
         engine = VPINEngine()

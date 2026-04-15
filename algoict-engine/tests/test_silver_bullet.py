@@ -315,7 +315,9 @@ class TestRejectionGates:
 
     def test_max_trades_reached_returns_none(self):
         strat, c1, c5 = _build_full_setup()
-        strat.trades_today = 1   # MAX_TRADES = 1
+        # silver_bullet zone's cap has been reached (1 trade in silver_bullet)
+        strat._trades_by_zone["silver_bullet"] = strat.MAX_TRADES_PER_ZONE
+        strat.trades_today = strat.MAX_TRADES_PER_ZONE
         assert strat.evaluate(c1, c5) is None
 
     def test_past_hard_close_returns_none(self):

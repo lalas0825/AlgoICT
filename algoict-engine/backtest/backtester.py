@@ -264,6 +264,8 @@ class Backtester:
                         )
                         self.trades.append(trade)
                         self.risk.record_trade(trade.pnl)
+                        if hasattr(self.risk, 'record_trading_day'):
+                            self.risk.record_trading_day(current_date)
                         daily_pnl[current_date] = (
                             daily_pnl.get(current_date, 0.0) + trade.pnl
                         )
@@ -305,15 +307,38 @@ class Backtester:
             if signal is None:
                 continue
 
+            # ── 6b. Cruise mode overrides ─────────────────────────────
+            sig_contracts = int(signal.contracts)
+            sig_stop = float(signal.stop_price)
+            sig_target = float(signal.target_price)
+
+            if getattr(self.risk, 'cruise_mode', False):
+                # Force 1 contract
+                sig_contracts = self.risk.cruise_max_contracts
+                # Check max risk ($100) — reject if stop too wide
+                stop_pts = abs(float(signal.entry_price) - sig_stop)
+                trade_risk = stop_pts * sig_contracts * MNQ_POINT_VALUE
+                if trade_risk > self.risk.cruise_max_risk:
+                    logger.debug(
+                        "Cruise: reject trade risk=$%.0f > $%.0f",
+                        trade_risk, self.risk.cruise_max_risk,
+                    )
+                    continue
+                # Tighten target to 1:1 RR in cruise (preserve capital)
+                if signal.direction == "long":
+                    sig_target = float(signal.entry_price) + stop_pts
+                else:
+                    sig_target = float(signal.entry_price) - stop_pts
+
             # ── 7. Log & open position ─────────────────────────────────
             self.signals.append(SignalLog(
                 timestamp=signal.timestamp,
                 strategy=signal.strategy,
                 direction=signal.direction,
                 entry_price=float(signal.entry_price),
-                stop_price=float(signal.stop_price),
-                target_price=float(signal.target_price),
-                contracts=int(signal.contracts),
+                stop_price=sig_stop,
+                target_price=sig_target,
+                contracts=sig_contracts,
                 confluence_score=int(signal.confluence_score),
                 kill_zone=signal.kill_zone,
             ))
@@ -324,9 +349,9 @@ class Backtester:
                 "direction": signal.direction,
                 "entry_time": current_ts,
                 "entry_price": float(signal.entry_price),
-                "stop_price": float(signal.stop_price),
-                "target_price": float(signal.target_price),
-                "contracts": int(signal.contracts),
+                "stop_price": sig_stop,
+                "target_price": sig_target,
+                "contracts": sig_contracts,
                 "confluence_score": int(signal.confluence_score),
                 "entry_bar_idx": i,
             }

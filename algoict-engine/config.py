@@ -23,6 +23,7 @@ TOPSTEPX_USERNAME = os.getenv("TOPSTEPX_USERNAME", "")
 TOPSTEPX_API_KEY = os.getenv("TOPSTEPX_API_KEY", "")
 TOPSTEPX_API_URL = os.getenv("TOPSTEPX_API_URL", "https://api.topstepx.com/api")
 TOPSTEPX_WS_URL = os.getenv("TOPSTEPX_WS_URL", "wss://realtime.topstepx.com/api")
+TOPSTEPX_ACCOUNT_ID = os.getenv("TOPSTEPX_ACCOUNT_ID", "")
 
 # ---------------------------------------------------------------------------
 # Broker — Alpaca (S&P 500 Swing)
@@ -42,7 +43,20 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 # ---------------------------------------------------------------------------
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 ALPHA_VANTAGE_API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY", "")
+FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")
 MENTHORQ_API_KEY = os.getenv("MENTHORQ_API_KEY", "")
+
+# ---------------------------------------------------------------------------
+# AI Model Assignment (token optimization)
+# Any caller of the Anthropic API must import from here — never hardcode
+# a model id in an agent file. Swap a single constant to re-route a role.
+# ---------------------------------------------------------------------------
+AI_MODEL_POST_MORTEM = "claude-sonnet-4-6"    # Loss analysis
+AI_MODEL_MOOD_SYNTHESIS = "claude-sonnet-4-6"  # SWC daily mood
+AI_MODEL_HYPOTHESIS_GEN = "claude-sonnet-4-6"  # Strategy Lab (when wired)
+
+# Haiku reserved for simple tasks (enable when SDK lists it)
+# AI_MODEL_SIMPLE = "claude-haiku-4-5-20251001"
 
 # ---------------------------------------------------------------------------
 # Telegram Alerts
@@ -137,19 +151,23 @@ KILL_ZONES = {
         "end": (0, 0),       # 12:00 AM CT
     },
     "london": {
-        "start": (2, 0),     # 2:00 AM CT
-        "end": (5, 0),       # 5:00 AM CT
+        "start": (1, 0),     # 1:00 AM CT  (2:00 AM ET)
+        "end": (4, 0),       # 4:00 AM CT  (5:00 AM ET)
+    },
+    "london_silver_bullet": {
+        "start": (2, 0),     # 2:00 AM CT  (3:00 AM ET) — inside London KZ
+        "end": (3, 0),       # 3:00 AM CT  (4:00 AM ET)
     },
     "ny_am": {
-        "start": (8, 30),    # 8:30 AM CT
-        "end": (11, 0),      # 11:00 AM CT
+        "start": (8, 30),    # 8:30 AM CT — extended to cover late NY AM setups
+        "end": (12, 0),      # 12:00 PM CT (was 11:00)
     },
     "ny_pm": {
         "start": (13, 30),   # 1:30 PM CT
         "end": (15, 0),      # 3:00 PM CT
     },
     "silver_bullet": {
-        "start": (10, 0),    # 10:00 AM CT
+        "start": (10, 0),    # 10:00 AM CT — inside NY AM KZ
         "end": (11, 0),      # 11:00 AM CT
     },
 }

@@ -64,6 +64,13 @@ StateProvider = Callable[[], Union[dict, Awaitable[dict]]]
 DEFAULT_INTERVAL_S = 5.0
 DEFAULT_MAX_CONSECUTIVE_FAILURES = 5
 
+# Windows WSAEWOULDBLOCK — non-blocking socket op couldn't complete immediately.
+# This is a transient OS-level error that resolves on retry; common during
+# heavy async startup (SignalR + Supabase connections competing for sockets).
+_WSAEWOULDBLOCK = 10035
+# Delays between retries (seconds): 100 ms → 250 ms → 500 ms
+_DEFAULT_RETRY_DELAYS = (0.10, 0.25, 0.50)
+
 
 class BotStateSync:
     """
@@ -95,6 +102,7 @@ class BotStateSync:
         interval_s: float = DEFAULT_INTERVAL_S,
         max_consecutive_failures: int = DEFAULT_MAX_CONSECUTIVE_FAILURES,
         on_failure: Optional[Callable] = None,
+        retry_delays: tuple = _DEFAULT_RETRY_DELAYS,
     ):
         if client is None:
             raise ValueError("BotStateSync requires a non-None client")
@@ -106,6 +114,7 @@ class BotStateSync:
         self._interval_s = interval_s
         self._max_failures = max_consecutive_failures
         self._on_failure = on_failure
+        self._retry_delays = retry_delays
 
         self._running = False
         self._consecutive_failures = 0
@@ -214,8 +223,9 @@ class BotStateSync:
 
         # upsert_bot_state is sync (supabase-py is sync under the hood).
         # Wrap in asyncio.to_thread so we don't block the event loop.
+        # Transient Windows WSAEWOULDBLOCK errors are retried automatically.
         try:
-            ok = await asyncio.to_thread(self._client.upsert_bot_state, state)
+            ok = await self._write_with_retry(state)
         except Exception as e:
             self._consecutive_failures += 1
             self._total_failures += 1
@@ -234,6 +244,36 @@ class BotStateSync:
             self._consecutive_failures += 1
             self._total_failures += 1
             await self._handle_failure(RuntimeError("upsert_bot_state returned False"))
+
+    async def _write_with_retry(self, state: dict) -> bool:
+        """
+        Write bot_state, retrying on transient Windows WSAEWOULDBLOCK errors.
+
+        WSAEWOULDBLOCK (WinError 10035) means a non-blocking socket op couldn't
+        complete immediately — it always resolves within milliseconds.  We retry
+        up to ``len(self._retry_delays)`` times before re-raising, so a brief
+        socket contention burst during startup doesn't count as a real failure.
+        Any other exception is re-raised immediately.
+        """
+        last_exc: Optional[Exception] = None
+        for attempt, delay in enumerate(
+            [None, *self._retry_delays]  # first attempt has no pre-sleep
+        ):
+            if delay is not None:
+                logger.debug(
+                    "WSAEWOULDBLOCK retry %d — sleeping %.0f ms",
+                    attempt, delay * 1000,
+                )
+                await asyncio.sleep(delay)
+            try:
+                return await asyncio.to_thread(self._client.upsert_bot_state, state)
+            except OSError as exc:
+                if getattr(exc, "winerror", None) == _WSAEWOULDBLOCK:
+                    last_exc = exc
+                    continue   # retry
+                raise          # not WSAEWOULDBLOCK — propagate immediately
+        # All retries exhausted
+        raise last_exc  # type: ignore[misc]
 
     async def _handle_failure(self, exc: Exception) -> None:
         """Invoke optional failure callback and log cool-down state."""
