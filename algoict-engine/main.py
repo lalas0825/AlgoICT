@@ -158,8 +158,10 @@ PostMortemAgent = _try_import("agents.post_mortem", "PostMortemAgent")
 # ---------------------------------------------------------------------------
 
 ROLLING_1MIN_BARS = 5000        # Keep ~3 days of 1-min data in memory
-WARMUP_BARS = 1000              # Historical bars to preload before WS starts
-WARMUP_LOOKBACK_DAYS = 5        # How far back to scan for warm-up bars
+WARMUP_BARS = 3000              # Historical bars to preload before WS starts
+                                # 3000 1-min bars ≈ 2 completed Globex sessions
+                                # (enough for daily HTF bias; weekly uses current partial)
+WARMUP_LOOKBACK_DAYS = 10       # How far back to scan for warm-up bars
 PREMARKET_HOUR = 6              # 6:00 AM CT — SWC + GEX pre-market scan
 VPIN_WARN_THRESHOLD = 0.55      # log warning above this
 VPIN_EXTREME_THRESHOLD = 0.70   # flatten everything above this
