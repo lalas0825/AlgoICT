@@ -829,7 +829,7 @@ def _log_bar_snapshot(components: Components, state: EngineState, ts) -> None:
         in_rth = 8 <= ts.hour < 15 or (ts.hour == 8 and ts.minute >= 30)
         sess = components.session
         kz = "none"
-        for zone in ("london", "london_silver_bullet", "ny_am", "silver_bullet"):
+        for zone in ("london", "london_silver_bullet", "ny_am", "silver_bullet", "ny_pm"):
             if sess.is_kill_zone(ts, zone):
                 kz = zone
                 break
