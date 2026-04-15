@@ -310,7 +310,7 @@ class TestRejectionGates:
 
     def test_vpin_halt_returns_none(self):
         strat, c1, c5 = _build_full_setup()
-        strat.risk._vpin_halted = True
+        strat.risk._vpin_halt_active = True
         assert strat.evaluate(c1, c5) is None
 
     def test_max_trades_reached_returns_none(self):

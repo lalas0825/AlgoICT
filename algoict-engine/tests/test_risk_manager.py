@@ -110,7 +110,7 @@ class TestCanTrade:
 
     def test_vpin_halt_blocks_trade(self):
         rm = RiskManager()
-        rm._vpin_halted = True
+        rm._vpin_halt_active = True
         allowed, reason = rm.can_trade()
         assert allowed is False
         assert reason == "vpin_halted"
@@ -124,7 +124,7 @@ class TestCanTrade:
 
     def test_vpin_halt_takes_priority_over_kill_switch(self):
         rm = RiskManager()
-        rm._vpin_halted = True
+        rm._vpin_halt_active = True
         rm.kill_switch_active = True
         _, reason = rm.can_trade()
         assert reason == "vpin_halted"

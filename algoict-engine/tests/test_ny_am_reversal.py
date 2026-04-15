@@ -38,6 +38,16 @@ def _ny_am_ts(hour: int = 9, minute: int = 30) -> pd.Timestamp:
     return pd.Timestamp(CT.localize(pd.Timestamp(2025, 3, 3, hour, minute)))
 
 
+def _london_ts(hour: int = 3, minute: int = 0) -> pd.Timestamp:
+    """Timestamp inside London kill zone (2:00–5:00 CT)."""
+    return pd.Timestamp(CT.localize(pd.Timestamp(2025, 3, 3, hour, minute)))
+
+
+def _ny_pm_ts(hour: int = 14, minute: int = 0) -> pd.Timestamp:
+    """Timestamp inside NY PM kill zone (13:30–15:00 CT)."""
+    return pd.Timestamp(CT.localize(pd.Timestamp(2025, 3, 3, hour, minute)))
+
+
 def _make_5min(ts: pd.Timestamp, close: float = 100.0) -> pd.DataFrame:
     """Build a tiny 5min DataFrame with a single bar at *ts*."""
     return pd.DataFrame(
@@ -227,11 +237,11 @@ class TestPositiveSetup:
         assert isinstance(sig.confluence_breakdown, dict)
         assert len(sig.confluence_breakdown) > 0
 
-    def test_signal_increments_trades_today(self):
+    def test_signal_increments_trades_per_zone(self):
         strat, c5, c15 = _build_full_setup()
-        assert strat.trades_today == 0
+        assert strat._trades_by_zone.get("ny_am", 0) == 0
         strat.evaluate(c5, c15)
-        assert strat.trades_today == 1
+        assert strat._trades_by_zone.get("ny_am", 0) == 1
 
 
 # ─── Negative: each gate rejects ─────────────────────────────────────────────
@@ -239,8 +249,8 @@ class TestPositiveSetup:
 class TestRejectionGates:
 
     def test_outside_kill_zone_returns_none(self):
-        """Timestamp at 14:00 CT — past NY AM (08:30–11:00)."""
-        out_ts = _ny_am_ts(14, 0)
+        """Timestamp at 12:00 CT — between NY AM (ends 11:00) and NY PM (starts 13:30)."""
+        out_ts = _ny_am_ts(12, 0)
         strat, _, c15 = _build_full_setup(ts=out_ts)
         c5_out = _make_5min(out_ts, close=100.0)
         assert strat.evaluate(c5_out, c15) is None
@@ -281,12 +291,11 @@ class TestRejectionGates:
 
     def test_vpin_halt_returns_none(self):
         strat, c5, c15 = _build_full_setup()
-        strat.risk._vpin_halted = True
+        strat.risk._vpin_halt_active = True
         assert strat.evaluate(c5, c15) is None
 
     def test_max_trades_reached_returns_none(self):
         strat, c5, c15 = _build_full_setup()
-        # The ny_am zone's cap has been reached (2 trades in ny_am)
         strat._trades_by_zone["ny_am"] = strat.MAX_TRADES_PER_ZONE
         strat.trades_today = strat.MAX_TRADES_PER_ZONE
         assert strat.evaluate(c5, c15) is None
@@ -335,9 +344,155 @@ class TestSweepDirection:
 
 class TestReset:
 
-    def test_reset_daily_clears_trades_today(self):
+    def test_reset_daily_clears_trades_per_zone(self):
         strat, c5, c15 = _build_full_setup()
         strat.evaluate(c5, c15)
-        assert strat.trades_today == 1
+        assert strat._trades_by_zone.get("ny_am", 0) == 1
         strat.reset_daily()
-        assert strat.trades_today == 0
+        assert strat._trades_by_zone.get("ny_am", 0) == 0
+        assert strat._trades_by_zone.get("ny_pm", 0) == 0
+        assert strat._trades_by_zone.get("london", 0) == 0
+
+
+# ─── EVAL log format ─────────────────────────────────────────────────────────
+
+class TestEvalLogging:
+    """Verify EVAL INFO lines are emitted in the required format."""
+
+    def test_eval_outside_kz(self, caplog):
+        """Bar at 12:00 CT — outside all KZs → 'outside_kz' EVAL line."""
+        out_ts = _ny_am_ts(12, 0)
+        strat, _, c15 = _build_full_setup(ts=out_ts)
+        c5_out = _make_5min(out_ts, close=100.0)
+        import logging
+        with caplog.at_level(logging.INFO, logger="strategies.ny_am_reversal"):
+            strat.evaluate(c5_out, c15)
+        eval_lines = [r.message for r in caplog.records if "EVAL ny_am" in r.message]
+        assert len(eval_lines) == 1
+        assert "signal=reject" in eval_lines[0]
+        assert "reason=outside_kz" in eval_lines[0]
+        assert "12:00" in eval_lines[0]
+
+    def test_eval_conf_below_min(self, caplog):
+        """Full structural setup but min_conf raised to 99 → conf_below_min line."""
+        strat, c5, c15 = _build_full_setup()
+        strat.risk._min_confluence_adj = 92   # 7 + 92 = 99 → force fail at confluence gate
+        import logging
+        with caplog.at_level(logging.INFO, logger="strategies.ny_am_reversal"):
+            result = strat.evaluate(c5, c15)
+        assert result is None
+        eval_lines = [r.message for r in caplog.records if "EVAL ny_am" in r.message]
+        assert len(eval_lines) == 1
+        line = eval_lines[0]
+        assert "signal=reject" in line
+        assert "conf_below_min" in line
+        assert "/20" in line            # score present
+
+    def test_eval_fire(self, caplog):
+        """Full valid setup → fire EVAL line with score and signal details."""
+        strat, c5, c15 = _build_full_setup()
+        import logging
+        with caplog.at_level(logging.INFO, logger="strategies.ny_am_reversal"):
+            result = strat.evaluate(c5, c15)
+        assert result is not None
+        eval_lines = [r.message for r in caplog.records if "EVAL ny_am" in r.message]
+        assert len(eval_lines) == 1
+        line = eval_lines[0]
+        assert "signal=fire" in line
+        assert "reason=fired" in line
+        assert "/20" in line
+        assert "Signal(" in line        # full signal repr appended
+
+
+# ─── Multi-KZ coverage ───────────────────────────────────────────────────────
+
+class TestKillZones:
+    """Verify the strategy evaluates in all three kill zones independently."""
+
+    def test_kill_zones_tuple(self):
+        """Strategy must list all three KZs."""
+        assert NYAMReversalStrategy.KILL_ZONES == ("london", "ny_am", "ny_pm")
+
+    def test_max_trades_per_zone_constant(self):
+        assert NYAMReversalStrategy.MAX_TRADES_PER_ZONE == 2
+
+    # ── ny_am (baseline) ──────────────────────────────────────────────
+
+    def test_signal_fires_in_ny_am(self):
+        strat, c5, c15 = _build_full_setup(ts=_ny_am_ts(9, 30))
+        sig = strat.evaluate(c5, c15)
+        assert sig is not None
+        assert sig.kill_zone == "ny_am"
+
+    # ── ny_pm ─────────────────────────────────────────────────────────
+
+    def test_signal_fires_in_ny_pm(self):
+        ts = _ny_pm_ts(14, 0)
+        strat, _, c15 = _build_full_setup(ts=ts)
+        c5 = _make_5min(ts, close=100.0)
+        sig = strat.evaluate(c5, c15)
+        assert sig is not None
+        assert sig.kill_zone == "ny_pm"
+
+    def test_ny_pm_increments_ny_pm_counter(self):
+        ts = _ny_pm_ts(14, 0)
+        strat, _, c15 = _build_full_setup(ts=ts)
+        c5 = _make_5min(ts, close=100.0)
+        strat.evaluate(c5, c15)
+        assert strat._trades_by_zone.get("ny_pm", 0) == 1
+        assert strat._trades_by_zone.get("ny_am", 0) == 0  # ny_am unaffected
+
+    def test_ny_pm_max_trades_per_zone_blocks_after_2(self):
+        ts = _ny_pm_ts(14, 0)
+        strat, _, c15 = _build_full_setup(ts=ts)
+        c5 = _make_5min(ts, close=100.0)
+        strat._trades_by_zone["ny_pm"] = 2
+        assert strat.evaluate(c5, c15) is None
+
+    # ── london ────────────────────────────────────────────────────────
+
+    def test_signal_fires_in_london(self):
+        ts = _london_ts(3, 0)
+        strat, _, c15 = _build_full_setup(ts=ts)
+        c5 = _make_5min(ts, close=100.0)
+        sig = strat.evaluate(c5, c15)
+        assert sig is not None
+        assert sig.kill_zone == "london"
+
+    def test_london_increments_london_counter(self):
+        ts = _london_ts(3, 0)
+        strat, _, c15 = _build_full_setup(ts=ts)
+        c5 = _make_5min(ts, close=100.0)
+        strat.evaluate(c5, c15)
+        assert strat._trades_by_zone.get("london", 0) == 1
+        assert strat._trades_by_zone.get("ny_am", 0) == 0
+
+    # ── Cross-zone counter isolation ──────────────────────────────────
+
+    def test_exhausting_ny_am_does_not_block_ny_pm(self):
+        """2 trades in ny_am must NOT prevent a trade in ny_pm."""
+        ts_pm = _ny_pm_ts(14, 0)
+        strat, _, c15 = _build_full_setup(ts=ts_pm)
+        c5 = _make_5min(ts_pm, close=100.0)
+        strat._trades_by_zone["ny_am"] = 2   # ny_am exhausted
+        sig = strat.evaluate(c5, c15)
+        assert sig is not None
+        assert sig.kill_zone == "ny_pm"
+
+    def test_exhausting_ny_pm_does_not_block_london(self):
+        """2 trades in ny_pm must NOT prevent a trade in london."""
+        ts_lon = _london_ts(3, 0)
+        strat, _, c15 = _build_full_setup(ts=ts_lon)
+        c5 = _make_5min(ts_lon, close=100.0)
+        strat._trades_by_zone["ny_pm"] = 2   # ny_pm exhausted
+        sig = strat.evaluate(c5, c15)
+        assert sig is not None
+        assert sig.kill_zone == "london"
+
+    def test_reset_daily_clears_all_zones(self):
+        strat, c5, c15 = _build_full_setup()
+        strat._trades_by_zone = {"london": 1, "ny_am": 2, "ny_pm": 1}
+        strat.reset_daily()
+        assert strat._trades_by_zone.get("london", 0) == 0
+        assert strat._trades_by_zone.get("ny_am", 0) == 0
+        assert strat._trades_by_zone.get("ny_pm", 0) == 0

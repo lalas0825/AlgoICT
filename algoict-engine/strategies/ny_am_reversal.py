@@ -5,12 +5,14 @@ ICT NY AM Reversal — primary intraday strategy.
 
 Setup
 -----
-1. Time:           inside NY AM kill zone (08:30 – 11:00 CT)
+1. Time:           inside any active kill zone: London (02:00–05:00 CT),
+                   NY AM (08:30–11:00 CT), or NY PM (13:30–15:00 CT)
 2. HTF bias:       Daily/Weekly aligned (not neutral)
 3. 15min context:  recent MSS or BOS in HTF direction
 4. 5min entry:     liquidity grab + FVG + Order Block + displacement
 5. Confluence:     >= MIN_CONFLUENCE (7/20) — uses ConfluenceScorer
-6. Risk:           1:3 RR, $250 risk, max 2 trades per session
+6. Risk:           1:3 RR, $250 risk, max 2 trades per kill zone
+                   (up to 6 trades/day: 2 london + 2 ny_am + 2 ny_pm)
 
 Entry / Stop / Target
 ---------------------
@@ -56,6 +58,14 @@ from timeframes.htf_bias import BiasResult
 logger = logging.getLogger(__name__)
 
 
+def _ts_hm(ts) -> str:
+    """Format a bar timestamp as HH:MM for EVAL log lines."""
+    try:
+        return ts.strftime("%H:%M")
+    except AttributeError:
+        return str(ts)
+
+
 @dataclass
 class Signal:
     """Trade signal emitted by a strategy when a setup is found."""
@@ -84,17 +94,15 @@ class Signal:
 class NYAMReversalStrategy:
     """ICT 2022 Model — NY AM Session Reversal."""
 
-    # Evaluates in both the London and NY AM reversal windows.
+    # Evaluates in London, NY AM, and NY PM reversal windows.
     # Each kill zone has its own per-zone trade cap; daily total is the sum.
-    KILL_ZONES = ("london", "ny_am")
+    KILL_ZONES = ("london", "ny_am", "ny_pm")
     MAX_TRADES_PER_ZONE = 2
-    # Kept for backward compat — the "default" zone used when reporting the
-    # signal's kill_zone tag. The real check happens via KILL_ZONES.
-    KILL_ZONE = "ny_am"
+    KILL_ZONE = "ny_am"  # kept for backward compat
     ENTRY_TF = "5min"
     CONTEXT_TF = "15min"
     RISK_REWARD = 3.0
-    MAX_TRADES = MAX_TRADES_PER_ZONE * 2  # 4 total (london + ny_am)
+    MAX_TRADES = MAX_TRADES_PER_ZONE * 3  # 6 total (london + ny_am + ny_pm)
     SYMBOL = "MNQ"
 
     # Sweep type sets per direction
@@ -145,37 +153,46 @@ class NYAMReversalStrategy:
         ts = candles_5min.index[-1]
         last_close = float(last_5["close"])
 
-        # Which of the active kill zones (if any) contains this bar?
-        active_zone: Optional[str] = None
-        for zone in self.KILL_ZONES:
-            if self.session.is_kill_zone(ts, zone):
-                active_zone = zone
-                break
+        active_zone = next(
+            (kz for kz in self.KILL_ZONES if self.session.is_kill_zone(ts, kz)),
+            None,
+        )
         if active_zone is None:
-            logger.debug("Reject: outside kill zones %s at %s", self.KILL_ZONES, ts)
+            logger.info(
+                "EVAL ny_am [%s]: confluence=N/A, signal=reject, reason=outside_kz",
+                _ts_hm(ts),
+            )
             return None
 
         if self.risk.check_hard_close(ts):
-            logger.debug("Reject: past hard close at %s", ts)
+            logger.info(
+                "EVAL ny_am [%s]: confluence=N/A, signal=reject, reason=past_hard_close",
+                _ts_hm(ts),
+            )
             return None
 
         allowed, reason = self.risk.can_trade()
         if not allowed:
-            logger.debug("Reject: risk_manager blocked (%s)", reason)
+            logger.info(
+                "EVAL ny_am [%s]: confluence=N/A, signal=reject, reason=risk_blocked (%s)",
+                _ts_hm(ts), reason,
+            )
             return None
 
-        # Per-zone cap (MAX_TRADES_PER_ZONE in london + MAX_TRADES_PER_ZONE in ny_am)
         if self._trades_by_zone.get(active_zone, 0) >= self.MAX_TRADES_PER_ZONE:
-            logger.debug(
-                "Reject: max trades %d reached in %s",
-                self.MAX_TRADES_PER_ZONE, active_zone,
+            logger.info(
+                "EVAL ny_am [%s]: confluence=N/A, signal=reject, reason=max_trades",
+                _ts_hm(ts),
             )
             return None
 
         # ── 2. HTF bias ────────────────────────────────────────────────
         bias = self.htf_bias_fn(last_close)
         if bias.direction == "neutral":
-            logger.debug("Reject: HTF bias neutral")
+            logger.info(
+                "EVAL ny_am [%s]: confluence=N/A, signal=reject, reason=htf_neutral",
+                _ts_hm(ts),
+            )
             return None
 
         bias_dir = bias.direction                                # 'bullish' | 'bearish'
@@ -188,7 +205,10 @@ class NYAMReversalStrategy:
             if e.type in ("MSS", "BOS") and e.direction == bias_dir
         ]
         if not aligned:
-            logger.debug("Reject: no aligned 15min MSS/BOS")
+            logger.info(
+                "EVAL ny_am [%s]: confluence=N/A, signal=reject, reason=no_valid_setup (no_15min_struct)",
+                _ts_hm(ts),
+            )
             return None
         last_struct = aligned[-1]
 
@@ -197,14 +217,20 @@ class NYAMReversalStrategy:
             timeframe="5min", direction=bias_dir,
         )
         if not fvgs:
-            logger.debug("Reject: no aligned 5min FVG")
+            logger.info(
+                "EVAL ny_am [%s]: confluence=N/A, signal=reject, reason=no_valid_setup (no_fvg)",
+                _ts_hm(ts),
+            )
             return None
 
         obs = self.detectors["ob"].get_active(
             timeframe="5min", direction=bias_dir,
         )
         if not obs:
-            logger.debug("Reject: no aligned 5min OB")
+            logger.info(
+                "EVAL ny_am [%s]: confluence=N/A, signal=reject, reason=no_valid_setup (no_ob)",
+                _ts_hm(ts),
+            )
             return None
         last_ob = obs[-1]
 
@@ -212,7 +238,10 @@ class NYAMReversalStrategy:
             n=5, timeframe="5min", direction=bias_dir,
         )
         if not displacements:
-            logger.debug("Reject: no aligned 5min displacement")
+            logger.info(
+                "EVAL ny_am [%s]: confluence=N/A, signal=reject, reason=no_valid_setup (no_displacement)",
+                _ts_hm(ts),
+            )
             return None
 
         # Sweep — pulled from tracked_levels (engine maintains; tests inject)
@@ -225,7 +254,10 @@ class NYAMReversalStrategy:
             if lvl.swept and lvl.type in valid_sweep_types
         ]
         if not sweeps:
-            logger.debug("Reject: no aligned liquidity sweep")
+            logger.info(
+                "EVAL ny_am [%s]: confluence=N/A, signal=reject, reason=no_valid_setup (no_sweep)",
+                _ts_hm(ts),
+            )
             return None
         sweep = sweeps[-1]
 
@@ -239,7 +271,10 @@ class NYAMReversalStrategy:
 
         stop_points = abs(entry_price - stop_price)
         if stop_points <= 0:
-            logger.debug("Reject: zero stop distance from OB")
+            logger.info(
+                "EVAL ny_am [%s]: confluence=N/A, signal=reject, reason=no_valid_setup (zero_stop)",
+                _ts_hm(ts),
+            )
             return None
 
         # Position size with floor + expand stop
@@ -277,8 +312,9 @@ class NYAMReversalStrategy:
         # Effective min confluence respects SWC/VPIN bumps
         min_required = self.risk.effective_min_confluence
         if conf.total_score < min_required:
-            logger.debug(
-                "Reject: confluence %d < %d", conf.total_score, min_required,
+            logger.info(
+                "EVAL ny_am [%s]: confluence=%d/20, signal=reject, reason=conf_below_min (%d<%d)",
+                _ts_hm(ts), conf.total_score, conf.total_score, min_required,
             )
             return None
 
@@ -299,7 +335,10 @@ class NYAMReversalStrategy:
 
         self.trades_today += 1
         self._trades_by_zone[active_zone] = self._trades_by_zone.get(active_zone, 0) + 1
-        logger.info("SIGNAL: %s", signal)
+        logger.info(
+            "EVAL ny_am [%s]: confluence=%d/20, signal=fire, reason=fired | %s",
+            _ts_hm(ts), signal.confluence_score, signal,
+        )
         return signal
 
     def reset_daily(self) -> None:

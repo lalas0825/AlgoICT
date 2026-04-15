@@ -566,7 +566,7 @@ class RiskManager:
         base = (
             f"RiskManager(pnl={self.daily_pnl:.2f}, losses={self.consecutive_losses}, "
             f"trades={self.trades_today}, kill={self.kill_switch_active}, "
-            f"cap={self.profit_cap_active}, vpin_halt={self._vpin_halted}"
+            f"cap={self.profit_cap_active}, vpin_halt={self._vpin_halt_active}"
         )
         if self._topstep_mode:
             base += (

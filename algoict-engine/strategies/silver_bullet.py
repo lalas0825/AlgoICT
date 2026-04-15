@@ -57,6 +57,14 @@ from timeframes.htf_bias import BiasResult
 
 logger = logging.getLogger(__name__)
 
+
+def _ts_hm(ts) -> str:
+    """Format a bar timestamp as HH:MM for EVAL log lines."""
+    try:
+        return ts.strftime("%H:%M")
+    except AttributeError:
+        return str(ts)
+
 # Cancel if we're this close to the end of the kill zone (10 min before 11:00)
 _CANCEL_HOUR = 10
 _CANCEL_MINUTE = 50
@@ -150,43 +158,55 @@ class SilverBulletStrategy:
         ts = candles_1min.index[-1]
         last_close = float(last_1["close"])
 
-        # Which of the active kill zones (if any) contains this bar?
-        active_zone: Optional[str] = None
-        for zone in self.KILL_ZONES:
-            if self.session.is_kill_zone(ts, zone):
-                active_zone = zone
-                break
+        active_zone = next(
+            (kz for kz in self.KILL_ZONES if self.session.is_kill_zone(ts, kz)),
+            None,
+        )
         if active_zone is None:
-            logger.debug("Reject: outside kill zones %s at %s", self.KILL_ZONES, ts)
+            logger.info(
+                "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, reason=outside_kz",
+                _ts_hm(ts),
+            )
             return None
 
         # Cancel check: no new entries at 10:50 CT or later (too close to close)
         ts_time = ts.time() if hasattr(ts, "time") else ts.to_pydatetime().time()
         if ts_time >= datetime.time(_CANCEL_HOUR, _CANCEL_MINUTE):
-            logger.debug("Reject: past cancel time 10:50 CT at %s", ts)
+            logger.info(
+                "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, reason=past_cancel_time",
+                _ts_hm(ts),
+            )
             return None
 
         if self.risk.check_hard_close(ts):
-            logger.debug("Reject: past hard close at %s", ts)
+            logger.info(
+                "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, reason=past_hard_close",
+                _ts_hm(ts),
+            )
             return None
 
         allowed, reason = self.risk.can_trade()
         if not allowed:
-            logger.debug("Reject: risk_manager blocked (%s)", reason)
+            logger.info(
+                "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, reason=risk_blocked (%s)",
+                _ts_hm(ts), reason,
+            )
             return None
 
-        # Per-zone cap (MAX_TRADES_PER_ZONE in london_sb + MAX_TRADES_PER_ZONE in ny_sb)
         if self._trades_by_zone.get(active_zone, 0) >= self.MAX_TRADES_PER_ZONE:
-            logger.debug(
-                "Reject: max trades %d reached in %s",
-                self.MAX_TRADES_PER_ZONE, active_zone,
+            logger.info(
+                "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, reason=max_trades",
+                _ts_hm(ts),
             )
             return None
 
         # ── 2. HTF bias ────────────────────────────────────────────────
         bias = self.htf_bias_fn(last_close)
         if bias.direction == "neutral":
-            logger.debug("Reject: HTF bias neutral")
+            logger.info(
+                "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, reason=htf_neutral",
+                _ts_hm(ts),
+            )
             return None
 
         bias_dir = bias.direction                                # 'bullish' | 'bearish'
@@ -199,7 +219,10 @@ class SilverBulletStrategy:
             if e.type in ("MSS", "BOS") and e.direction == bias_dir
         ]
         if not aligned:
-            logger.debug("Reject: no aligned 5min MSS/BOS")
+            logger.info(
+                "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, reason=no_valid_setup (no_5min_struct)",
+                _ts_hm(ts),
+            )
             return None
         last_struct = aligned[-1]
 
@@ -208,14 +231,20 @@ class SilverBulletStrategy:
             timeframe="1min", direction=bias_dir,
         )
         if not fvgs:
-            logger.debug("Reject: no aligned 1min FVG")
+            logger.info(
+                "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, reason=no_valid_setup (no_fvg)",
+                _ts_hm(ts),
+            )
             return None
 
         obs = self.detectors["ob"].get_active(
             timeframe="1min", direction=bias_dir,
         )
         if not obs:
-            logger.debug("Reject: no aligned 1min OB")
+            logger.info(
+                "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, reason=no_valid_setup (no_ob)",
+                _ts_hm(ts),
+            )
             return None
         last_ob = obs[-1]
 
@@ -223,7 +252,10 @@ class SilverBulletStrategy:
             n=5, timeframe="1min", direction=bias_dir,
         )
         if not displacements:
-            logger.debug("Reject: no aligned 1min displacement")
+            logger.info(
+                "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, reason=no_valid_setup (no_displacement)",
+                _ts_hm(ts),
+            )
             return None
 
         # Sweep — pulled from tracked_levels (engine maintains; tests inject)
@@ -236,7 +268,10 @@ class SilverBulletStrategy:
             if lvl.swept and lvl.type in valid_sweep_types
         ]
         if not sweeps:
-            logger.debug("Reject: no aligned liquidity sweep")
+            logger.info(
+                "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, reason=no_valid_setup (no_sweep)",
+                _ts_hm(ts),
+            )
             return None
         sweep = sweeps[-1]
 
@@ -250,7 +285,10 @@ class SilverBulletStrategy:
 
         stop_points = abs(entry_price - stop_price)
         if stop_points <= 0:
-            logger.debug("Reject: zero stop distance from OB")
+            logger.info(
+                "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, reason=no_valid_setup (zero_stop)",
+                _ts_hm(ts),
+            )
             return None
 
         # Position size with floor + expand stop
@@ -288,8 +326,9 @@ class SilverBulletStrategy:
         # Effective min confluence respects SWC/VPIN bumps
         min_required = self.risk.effective_min_confluence
         if conf.total_score < min_required:
-            logger.debug(
-                "Reject: confluence %d < %d", conf.total_score, min_required,
+            logger.info(
+                "EVAL silver_bullet [%s]: confluence=%d/20, signal=reject, reason=conf_below_min (%d<%d)",
+                _ts_hm(ts), conf.total_score, conf.total_score, min_required,
             )
             return None
 
@@ -310,7 +349,10 @@ class SilverBulletStrategy:
 
         self.trades_today += 1
         self._trades_by_zone[active_zone] = self._trades_by_zone.get(active_zone, 0) + 1
-        logger.info("SIGNAL: %s", signal)
+        logger.info(
+            "EVAL silver_bullet [%s]: confluence=%d/20, signal=fire, reason=fired | %s",
+            _ts_hm(ts), signal.confluence_score, signal,
+        )
         return signal
 
     def reset_daily(self) -> None:
