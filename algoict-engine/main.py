@@ -124,6 +124,12 @@ PREMARKET_HOUR = 6              # 6:00 AM CT — SWC + GEX pre-market scan
 HARD_CLOSE_HOUR = config.HARD_CLOSE_HOUR
 HARD_CLOSE_MIN = config.HARD_CLOSE_MINUTE
 
+# SWC re-scan schedule — 15 min before each Kill Zone opens
+SWC_LONDON_HOUR = 0             # 00:45 CT — before London KZ (01:00 CT)
+SWC_LONDON_MIN  = 45
+SWC_NY_AM_HOUR  = 8             # 08:15 CT — before NY AM KZ (08:30 CT)
+SWC_NY_AM_MIN   = 15
+
 
 # ---------------------------------------------------------------------------
 # State container
@@ -147,6 +153,10 @@ class EngineState:
     premarket_done: bool = False
     hard_close_done: bool = False
     daily_summary_sent: bool = False
+
+    # SWC re-scan flags (prevent double-trigger within the same day)
+    swc_london_rescan_done: bool = False
+    swc_nyam_rescan_done: bool = False
 
     # Intelligence snapshots
     swc_snapshot: Optional[dict] = None
@@ -378,6 +388,66 @@ async def _run_premarket_scan(components: Components, state: EngineState) -> Non
             pass
 
     state.premarket_done = True
+
+
+async def _run_swc_rescan(
+    components: "Components",
+    state: "EngineState",
+    time_str: str,
+) -> None:
+    """
+    Re-run SWC scan before a Kill Zone opens.
+
+    Calls run_premarket_scan() (same function as the boot scan), updates
+    state.swc_snapshot and RiskManager overrides, then logs and optionally
+    alerts Telegram depending on whether the mood changed.
+
+    On API failure: logs ERROR and retains the previous snapshot unchanged.
+
+    Parameters
+    ----------
+    time_str : "00:45" | "08:15"  — used in log messages.
+    """
+    if _SWC_RUN is None:
+        return
+
+    old_mood = state.swc_snapshot.get("mood") if state.swc_snapshot else None
+
+    try:
+        swc = await _maybe_await(_SWC_RUN())
+
+        if not isinstance(swc, dict):
+            logger.warning("SWC re-scan [%s CT] returned unexpected type — skipping", time_str)
+            return
+
+        new_mood = swc.get("mood", "unknown")
+        new_adj  = int(swc.get("min_confluence_adj", 0))
+        new_mult = float(swc.get("position_multiplier", 1.0))
+
+        components.risk.set_swc_overrides(new_adj, new_mult)
+        state.swc_snapshot = swc
+
+        if old_mood is not None and new_mood != old_mood:
+            logger.info(
+                "SWC re-scan [%s CT]: mood changed %s \u2192 %s",
+                time_str, old_mood, new_mood,
+            )
+            if components.telegram is not None:
+                try:
+                    components.telegram.send_emergency_alert(
+                        f"SWC re-scan [{time_str} CT]: mood changed {old_mood} \u2192 {new_mood}"
+                        f"\nMin conf: +{new_adj} | Pos mult: {new_mult:.2f}"
+                    )
+                except Exception as exc:
+                    logger.error("Failed to send SWC rescan Telegram alert: %s", exc)
+        else:
+            shown_mood = new_mood if old_mood is None else old_mood
+            logger.info("SWC re-scan [%s CT]: mood unchanged (%s)", time_str, shown_mood)
+
+    except Exception as exc:
+        logger.error(
+            "SWC re-scan [%s CT] failed: %s — keeping previous mood", time_str, exc
+        )
 
 
 async def _maybe_await(result):
@@ -717,6 +787,8 @@ def _reset_for_new_day(components: Components, state: EngineState) -> None:
     state.premarket_done = False
     state.hard_close_done = False
     state.daily_summary_sent = False
+    state.swc_london_rescan_done = False
+    state.swc_nyam_rescan_done = False
 
 
 # ---------------------------------------------------------------------------
@@ -825,6 +897,20 @@ async def run(mode: str = "paper") -> None:
             # Pre-market scan at 06:00 CT (run once per day)
             if not state.premarket_done and now.hour >= PREMARKET_HOUR:
                 await _run_premarket_scan(components, state)
+
+            # SWC re-scan at 00:45 CT — before London Kill Zone (01:00 CT)
+            if (not state.swc_london_rescan_done
+                    and now.hour == SWC_LONDON_HOUR
+                    and now.minute >= SWC_LONDON_MIN):
+                await _run_swc_rescan(components, state, "00:45")
+                state.swc_london_rescan_done = True
+
+            # SWC re-scan at 08:15 CT — before NY AM Kill Zone (08:30 CT)
+            if (not state.swc_nyam_rescan_done
+                    and now.hour == SWC_NY_AM_HOUR
+                    and now.minute >= SWC_NY_AM_MIN):
+                await _run_swc_rescan(components, state, "08:15")
+                state.swc_nyam_rescan_done = True
 
             # Hard close check (in addition to the per-bar check)
             if (not state.hard_close_done

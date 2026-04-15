@@ -79,6 +79,9 @@ class RiskManager:
         self._min_confluence_adj: int = 0    # +N added to min confluence
         self._position_multiplier: float = 1.0  # 0.75 = 25% reduction
         self._vpin_halted: bool = False
+        # Clearable VPIN extreme halt — resets when VPIN drops below 0.55.
+        # Distinct from kill_switch_active (which is permanent for the day).
+        self._vpin_halt_active: bool = False
 
         # ── Topstep Combine MLL tracking (M14) ──────────────────────────
         self._topstep_mode: bool = False
@@ -221,7 +224,7 @@ class RiskManager:
         (True, 'ok') if trading is allowed
         (False, reason) if blocked — reason is a short string key
         """
-        if self._vpin_halted:
+        if self._vpin_halt_active:
             return False, "vpin_halted"
         if self.kill_switch_active:
             return False, "kill_switch"
@@ -303,7 +306,7 @@ class RiskManager:
         """
         self._vpin_halted = halted
         if halted:
-            logger.warning("VPIN HALT: trading suspended due to extreme toxicity")
+            self.activate_vpin_halt()  # also set the clearable flag
         self._position_multiplier = min(self._position_multiplier, pos_mult)
         logger.debug(
             "VPIN overrides: halted=%s, tighten=%.0f%%, pos_mult=%.2f",
@@ -335,6 +338,7 @@ class RiskManager:
         self._min_confluence_adj = 0
         self._position_multiplier = 1.0
         self._vpin_halted = False
+        self._vpin_halt_active = False
 
         # MLL zone recalc at day start (the "stop" zone resets because
         # a new day gives the trader a fresh chance, but the drawdown
@@ -373,6 +377,31 @@ class RiskManager:
     def vpin_halted(self) -> bool:
         """True if VPIN extreme event has halted all trading."""
         return self._vpin_halted
+
+    @property
+    def vpin_halt_active(self) -> bool:
+        """True if the clearable VPIN extreme halt is active."""
+        return self._vpin_halt_active
+
+    def activate_vpin_halt(self) -> None:
+        """
+        Activate VPIN extreme halt.
+
+        Unlike ``emergency_flatten()`` this does NOT set ``kill_switch_active``.
+        Trading resumes automatically via ``deactivate_vpin_halt()`` when VPIN
+        drops back below the deactivation threshold (0.55).
+        """
+        self._vpin_halt_active = True
+        logger.warning("VPIN HALT: trading suspended due to extreme toxicity")
+
+    def deactivate_vpin_halt(self, vpin: float) -> None:
+        """
+        Deactivate VPIN halt — called by ShieldManager when VPIN normalizes.
+
+        Logs the resume message required by alert consumers.
+        """
+        self._vpin_halt_active = False
+        logger.info("VPIN normalized: %.2f — trading resumed", vpin)
 
     # ── Topstep-specific properties ────────────────────────────────────
 
@@ -444,7 +473,7 @@ class RiskManager:
         base = (
             f"RiskManager(pnl={self.daily_pnl:.2f}, losses={self.consecutive_losses}, "
             f"trades={self.trades_today}, kill={self.kill_switch_active}, "
-            f"cap={self.profit_cap_active}, vpin_halt={self._vpin_halted}"
+            f"cap={self.profit_cap_active}, vpin_halt={self._vpin_halt_active}"
         )
         if self._topstep_mode:
             base += (
