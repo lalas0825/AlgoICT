@@ -571,38 +571,43 @@ async def _run_swc_rescan(
     if _SWC_RUN is None:
         return
 
-    old_mood = state.swc_snapshot.get("mood") if state.swc_snapshot else None
+    old_mood = getattr(state.swc_snapshot, "market_mood", None)
+    old_mood_val = getattr(old_mood, "value", str(old_mood)) if old_mood else None
 
     try:
-        swc = await _maybe_await(_SWC_RUN())
+        report = await _maybe_await(_SWC_RUN())
 
-        if not isinstance(swc, dict):
-            logger.warning("SWC re-scan [%s CT] returned unexpected type — skipping", time_str)
+        if report is None:
+            logger.warning("SWC re-scan [%s CT] returned None — skipping", time_str)
             return
 
-        new_mood = swc.get("mood", "unknown")
-        new_adj  = int(swc.get("min_confluence_adj", 0))
-        new_mult = float(swc.get("position_multiplier", 1.0))
+        # DailyMoodReport dataclass
+        new_mood_val = getattr(report.market_mood, "value", str(report.market_mood))
+        min_conf = int(getattr(report, "min_confluence_override", config.MIN_CONFLUENCE))
+        pos_mult = float(getattr(report, "position_size_multiplier", 1.0))
+        min_conf_adj = max(0, min_conf - config.MIN_CONFLUENCE)
 
-        components.risk.set_swc_overrides(new_adj, new_mult)
-        state.swc_snapshot = swc
+        components.risk.set_swc_overrides(min_conf_adj, pos_mult)
+        state.swc_snapshot = report
 
-        if old_mood is not None and new_mood != old_mood:
+        if old_mood_val is not None and new_mood_val != old_mood_val:
             logger.info(
-                "SWC re-scan [%s CT]: mood changed %s \u2192 %s",
-                time_str, old_mood, new_mood,
+                "SWC re-scan [%s CT]: mood changed %s -> %s (min_conf=%d, pos_mult=%.2f)",
+                time_str, old_mood_val, new_mood_val, min_conf, pos_mult,
             )
             if components.telegram is not None:
                 try:
-                    components.telegram.send_emergency_alert(
-                        f"SWC re-scan [{time_str} CT]: mood changed {old_mood} \u2192 {new_mood}"
-                        f"\nMin conf: +{new_adj} | Pos mult: {new_mult:.2f}"
+                    await components.telegram.send_daily_mood(
+                        date_str=datetime.now(_CT).strftime("%Y-%m-%d"),
+                        mood=new_mood_val.title(),
+                        min_confluence=min_conf,
+                        position_size_pct=pos_mult,
+                        summary=f"Re-scan at {time_str} CT: mood changed from {old_mood_val}",
                     )
                 except Exception as exc:
                     logger.error("Failed to send SWC rescan Telegram alert: %s", exc)
         else:
-            shown_mood = new_mood if old_mood is None else old_mood
-            logger.info("SWC re-scan [%s CT]: mood unchanged (%s)", time_str, shown_mood)
+            logger.info("SWC re-scan [%s CT]: mood unchanged (%s)", time_str, new_mood_val)
 
     except Exception as exc:
         logger.error(
@@ -692,28 +697,34 @@ async def _warmup_historical_bars(
         state.bars_1min.index[-1],
     )
 
-    # Backfill market_data so the dashboard chart has history immediately
+    # Backfill market_data so the dashboard chart has history immediately.
+    # Runs off the event loop to avoid stalling _on_new_bar / main loop for
+    # the duration of the backfill. Uses batch upsert (1000 rows per
+    # request) — ~10s for 10 000 bars vs ~15 min serially.
     if components.supabase is not None:
         df = state.bars_1min
-        written = 0
-        for ts_idx in df.index:
-            row = df.loc[ts_idx]
-            try:
-                components.supabase.write_market_data({
-                    "symbol": state.symbol,
-                    "timeframe": "1m",
-                    "timestamp": ts_idx.isoformat(),
-                    "open": float(row["open"]),
-                    "high": float(row["high"]),
-                    "low": float(row["low"]),
-                    "close": float(row["close"]),
-                    "volume": int(row["volume"]),
-                    "vpin_level": None,
-                })
-                written += 1
-            except Exception:
-                pass
-        logger.info("Warm-up: %d/%d bars written to market_data", written, len(df))
+        payload = [
+            {
+                "symbol": state.symbol,
+                "timeframe": "1m",
+                "timestamp": ts_idx.isoformat(),
+                "open": float(df.loc[ts_idx, "open"]),
+                "high": float(df.loc[ts_idx, "high"]),
+                "low": float(df.loc[ts_idx, "low"]),
+                "close": float(df.loc[ts_idx, "close"]),
+                "volume": int(df.loc[ts_idx, "volume"]),
+                "vpin_level": None,
+            }
+            for ts_idx in df.index
+        ]
+
+        async def _backfill():
+            written = await asyncio.to_thread(
+                components.supabase.write_market_data_batch, payload,
+            )
+            logger.info("Warm-up: %d/%d bars written to market_data", written, len(payload))
+
+        asyncio.create_task(_backfill())
 
     return len(state.bars_1min)
 
@@ -1004,23 +1015,31 @@ async def _update_vpin(
         state.vpin_status = status
 
         if status.vpin is not None:
+            # ── Edge-detection guard ───────────────────────────────────────
+            # Read the shield's current halt state BEFORE evaluating VPIN so
+            # we only act on False → True and True → False transitions, never
+            # on a steady state. Without this guard the alert fires every bar
+            # while VPIN stays extreme (e.g. when volume is low and the last
+            # bucket reading persists unchanged for many minutes).
+            was_halted = components.vpin._shield.is_halted  # type: ignore[attr-defined]
+
             if status.vpin >= VPIN_EXTREME_THRESHOLD:
-                logger.critical(
-                    "VPIN EXTREME: %.3f — flattening all positions", status.vpin,
-                )
-                # Call the shield's execute_flatten so it also fires the
-                # telegram VPIN alert built into ShieldManager.
-                try:
-                    await components.vpin._shield.execute_flatten(  # type: ignore[attr-defined]
-                        reason=f"VPIN extreme {status.vpin:.3f}"
+                if not was_halted:
+                    # False → True: fire once — execute_flatten sends Telegram + halts
+                    logger.critical(
+                        "VPIN EXTREME: %.3f — flattening all positions", status.vpin,
                     )
-                except Exception as flat_exc:
-                    logger.error("Shield flatten failed: %s", flat_exc)
-                # Flatten open broker positions. ShieldManager has already
-                # called activate_vpin_halt() via execute_flatten() above,
-                # so no emergency kill switch needed — trading resumes
-                # automatically when VPIN normalizes below 0.55.
-                await _flatten_all(components, state, reason="vpin_extreme", emergency=False)
+                    try:
+                        await components.vpin._shield.execute_flatten(  # type: ignore[attr-defined]
+                            reason=f"VPIN extreme {status.vpin:.3f}"
+                        )
+                    except Exception as flat_exc:
+                        logger.error("Shield flatten failed: %s", flat_exc)
+                    # Flatten open broker positions once on activation.
+                    # ShieldManager.check_deactivate() (called inside on_new_bar)
+                    # will clear the halt automatically when VPIN normalises.
+                    await _flatten_all(components, state, reason="vpin_extreme", emergency=False)
+                # else: already halted — shield is holding; no repeated alert/flatten
             elif status.vpin >= VPIN_WARN_THRESHOLD:
                 logger.warning(
                     "VPIN HIGH: %.3f (%s)", status.vpin, status.label,

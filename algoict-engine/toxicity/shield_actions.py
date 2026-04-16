@@ -144,9 +144,21 @@ class ShieldManager:
         reason : str
             Human-readable reason for the flatten.
 
-        Returns True if flatten was called, False if no risk_manager.
+        Returns True if flatten was called, False if already halted or no risk_manager.
+
+        Edge-detection guard: if the shield is already in halt state (e.g. VPIN
+        has been extreme for multiple bars), this method returns False immediately
+        without re-sending the Telegram alert or re-triggering the flatten.
+        The caller (main.py) should also check `was_halted` before calling this,
+        but this guard provides defence-in-depth.
         """
         full_reason = reason or f"VPIN shield activated (extreme toxicity)"
+
+        # ── Edge-detection: False → True only ─────────────────────────────
+        if self._halt_active:
+            # Already halted from a previous bar — do not repeat the alert.
+            logger.debug("VPIN SHIELD: execute_flatten called while already halted — skipping")
+            return False
 
         self._halt_active = True
         logger.critical("VPIN SHIELD: executing flatten — %s", full_reason)
@@ -180,11 +192,19 @@ class ShieldManager:
         When VPIN drops to or below the deactivation threshold (0.70), clears
         the internal halt flag and tells the RiskManager to resume trading.
 
-        Returns True if halt was deactivated.
+        True → False transition: logs a CRITICAL-level "NORMALIZED" message so
+        the operator can see trading has resumed. A Telegram alert for the
+        normalized state should be sent by the async caller (main.py) using
+        the returned True value.
+
+        Returns True if halt was deactivated this call (transition event).
         """
         if self._halt_active and vpin <= _DEACTIVATE_THRESHOLD:
             self._halt_active = False
-            logger.info("VPIN SHIELD: halt deactivated (vpin=%.3f <= %.2f)", vpin, _DEACTIVATE_THRESHOLD)
+            logger.critical(
+                "VPIN SHIELD: NORMALIZED — halt cleared (vpin=%.3f <= %.2f). Trading resumed.",
+                vpin, _DEACTIVATE_THRESHOLD,
+            )
             # Propagate resume to RiskManager so can_trade() unblocks.
             if self._risk_manager is not None:
                 deactivate = getattr(self._risk_manager, "deactivate_vpin_halt", None)
