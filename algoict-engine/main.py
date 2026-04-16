@@ -1010,22 +1010,38 @@ async def _update_vpin(
             },
             name=ts,
         )
+        # ── Read halt state BEFORE on_new_bar so we can detect both transitions ──
+        # check_deactivate() runs inside on_new_bar (sync). If VPIN normalises
+        # this bar, shield.is_halted flips False inside that call. We need the
+        # pre-bar snapshot to identify True → False after the call.
+        was_halted = components.vpin._shield.is_halted  # type: ignore[attr-defined]
+
         components.vpin.on_new_bar(bar_series)
         status = components.vpin.get_status()
         state.vpin_status = status
 
         if status.vpin is not None:
-            # ── Edge-detection guard ───────────────────────────────────────
-            # Read the shield's current halt state BEFORE evaluating VPIN so
-            # we only act on False → True and True → False transitions, never
-            # on a steady state. Without this guard the alert fires every bar
-            # while VPIN stays extreme (e.g. when volume is low and the last
-            # bucket reading persists unchanged for many minutes).
-            was_halted = components.vpin._shield.is_halted  # type: ignore[attr-defined]
+            is_halted_now = components.vpin._shield.is_halted  # type: ignore[attr-defined]
 
-            if status.vpin >= VPIN_EXTREME_THRESHOLD:
+            # ── True → False: VPIN just normalised this bar ────────────────
+            if was_halted and not is_halted_now:
+                logger.critical(
+                    "VPIN NORMALIZED: %.3f — trading resumed", status.vpin,
+                )
+                tg = getattr(components, "telegram", None)
+                if tg is not None:
+                    try:
+                        await tg.send_vpin_alert(
+                            vpin=status.vpin,
+                            toxicity_level="normalized",
+                        )
+                    except Exception as tg_exc:
+                        logger.error("Failed to send VPIN normalized alert: %s", tg_exc)
+
+            # ── False → True: VPIN just went extreme this bar ──────────────
+            elif status.vpin >= VPIN_EXTREME_THRESHOLD:
                 if not was_halted:
-                    # False → True: fire once — execute_flatten sends Telegram + halts
+                    # Fire once — execute_flatten sends Telegram + activates halt
                     logger.critical(
                         "VPIN EXTREME: %.3f — flattening all positions", status.vpin,
                     )
@@ -1036,10 +1052,9 @@ async def _update_vpin(
                     except Exception as flat_exc:
                         logger.error("Shield flatten failed: %s", flat_exc)
                     # Flatten open broker positions once on activation.
-                    # ShieldManager.check_deactivate() (called inside on_new_bar)
-                    # will clear the halt automatically when VPIN normalises.
                     await _flatten_all(components, state, reason="vpin_extreme", emergency=False)
                 # else: already halted — shield is holding; no repeated alert/flatten
+
             elif status.vpin >= VPIN_WARN_THRESHOLD:
                 logger.warning(
                     "VPIN HIGH: %.3f (%s)", status.vpin, status.label,

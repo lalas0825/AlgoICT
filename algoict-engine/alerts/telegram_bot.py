@@ -294,12 +294,14 @@ Sharpe: {sharpe:.2f}
         try:
             if toxicity_level == "extreme":
                 emoji = "🚨"
+            elif toxicity_level == "normalized":
+                emoji = "✅"
             elif toxicity_level == "high":
                 emoji = "⚠️"
             elif toxicity_level == "elevated":
                 emoji = "🔔"
             else:
-                emoji = "✅"
+                emoji = "ℹ️"
 
             msg = f"""
 {emoji} VPIN ALERT
@@ -309,6 +311,8 @@ Value: {vpin:.3f}
 """
             if toxicity_level == "extreme":
                 msg += "\nAll positions flattened. Trading halted.\n"
+            elif toxicity_level == "normalized":
+                msg += "\nVPIN back below 0.70. Trading resumed.\n"
             elif toxicity_level == "high":
                 msg += "\nPosition size reduced 25%. Tighter stops.\n"
 
