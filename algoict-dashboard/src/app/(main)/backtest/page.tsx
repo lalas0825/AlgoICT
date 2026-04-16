@@ -57,27 +57,27 @@ export default function BacktestPage() {
       <h1 className="text-3xl font-bold mb-6">Backtest Results</h1>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
-        <div className="border rounded-lg p-4 bg-blue-50">
-          <div className="text-sm text-gray-600">Total Backtests</div>
-          <div className="text-3xl font-bold text-blue-600">
+        <div className="border border-zinc-800 rounded-lg p-4 bg-zinc-900">
+          <div className="text-sm text-zinc-400">Total Backtests</div>
+          <div className="text-3xl font-bold text-blue-400">
             {results.length}
           </div>
         </div>
 
         {results.length > 0 && (
           <>
-            <div className="border rounded-lg p-4 bg-green-50">
-              <div className="text-sm text-gray-600">Best Profit Factor</div>
-              <div className="text-3xl font-bold text-green-600">
+            <div className="border border-zinc-800 rounded-lg p-4 bg-zinc-900">
+              <div className="text-sm text-zinc-400">Best Profit Factor</div>
+              <div className="text-3xl font-bold text-green-400">
                 {Math.max(...results.map((r) => r.profit_factor || 0)).toFixed(
                   2
                 )}
               </div>
             </div>
 
-            <div className="border rounded-lg p-4 bg-purple-50">
-              <div className="text-sm text-gray-600">Avg Win Rate</div>
-              <div className="text-3xl font-bold text-purple-600">
+            <div className="border border-zinc-800 rounded-lg p-4 bg-zinc-900">
+              <div className="text-sm text-zinc-400">Avg Win Rate</div>
+              <div className="text-3xl font-bold text-purple-400">
                 {(
                   results.reduce((sum, r) => sum + (r.win_rate || 0), 0) /
                   results.length
@@ -89,26 +89,26 @@ export default function BacktestPage() {
         )}
       </div>
 
-      <div className="border rounded-lg overflow-x-auto">
+      <div className="border border-zinc-800 rounded-lg overflow-x-auto">
         <table className="w-full">
-          <thead className="bg-gray-100">
+          <thead className="bg-zinc-900">
             <tr>
-              <th className="px-4 py-2 text-left font-semibold">Strategy</th>
-              <th className="px-4 py-2 text-center font-semibold">Trades</th>
-              <th className="px-4 py-2 text-center font-semibold">Win Rate</th>
-              <th className="px-4 py-2 text-right font-semibold">
+              <th className="px-4 py-2 text-left font-semibold text-zinc-300">Strategy</th>
+              <th className="px-4 py-2 text-center font-semibold text-zinc-300">Trades</th>
+              <th className="px-4 py-2 text-center font-semibold text-zinc-300">Win Rate</th>
+              <th className="px-4 py-2 text-right font-semibold text-zinc-300">
                 Profit Factor
               </th>
-              <th className="px-4 py-2 text-right font-semibold">Max DD</th>
-              <th className="px-4 py-2 text-right font-semibold">Net Profit</th>
-              <th className="px-4 py-2 text-right font-semibold">Sharpe</th>
-              <th className="px-4 py-2 text-center font-semibold">Status</th>
+              <th className="px-4 py-2 text-right font-semibold text-zinc-300">Max DD</th>
+              <th className="px-4 py-2 text-right font-semibold text-zinc-300">Net Profit</th>
+              <th className="px-4 py-2 text-right font-semibold text-zinc-300">Sharpe</th>
+              <th className="px-4 py-2 text-center font-semibold text-zinc-300">Status</th>
             </tr>
           </thead>
           <tbody>
             {results.map((result) => (
-              <tr key={result.id} className="border-t hover:bg-gray-50">
-                <td className="px-4 py-2 font-medium">{result.strategy}</td>
+              <tr key={result.id} className="border-t border-zinc-800 hover:bg-zinc-900/50">
+                <td className="px-4 py-2 font-medium text-zinc-100">{result.strategy}</td>
                 <td className="px-4 py-2 text-center">{result.total_trades}</td>
                 <td className="px-4 py-2 text-center font-semibold">
                   <span
@@ -125,14 +125,14 @@ export default function BacktestPage() {
                   <span
                     className={
                       result.profit_factor >= 2
-                        ? 'text-green-600 font-semibold'
-                        : 'text-gray-600'
+                        ? 'text-green-400 font-semibold'
+                        : 'text-zinc-400'
                     }
                   >
                     {result.profit_factor.toFixed(2)}
                   </span>
                 </td>
-                <td className="px-4 py-2 text-right text-red-600">
+                <td className="px-4 py-2 text-right text-red-400">
                   {(result.max_drawdown * 100).toFixed(1)}%
                 </td>
                 <td className="px-4 py-2 text-right font-bold">
@@ -146,7 +146,7 @@ export default function BacktestPage() {
                     ${result.net_profit.toFixed(0)}
                   </span>
                 </td>
-                <td className="px-4 py-2 text-right text-purple-600">
+                <td className="px-4 py-2 text-right text-purple-400">
                   {result.sharpe_ratio.toFixed(2)}
                 </td>
                 <td className="px-4 py-2 text-center">
@@ -167,7 +167,7 @@ export default function BacktestPage() {
       </div>
 
       {results.length === 0 && (
-        <div className="text-center py-12 text-gray-500">
+        <div className="text-center py-12 text-zinc-500">
           No backtest results yet. Run a backtest to see results here.
         </div>
       )}

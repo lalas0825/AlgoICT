@@ -2,6 +2,10 @@
 .env
 algoict-engine/.env
 
+# Engine runtime state
+algoict-engine/engine.log
+algoict-engine/.swc_mood_sent.txt
+
 # Python
 __pycache__/
 *.py[cod]
@@ -15,6 +19,10 @@ venv/
 data/*.csv
 data/nq_options_oi/
 data/sp500/
+data/strategy_lab/
+
+# Claude Code transient state
+.claude/scheduled_tasks.lock
 
 # IDE
 .vscode/

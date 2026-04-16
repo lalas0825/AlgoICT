@@ -157,11 +157,17 @@ PostMortemAgent = _try_import("agents.post_mortem", "PostMortemAgent")
 # Constants
 # ---------------------------------------------------------------------------
 
-ROLLING_1MIN_BARS = 5000        # Keep ~3 days of 1-min data in memory
-WARMUP_BARS = 3000              # Historical bars to preload before WS starts
-                                # 3000 1-min bars ≈ 2 completed Globex sessions
-                                # (enough for daily HTF bias; weekly uses current partial)
-WARMUP_LOOKBACK_DAYS = 10       # How far back to scan for warm-up bars
+ROLLING_1MIN_BARS = 12000       # Keep ~8 Globex days of 1-min data in memory
+                                # Gives headroom above WARMUP_BARS so no trim
+                                # happens during a session.
+WARMUP_BARS = 10000             # Historical bars to preload before WS starts.
+                                # 10000 1-min bars ≈ 7 Globex trading days ≈
+                                # 1.5 completed weekly bars + 7 daily bars.
+                                # Probed API cap is 20000+, so 10000 is safe.
+                                # More HTF context → better weekly/daily bias
+                                # and stronger swing/FVG/OB detection.
+WARMUP_LOOKBACK_DAYS = 21       # Covers 3 weeks to span weekends/holidays
+                                # when building the 10000-bar request window.
 PREMARKET_HOUR = 6              # 6:00 AM CT — SWC + GEX pre-market scan
 VPIN_WARN_THRESHOLD = 0.55      # log warning above this
 VPIN_EXTREME_THRESHOLD = 0.70   # flatten everything above this
@@ -851,11 +857,26 @@ def _log_bar_snapshot(components: Components, state: EngineState, ts) -> None:
         vpin_val = getattr(state.vpin_status, "vpin", None) if state.vpin_status else None
         vpin_str = f"{vpin_val:.3f}" if vpin_val is not None else "—"
 
+        # HTF bias (swing-based). Cheap to recompute per bar — ~7 daily + 2-3
+        # weekly bars only. Lets us see live bias evolution in the log.
+        bias_str = "n/a"
+        try:
+            tf_mgr = components.tf_manager
+            df_daily = tf_mgr.aggregate(bars, "D")
+            df_weekly = tf_mgr.aggregate(bars, "W")
+            bias = components.htf_bias.determine_bias(df_daily, df_weekly, close)
+            bias_str = (
+                f"{bias.direction}({bias.premium_discount}) "
+                f"d={bias.daily_bias} w={bias.weekly_bias}"
+            )
+        except Exception as bexc:
+            logger.debug("bar-snapshot bias compute failed: %s", bexc)
+
         logger.info(
-            "BAR [%s CT] close=%.2f rth=%s kz=%s | sw=%d fvg=%d ob=%d struct=%d liq=%d(swept=%d) | VPIN=%s",
+            "BAR [%s CT] close=%.2f rth=%s kz=%s | sw=%d fvg=%d ob=%d struct=%d liq=%d(swept=%d) | VPIN=%s | bias=%s",
             ts.strftime("%H:%M"), close, "Y" if in_rth else "N", kz,
             sw_count, fvg_count, ob_count, struct_count, liq_total, liq_swept,
-            vpin_str,
+            vpin_str, bias_str,
         )
     except Exception as exc:
         logger.debug("bar-snapshot log failed: %s", exc)

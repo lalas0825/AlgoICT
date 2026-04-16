@@ -1,112 +1,152 @@
 ---
-name: Backtest Results Archive
-description: Backtesting results, Combine Simulator runs, and comparative analysis
+name: Walk-Forward + Combine Results (NY AM)
+description: Walk-forward 2019-2022 + Combine sim 2023 for NY AM Reversal with dynamic HTF bias
 type: project
 ---
 
-## Backtest Results — By Milestone
+# Walk-Forward + Combine Results
+_Run: 2026-04-10 21:28 UTC_
 
-_Baseline and comparative backtests stored here as milestones complete._
+**Strategy:** NY AM Reversal + Dynamic HTF Bias (lookahead-free)
+**Data:** Databento NQ 1-min 2019-2022 + nq_1min.csv 2023
+**Approach:** One full backtest → slice into 2-month windows (fast proxy for walk-forward)
 
-### Milestone 1 (Foundation)
-
-**Status:** Pending  
-**Expected:** After Task 25 (Backtester Core)
-
----
-
-### Milestone 2 (ICT Detectors)
-
-**Status:** Complete ✅ (2026-04-07)  
-**Deliverables:** 7 detectors + 290 tests passing
-
-**Next:** Ready for baseline backtests (Milestone 4)
-
-**Planned Baselines (M4):**
-- NY AM Reversal on MNQ 2023-2025 (confluence ≥ 7)
-- Silver Bullet on MNQ 2023-2025 (confluence ≥ 7)
-- Combine Simulator run ($50K target)
-- Risk audit (ZERO violations required)
-
----
-
-### Milestone 4 (Backtester + Combine Sim)
-
-**Status:** Pending  
-**Expected:** Task 29-32
-
-**Comparisons:**
-- ICT Pure baseline
-- + SWC Calendar Adjuster
-- + SWC + GEX alignment
-- + SWC + GEX + VPIN shield
-
----
-
-## Template: Backtest Run
-
-```
-## Run: [Strategy] [Date Range]
-
-**Date:** YYYY-MM-DD  
-**Strategy:** [ny_am_reversal | silver_bullet | swing_htf]  
-**Data:** [MNQ | NQ | ES | YM] 1min  
-**Period:** YYYY-MM-DD to YYYY-MM-DD  
-
-**Parameters:**
-- Min confluence: 7
-- Risk per trade: $250
-- Kill switch: 3 losses
-- Daily cap: $1,500
-
-**Results:**
+## Tarea 1: Walk-Forward 2019-2022
 
 | Metric | Value |
 |--------|-------|
-| Total trades | N |
-| Win rate | X% |
-| Profit factor | Y |
-| Max drawdown | Z% |
-| Sharpe ratio | A |
-| Topstep MLL compliance | PASS / FAIL |
+| Windows | 24 |
+| Positive | 22/24 (91.7%) |
+| Gate >=70% | **PASS** |
+| Total trades | 2047 |
+| Agg win rate | 34.6% |
+| Agg P&L | $+216,832 |
+| Agg profit factor | 1.71 |
 
-**Notes:** 
-- Violations: [list any rule violations]
-- Observations: [interesting patterns, edge cases]
+| # | Test Window | Trades | WR | P&L | PF | + |
+|---|-------------|--------|----|-----|----|---|
+| 1 | 2019-01-01 → 2019-02-28 | 81 | 46% | $+17,738 | 2.86 | ✓ |
+| 2 | 2019-03-01 → 2019-04-30 | 83 | 27% | $+2,940 | 1.22 | ✓ |
+| 3 | 2019-05-01 → 2019-06-30 | 85 | 28% | $+3,189 | 1.22 | ✓ |
+| 4 | 2019-07-01 → 2019-08-31 | 90 | 34% | $+9,808 | 1.73 | ✓ |
+| 5 | 2019-09-01 → 2019-10-31 | 86 | 31% | $+5,242 | 1.37 | ✓ |
+| 6 | 2019-11-01 → 2019-12-31 | 82 | 27% | $+4,047 | 1.32 | ✓ |
+| 7 | 2020-01-01 → 2020-02-29 | 82 | 41% | $+14,117 | 2.27 | ✓ |
+| 8 | 2020-03-01 → 2020-04-30 | 86 | 40% | $+13,289 | 2.17 | ✓ |
+| 9 | 2020-05-01 → 2020-06-30 | 86 | 21% | $-2,831 | 0.82 | ✗ |
+| 10 | 2020-07-01 → 2020-08-31 | 88 | 39% | $+12,560 | 1.97 | ✓ |
+| 11 | 2020-09-01 → 2020-10-31 | 88 | 40% | $+13,999 | 2.14 | ✓ |
+| 12 | 2020-11-01 → 2020-12-31 | 86 | 43% | $+15,793 | 2.41 | ✓ |
+| 13 | 2021-01-01 → 2021-02-28 | 79 | 37% | $+10,120 | 1.87 | ✓ |
+| 14 | 2021-03-01 → 2021-04-30 | 87 | 39% | $+13,091 | 2.05 | ✓ |
+| 15 | 2021-05-01 → 2021-06-30 | 86 | 17% | $-6,038 | 0.64 | ✗ |
+| 16 | 2021-07-01 → 2021-08-31 | 88 | 34% | $+8,764 | 1.64 | ✓ |
+| 17 | 2021-09-01 → 2021-10-31 | 85 | 29% | $+4,305 | 1.31 | ✓ |
+| 18 | 2021-11-01 → 2021-12-31 | 88 | 31% | $+6,052 | 1.43 | ✓ |
+| 19 | 2022-01-01 → 2022-02-28 | 82 | 37% | $+11,002 | 1.96 | ✓ |
+| 20 | 2022-03-01 → 2022-04-30 | 86 | 41% | $+14,881 | 2.31 | ✓ |
+| 21 | 2022-05-01 → 2022-06-30 | 86 | 37% | $+10,666 | 1.88 | ✓ |
+| 22 | 2022-07-01 → 2022-08-31 | 87 | 39% | $+13,177 | 2.07 | ✓ |
+| 23 | 2022-09-01 → 2022-10-31 | 85 | 40% | $+14,105 | 2.24 | ✓ |
+| 24 | 2022-11-01 → 2022-12-31 | 85 | 33% | $+6,820 | 1.50 | ✓ |
 
-**Combine Simulation:**
-- Starting balance: $50,000
-- Target: $3,000
-- MLL: $2,000 trailing
-- DLL: $1,000 per day
-- Result: PASS / FAIL (days to pass)
-```
+## Tarea 2: Combine Simulator 2023
 
----
+### 2023 Full-Year Backtest
+| Metric | Value |
+|--------|-------|
+| Total trades | 453 |
+| Win rate | 28.3% |
+| Total P&L | $+26,577 |
 
-## Decision Tree: When to Backtest
+### Sequential Combine Attempts
+| Metric | Value |
+|--------|-------|
+| Attempts | 18 |
+| Passes | 0 |
+| Fails | 18 |
+| Pass rate | 0.0% |
+| Avg days to pass | N/A |
 
-1. **After ICT Detector completion** → Baseline with pure ICT
-2. **After each layer added** → Comparative backtest (ICT vs ICT+SWC vs ICT+SWC+GEX+VPIN)
-3. **After parameter tuning** → Full Combine Simulator
-4. **Before any live trading** → Final validation gate (12 months ZERO violations)
+| # | Result | Period | Trades | P&L | Days |
+|---|--------|--------|--------|-----|------|
+| 1 | FAIL | 2023-01-24 → 2023-02-03 | 453 | $+3,757 | 11 |
+| 2 | FAIL | 2023-02-06 → 2023-02-09 | 435 | $-2,147 | 4 |
+| 3 | FAIL | 2023-02-10 → 2023-02-23 | 427 | $-2,200 | 14 |
+| 4 | FAIL | 2023-02-24 → 2023-03-07 | 407 | $-61 | 12 |
+| 5 | FAIL | 2023-03-08 → 2023-03-31 | 391 | $+1,843 | 24 |
+| 6 | FAIL | 2023-04-03 → 2023-04-07 | 363 | $-2,045 | 5 |
+| 7 | FAIL | 2023-04-10 → 2023-05-10 | 353 | $+6,522 | 31 |
+| 8 | FAIL | 2023-05-11 → 2023-05-17 | 311 | $-2,020 | 7 |
+| 9 | FAIL | 2023-05-18 → 2023-06-26 | 301 | $+4,447 | 40 |
+| 10 | FAIL | 2023-06-27 → 2023-07-04 | 245 | $-2,170 | 8 |
+| 11 | FAIL | 2023-07-05 → 2023-07-27 | 233 | $+415 | 23 |
+| 12 | FAIL | 2023-07-28 → 2023-08-04 | 200 | $-2,024 | 8 |
+| 13 | FAIL | 2023-08-07 → 2023-08-21 | 190 | $+536 | 15 |
+| 14 | FAIL | 2023-08-22 → 2023-09-25 | 174 | $+2,579 | 35 |
+| 15 | FAIL | 2023-09-28 → 2023-11-30 | 130 | $+18,603 | 64 |
+| 16 | FAIL | 2023-12-01 → 2023-12-05 | 38 | $-2,390 | 5 |
+| 17 | FAIL | 2023-12-06 → 2023-12-26 | 32 | $+4,113 | 21 |
+| 18 | FAIL | 2023-12-27 → 2023-12-29 | 6 | $+719 | 3 |
 
----
+**Why:** Strategy Lab gate 4 requires >=70% walk-forward windows positive.
+**How to apply:** Gate FAIL → strategy stays in Lab, not promoted to production.
+## Tarea 2b: Combine 2023 — MLL-Protected (M14)
 
-## Known Gotchas
+Risk manager `enable_topstep_mode()` active DURING backtest:
+- Caution zone (80% MLL = $1,600 DD): size halved, min_confluence +2
+- Stop zone (95% MLL = $1,900 DD): no new trades until next session
 
-- **Overfitting risk:** Strategy Lab has 9-gate protection; validation set is LOCKED (2023 only)
-- **Forward bias:** Test set (2024-2025) never used in development, only final validation
-- **COVID anomalies:** March 2020 data exhibits unusual patterns; consider separate analysis
-- **Spread cost:** Not modeled in backtests; assume $1-2/contract slippage in live
+| Metric | Unprotected | MLL-Protected |
+|--------|-------------|---------------|
+| Attempts | 18 | 13 |
+| Passes | 0 | 2 |
+| Pass rate | 0% | 15.4% |
+| Avg days to pass | N/A | 8.5 |
 
----
+### Attempt Log (MLL-Protected)
 
-## Success Criteria (Milestone 10)
+| # | Result | Period | Trades | WR | P&L | Days | MaxDD |
+|---|--------|--------|--------|----|-----|------|-------|
+| 1 | FAIL | 2023-01-24 → 2023-01-25 | 4 | 100% | $+3,000 | 2 | $0 |
+| 2 | FAIL | 2023-02-02 → 2023-02-07 | 8 | 0% | $-1,946 | 6 | $1,946 |
+| 3 | FAIL | 2023-02-21 → 2023-03-02 | 11 | 9% | $-2,101 | 10 | $2,101 |
+| 4 | FAIL | 2023-04-13 → 2023-04-14 | 4 | 100% | $+3,000 | 2 | $0 |
+| 5 | FAIL | 2023-04-26 → 2023-04-27 | 4 | 100% | $+3,000 | 2 | $0 |
+| 6 | FAIL | 2023-05-22 → 2023-05-30 | 11 | 0% | $-1,980 | 9 | $1,980 |
+| 7 | PASS | 2023-06-06 → 2023-06-14 | 14 | 43% | $+3,207 | 9 | $711 |
+| 8 | FAIL | 2023-07-07 → 2023-07-25 | 10 | 0% | $-1,953 | 19 | $1,953 |
+| 9 | FAIL | 2023-09-08 → 2023-09-21 | 7 | 0% | $-2,099 | 14 | $2,099 |
+| 10 | PASS | 2023-10-25 → 2023-11-01 | 10 | 60% | $+3,207 | 8 | $0 |
+| 11 | FAIL | 2023-11-13 → 2023-11-16 | 8 | 75% | $+3,274 | 4 | $0 |
+| 12 | FAIL | 2023-12-11 → 2023-12-19 | 4 | 100% | $+3,000 | 9 | $0 |
+| 13 | FAIL | 2023-12-20 → 2023-12-20 | 0 | 0% | $+0 | 0 | $0 |
 
-- [ ] Final Combine Simulator: PASS with margin (> $3,000 profit in sim)
-- [ ] Risk audit: ZERO MLL/DLL violations across test period
-- [ ] Paper trading (2 weeks): Backtest behavior matches live behavior
-- [ ] Post-mortem insights: Top 3 loss patterns identified and ruled out in Strategy Lab
-- [ ] Go/No-Go decision: All stakeholders (backtest + paper + Lab) aligned
+## Tarea 2c: Combine 2023 — MLL + Cruise Mode
 
+MLL protection + cruise mode after target reached:
+- Caution zone (80% MLL): size halved, min_confluence +2
+- Stop zone (95% MLL): no new trades until next session
+- **Cruise mode**: after target hit with <5 trading days:
+  - Max 1 trade/day, 1 MNQ, confluence >= 12, max risk $100
+  - Continues until 5 trading days accumulated
+
+| Metric | Unprotected | MLL Only | MLL + Cruise |
+|--------|-------------|----------|--------------|
+| Attempts | 18 | 13 | 7 |
+| Passes | 0 | 2 | 3 |
+| Pass rate | 0% | 15% | 43% |
+| Avg days to pass | N/A | 8.5 | 55.3 |
+| Cruise-assisted | — | — | 2 |
+
+### Attempt Log (MLL + Cruise)
+
+| # | Result | Period | Trades | WR | P&L | Days | TDays | MaxDD | Note |
+|---|--------|--------|--------|----|-----|------|-------|-------|------|
+| 1 | PASS | 2023-01-24 → 2023-03-31 | 8 | 62% | $+2,939 | 67 | 5 | $0 | cruise |
+| 2 | PASS | 2023-04-13 → 2023-07-12 | 17 | 35% | $+3,010 | 91 | 10 | $0 | cruise |
+| 3 | FAIL | 2023-09-08 → 2023-09-21 | 7 | 0% | $-2,099 | 14 | 4 | $2,099 |  |
+| 4 | PASS | 2023-10-25 → 2023-11-01 | 10 | 60% | $+3,957 | 8 | 5 | $0 | direct |
+| 5 | FAIL | 2023-11-13 → 2023-11-16 | 7 | 71% | $+3,274 | 4 | 4 | $0 | cruise |
+| 6 | FAIL | 2023-12-11 → 2023-12-19 | 4 | 100% | $+3,000 | 9 | 2 | $0 | cruise |
+| 7 | FAIL | 2023-12-20 → 2023-12-20 | 0 | 0% | $+0 | 0 | ? | $0 |  |

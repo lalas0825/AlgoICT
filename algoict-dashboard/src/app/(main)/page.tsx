@@ -101,7 +101,12 @@ export default function DashboardPage() {
       )
       .subscribe();
 
+    // Re-fetch fresh data when tab regains focus (Realtime may have missed events)
+    const onFocus = () => fetchInitial();
+    window.addEventListener('focus', onFocus);
+
     return () => {
+      window.removeEventListener('focus', onFocus);
       supabase.removeChannel(channel);
     };
   }, [fetchInitial]);
@@ -111,9 +116,11 @@ export default function DashboardPage() {
   const winRate = totalTrades > 0 ? Math.round((botState.wins_today / totalTrades) * 100) : 0;
   const pnlPositive = botState.pnl_today >= 0;
   const isHeartbeatOk = now - new Date(botState.last_heartbeat).getTime() < 15_000;
+  // Bot is truly online only when is_running AND heartbeat is fresh
+  const isBotOnline = botState.is_running && isHeartbeatOk;
 
   // Shield alert banner
-  const showShieldAlert = botState.shield_active;
+  const showShieldAlert = botState.shield_active && isBotOnline;
   const showOfflineAlert = botState.is_running && !isHeartbeatOk;
 
   if (loading) {
@@ -161,9 +168,9 @@ export default function DashboardPage() {
           />
           <div className="h-4 w-px bg-zinc-700" />
           <div className="flex items-center gap-2">
-            <div className={`w-2 h-2 rounded-full ${botState.is_running ? 'bg-emerald-500 animate-pulse' : 'bg-zinc-600'}`} />
+            <div className={`w-2 h-2 rounded-full ${isBotOnline ? 'bg-emerald-500 animate-pulse' : 'bg-zinc-600'}`} />
             <span className="text-xs font-mono text-zinc-400">
-              {botState.is_running ? 'BOT RUNNING' : 'BOT STOPPED'}
+              {isBotOnline ? 'BOT RUNNING' : 'BOT STOPPED'}
             </span>
           </div>
           {botState.shield_active && (

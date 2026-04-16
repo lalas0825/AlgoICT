@@ -59,45 +59,60 @@ class HTFBiasDetector:
         current_price: float,
     ) -> BiasResult:
         """
-        Determine HTF bias based on price position in daily and weekly ranges.
+        Determine HTF bias using two signals, in order:
+
+        1. PRIMARY: Swing-structure pattern (HH-HL = bullish, LH-LL = bearish).
+           This is the institutional-order-flow definition used in ICT.
+        2. SECONDARY: Premium / discount zone of the last COMPLETED candle.
+           Only used to tie-break or confirm; a mean-reversion read.
+
+        Key differences vs the old logic:
+        - Uses the last COMPLETED daily/weekly candle (not the partial one
+          that's still forming) — the forming candle's range expands as
+          price moves and the bias flips around.
+        - Wider neutral band (35-65 % of range instead of ±2 %) so noisy
+          mid-range chop doesn't flip the bias bar-by-bar.
 
         Parameters
         ----------
-        df_daily   : pd.DataFrame — daily OHLCV bars (must include latest close)
-        df_weekly  : pd.DataFrame — weekly OHLCV bars (must include latest close)
-        current_price : float — the price to evaluate (typically last close)
+        df_daily   : pd.DataFrame — daily OHLCV bars
+        df_weekly  : pd.DataFrame — weekly OHLCV bars
+        current_price : float — typically the last 1-min close
 
         Returns
         -------
-        BiasResult — direction, premium/discount zone, HTF levels, confidence
+        BiasResult
         """
         if df_daily.empty or df_weekly.empty:
             logger.warning("Empty daily or weekly DataFrame")
             return self._neutral_result()
 
-        # Get the most recent (current) daily and weekly candles
-        daily_candle = df_daily.iloc[-1]
-        weekly_candle = df_weekly.iloc[-1]
+        # ── 1. Pick the last COMPLETED candle for each TF ──────────────
+        # If only 1 bar exists (very early warm-up), fall back to it even
+        # though it's still forming.
+        daily_candle = df_daily.iloc[-2] if len(df_daily) >= 2 else df_daily.iloc[-1]
+        weekly_candle = df_weekly.iloc[-2] if len(df_weekly) >= 2 else df_weekly.iloc[-1]
 
-        # ── Calculate bias for each timeframe ──────────────────────────
-        daily_bias, daily_zone = self._calc_bias(
-            daily_candle["high"],
-            daily_candle["low"],
-            current_price,
-            "daily",
+        # ── 2. Swing-structure bias (PRIMARY) ──────────────────────────
+        daily_swing = self._swing_bias(df_daily, "daily")
+        weekly_swing = self._swing_bias(df_weekly, "weekly")
+
+        # ── 3. Premium / discount of last completed candle (SECONDARY) ─
+        daily_zone_bias, daily_zone = self._zone_bias(
+            daily_candle["high"], daily_candle["low"], current_price,
         )
-        weekly_bias, weekly_zone = self._calc_bias(
-            weekly_candle["high"],
-            weekly_candle["low"],
-            current_price,
-            "weekly",
+        weekly_zone_bias, weekly_zone = self._zone_bias(
+            weekly_candle["high"], weekly_candle["low"], current_price,
         )
 
-        # ── Determine overall direction and confidence ─────────────────
+        # ── 4. Fuse per-TF: swing wins, zone confirms or tie-breaks ────
+        daily_bias = self._fuse(daily_swing, daily_zone_bias)
+        weekly_bias = self._fuse(weekly_swing, weekly_zone_bias)
+
+        # ── 5. Weekly > Daily (weekly institutional structure dominates) ─
         direction = self._determine_direction(daily_bias, weekly_bias)
         confidence = self._confidence_level(daily_bias, weekly_bias, direction)
 
-        # ── Collect HTF levels ────────────────────────────────────────
         htf_levels = {
             "weekly_high": float(weekly_candle["high"]),
             "weekly_low": float(weekly_candle["low"]),
@@ -108,8 +123,7 @@ class HTFBiasDetector:
             "current_price": current_price,
         }
 
-        # ── Premium/discount at the _primary_ zone (weekly takes priority) ─
-        premium_discount = weekly_zone if weekly_bias != "neutral" else daily_zone
+        premium_discount = weekly_zone if weekly_zone != "equilibrium" else daily_zone
 
         return BiasResult(
             direction=direction,
@@ -125,13 +139,16 @@ class HTFBiasDetector:
     # ------------------------------------------------------------------ #
 
     @staticmethod
-    def _calc_bias(high: float, low: float, price: float, tf: str) -> tuple[str, str]:
+    def _zone_bias(high: float, low: float, price: float) -> tuple[str, str]:
         """
-        Calculate bias for a single candle.
+        Premium / discount zone classifier with a WIDE equilibrium band.
 
-        If price < 50% of range: discount = bullish bias
-        If price > 50% of range: premium = bearish bias
-        If price ≈ 50%: neutral
+        - price below 35 % of the range → discount → bullish tilt
+        - price above 65 % of the range → premium → bearish tilt
+        - 35–65 % → equilibrium (neutral) — mid-range chop
+
+        The old 2 % band flipped bias almost every bar; 30 % is closer to
+        the real ICT equilibrium zone and lets structural swing bias lead.
 
         Returns: (bias_direction, zone_name)
         """
@@ -139,15 +156,80 @@ class HTFBiasDetector:
         if range_val == 0:
             return ("neutral", "equilibrium")
 
-        mid = (high + low) / 2
-        threshold = 0.02 * range_val  # 2% tolerance for "equilibrium"
+        discount_cap = low + 0.35 * range_val  # below → discount
+        premium_floor = low + 0.65 * range_val  # above → premium
 
-        if price < mid - threshold:
+        if price < discount_cap:
             return ("bullish", "discount")
-        elif price > mid + threshold:
+        if price > premium_floor:
             return ("bearish", "premium")
-        else:
-            return ("neutral", "equilibrium")
+        return ("neutral", "equilibrium")
+
+    @staticmethod
+    def _swing_bias(df: pd.DataFrame, tf_name: str) -> str:
+        """
+        HH-HL vs LH-LL structure check on completed candles.
+
+        This is the PRIMARY bias signal: matches how ICT defines weekly /
+        daily bias (swing structure, not where price sits within a single
+        candle).
+
+        Logic:
+          - Skip the forming candle (iloc[-1]).
+          - Compare last 2 completed candles → HH-HL = bullish, LH-LL =
+            bearish, mixed = check 2-vs-2 aggregate.
+          - Not enough data or still mixed → neutral.
+        """
+        if df is None or df.empty:
+            return "neutral"
+
+        # Drop the forming candle if we have ≥ 2 bars.
+        completed = df.iloc[:-1] if len(df) >= 2 else df
+        n = len(completed)
+        if n < 2:
+            return "neutral"
+
+        last = completed.iloc[-1]
+        prev = completed.iloc[-2]
+
+        higher_high = last["high"] > prev["high"]
+        higher_low = last["low"] > prev["low"]
+        lower_high = last["high"] < prev["high"]
+        lower_low = last["low"] < prev["low"]
+
+        if higher_high and higher_low:
+            return "bullish"
+        if lower_high and lower_low:
+            return "bearish"
+
+        # Inside / outside bar: broaden the window to 2-vs-2 aggregate.
+        if n >= 4:
+            recent_high = float(completed.iloc[-2:]["high"].max())
+            older_high = float(completed.iloc[-4:-2]["high"].max())
+            recent_low = float(completed.iloc[-2:]["low"].min())
+            older_low = float(completed.iloc[-4:-2]["low"].min())
+            if recent_high > older_high and recent_low > older_low:
+                return "bullish"
+            if recent_high < older_high and recent_low < older_low:
+                return "bearish"
+
+        logger.debug("swing_bias %s: neutral (n=%d)", tf_name, n)
+        return "neutral"
+
+    @staticmethod
+    def _fuse(swing: str, zone: str) -> str:
+        """
+        Fuse swing-structure bias (primary) with premium/discount (secondary).
+
+        Rules:
+          - Swing direction wins when non-neutral.
+          - If swing is neutral but zone is non-neutral, use zone as a
+            weaker signal (mean-reversion bias).
+          - Both neutral → neutral.
+        """
+        if swing != "neutral":
+            return swing
+        return zone
 
     @staticmethod
     def _determine_direction(daily_bias: str, weekly_bias: str) -> str:

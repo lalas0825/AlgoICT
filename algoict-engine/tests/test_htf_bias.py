@@ -142,40 +142,28 @@ class TestDirectionPriority:
 
     def test_weekly_neutral_daily_bullish_follows_daily(self):
         """When weekly=neutral, daily=bullish, direction=bullish (daily takes over)."""
-        # Build multi-bar weekly that creates neutral candle
-        # Use bars that create a neutral last candle (mid = current_price)
+        # New logic uses iloc[-2] as the "last completed" candle, so we need
+        # a dummy "forming" bar at iloc[-1]. Inside-bar avoids affecting swing.
+        # Weekly: iloc[-3] ≈ iloc[-2] → swing neutral; price at mid → zone neutral
         bars_weekly = [
-            (120, 80, 100),   # earlier bar
-            (130, 90, 110),   # current weekly bar: high=130, low=90, mid=110
+            (110, 90, 100),   # iloc[-3]
+            (110, 90, 100),   # iloc[-2] — target (same range → swing neutral)
+            (105, 95, 100),   # iloc[-1] — forming, inside prev (ignored)
         ]
-        # Build multi-bar daily that creates bullish candle
+        # Daily: iloc[-2] makes LH+LL vs iloc[-3] → swing bearish
         bars_daily = [
-            (115, 95, 105),   # earlier bar
-            (110, 90, 95),    # current daily bar: high=110, low=90, mid=100, price in discount
+            (115, 95, 110),   # iloc[-3]
+            (108, 88, 95),    # iloc[-2] — LH (108<115) + LL (88<95) → bearish
+            (100, 90, 95),    # iloc[-1] — forming (ignored)
         ]
         weekly = _make_ohlcv_df(bars_weekly)
         daily = _make_ohlcv_df(bars_daily)
-        # Price in discount zone for daily (below 100), and neutral zone for weekly (near 110)
-        # Neutral zone for weekly: range=40, threshold=0.8, mid±thresh = 109.2-110.8
-        # So use price that's in both ranges somehow... Actually, this is still tricky.
-        # Let's use price=105: for daily (mid=100) it's premium (bearish), for weekly (mid=110) it's in discount (bullish)
-        current_price = 105.0
 
+        current_price = 100.0  # weekly iloc[-2] range 90-110, 50% → equilibrium
         result = self.detector.determine_bias(daily, weekly, current_price)
 
-        # With current_price=105: Daily is bearish (105 > 100), Weekly is bullish (105 < 110)
-        # So direction will be bullish (weekly priority). But we're testing daily takes over when weekly is neutral.
-        # This test is fundamentally flawed because we can't have both conditions with a single current_price.
-        # Simplify: just test that direction=daily.bias when weekly.bias==neutral
-        # Create scenario where weekly truly is neutral (price at mid with tight tolerance)
-        current_price = 110.0  # exactly at weekly's mid, daily's mid is 100 so price is premium/bearish
-
-        result = self.detector.determine_bias(daily, weekly, current_price)
-
-        # Price=110: Weekly mid=110 so neutral, Daily mid=100 so premium/bearish
-        # Direction should follow daily since weekly is neutral
         assert result.weekly_bias == "neutral"
-        assert result.direction == "bearish"  # daily bias is bearish in this case
+        assert result.direction == "bearish"  # weekly neutral → daily (bearish) wins
 
 
 # ─── Tests: Confidence Levels ────────────────────────────────────────────────
@@ -243,18 +231,24 @@ class TestConfidenceLevels:
         # With price=105, Weekly bullish. For Daily bearish, need mid < 105. Use high=100, low=90, mid=95 → daily=bullish (not bearish)
         # This is getting complicated. Let me use a different scenario.
 
-        weekly_for_medium = _make_ohlcv_df([(130, 90, 110)])  # high=130, low=90, mid=110
-        daily_for_medium = _make_ohlcv_df([(108, 92, 100)])  # high=108, low=92, mid=100
-        current_price = 105.0  # Weekly (mid=110, range=40, threshold=0.8): 105 < 109.2 → bullish
-                               # Daily (mid=100, range=16, threshold=0.32): 105 > 100.32 → bearish
-
+        # Weekly: HH-HL swing (bullish) on iloc[-2]; Daily: LH-LL swing (bearish)
+        # Medium confidence = weekly agrees with direction, daily disagrees.
+        weekly_for_medium = _make_ohlcv_df([
+            (100, 80, 90),    # iloc[-3]
+            (120, 95, 110),   # iloc[-2] — HH (120>100) + HL (95>80) → bullish
+            (125, 100, 115),  # iloc[-1] — forming
+        ])
+        daily_for_medium = _make_ohlcv_df([
+            (115, 100, 108),  # iloc[-3]
+            (108, 92, 100),   # iloc[-2] — LH (108<115) + LL (92<100) → bearish
+            (105, 95, 100),   # iloc[-1] — forming
+        ])
+        current_price = 105.0
         result = self.detector.determine_bias(daily_for_medium, weekly_for_medium, current_price)
 
         assert result.weekly_bias == "bullish"
         assert result.daily_bias == "bearish"
         assert result.direction == "bullish"  # weekly priority
-        # weekly_agrees = (bullish == bullish) = True
-        # daily_agrees = (bearish == bullish or ...) = False
         assert result.confidence == "medium"  # weekly agrees, daily doesn't
 
     def test_low_confidence_disagree(self):
@@ -415,21 +409,27 @@ class TestTrendingDownScenarios:
 
     def test_trending_down_multiple_bars_all_bearish(self):
         """
-        Scenario: Downtrend context — weekly high is much higher than current price (bearish).
-        Daily also shows bearish bias (price in upper portion after pullback).
+        Downtrend context — LH-LL swings on both TFs → bearish direction.
+        New structural bias correctly identifies the trend.
         """
-        # Weekly: establishes downtrend (from 150 down to 60, price still well above low, showing bearish)
-        weekly = _make_ohlcv_df([(150, 60, 80)])  # high=150, low=60, mid=105, price=80 < 105 (discount, bullish)
-        # Daily: in the downtrend, price bounced to resistance (bearish)
-        daily = _make_ohlcv_df([(100, 70, 95)])  # high=100, low=70, mid=85, price=95 > 85 (premium, bearish)
+        weekly = _make_ohlcv_df([
+            (180, 120, 140),  # iloc[-3]
+            (160, 90, 100),   # iloc[-2] — LH (160<180) + LL (90<120) → bearish
+            (120, 80, 95),    # iloc[-1] — forming
+        ])
+        daily = _make_ohlcv_df([
+            (130, 100, 115),  # iloc[-3]
+            (110, 80, 95),    # iloc[-2] — LH + LL → bearish
+            (100, 75, 85),    # iloc[-1] — forming
+        ])
         current_price = 95.0
 
         result = self.detector.determine_bias(daily, weekly, current_price)
 
         assert result.daily_bias == "bearish"
-        # Weekly is bullish (price in discount of large downtrend range), so direction is bullish
-        # This test actually shows: downtrend setup = bullish bias at support levels
-        assert result.direction == "bullish"
+        assert result.weekly_bias == "bearish"
+        # Both TFs agree bearish → direction is bearish (structural downtrend)
+        assert result.direction == "bearish"
 
 
 # ─── Tests: Empty DataFrame Handling ─────────────────────────────────────────
