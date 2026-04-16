@@ -306,56 +306,80 @@ class SupabaseClient:
     # Market Data
     # ------------------------------------------------------------------ #
 
+    @staticmethod
+    def _build_market_data_row(bar: dict) -> dict:
+        """Shape a single bar dict into the market_data row schema."""
+        import pandas as pd
+        ts = bar.get("timestamp")
+        if isinstance(ts, str):
+            ts = pd.Timestamp(ts)
+        if hasattr(ts, "timestamp"):
+            unix_ts = int(ts.timestamp())
+        else:
+            unix_ts = int(ts)
+
+        symbol = bar.get("symbol", "MNQ")
+        timeframe = bar.get("timeframe", "1m")
+        row = {
+            "id": f"{symbol}_{timeframe}_{unix_ts}",
+            "timestamp": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "open": float(bar["open"]),
+            "high": float(bar["high"]),
+            "low": float(bar["low"]),
+            "close": float(bar["close"]),
+            "volume": int(bar.get("volume", 0)),
+        }
+        if bar.get("vpin_level") is not None:
+            row["vpin_level"] = float(bar["vpin_level"])
+        return row
+
     def write_market_data(self, bar: dict) -> bool:
-        """
-        Upsert a completed 1-min OHLCV bar into market_data.
-
-        Expected keys:
-            symbol (str), timeframe (str), timestamp (ISO str or datetime),
-            open, high, low, close (float), volume (int),
-            vpin_level (float | None)
-
-        The id is '{symbol}_{timeframe}_{unix_ts}' to allow safe upserts
-        if the same bar is re-processed.
-
-        Returns True on success.
-        """
+        """Upsert a single completed 1-min OHLCV bar into market_data."""
         try:
-            import pandas as pd
-            ts = bar.get("timestamp")
-            if isinstance(ts, str):
-                ts = pd.Timestamp(ts)
-            if hasattr(ts, "timestamp"):
-                unix_ts = int(ts.timestamp())
-            else:
-                unix_ts = int(ts)
-
-            symbol = bar.get("symbol", "MNQ")
-            timeframe = bar.get("timeframe", "1m")
-            row_id = f"{symbol}_{timeframe}_{unix_ts}"
-
-            row = {
-                "id": row_id,
-                "timestamp": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
-                "symbol": symbol,
-                "timeframe": timeframe,
-                "open": float(bar["open"]),
-                "high": float(bar["high"]),
-                "low": float(bar["low"]),
-                "close": float(bar["close"]),
-                "volume": int(bar.get("volume", 0)),
-            }
-            if bar.get("vpin_level") is not None:
-                row["vpin_level"] = float(bar["vpin_level"])
-
+            row = self._build_market_data_row(bar)
             self._client.table("market_data").upsert(
                 row, on_conflict="id"
             ).execute()
-            logger.debug("market_data written: %s close=%.2f", row_id, row["close"])
+            logger.debug("market_data written: %s close=%.2f", row["id"], row["close"])
             return True
         except Exception as exc:
             logger.error("Failed to write market_data: %s", exc)
             return False
+
+    def write_market_data_batch(
+        self,
+        bars: list[dict],
+        chunk_size: int = 1000,
+    ) -> int:
+        """
+        Upsert many OHLCV bars in one go (chunked to respect request limits).
+
+        Used by the engine's warm-up backfill — writing 10 000 bars one at
+        a time takes ~15 min because each HTTP round-trip is serial. A
+        single batched upsert of 1 000 rows is ~1 s.
+
+        Returns the number of rows successfully upserted.
+        """
+        if not bars:
+            return 0
+        rows = [self._build_market_data_row(b) for b in bars]
+        written = 0
+        for i in range(0, len(rows), chunk_size):
+            chunk = rows[i:i + chunk_size]
+            try:
+                self._client.table("market_data").upsert(
+                    chunk, on_conflict="id"
+                ).execute()
+                written += len(chunk)
+            except Exception as exc:
+                logger.error(
+                    "market_data batch chunk %d-%d failed: %s",
+                    i, i + len(chunk), exc,
+                )
+        logger.info("market_data batch: %d/%d rows upserted", written, len(rows))
+        return written
 
     # ------------------------------------------------------------------ #
     # Query helpers

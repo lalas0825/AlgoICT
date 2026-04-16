@@ -8,7 +8,7 @@ Tests cover:
   - Flags prevent double-trigger within the same day
   - Daily reset clears both flags
   - Telegram NOT sent when mood is unchanged
-  - Telegram IS sent (via send_emergency_alert) when mood changes
+  - Telegram IS sent (via send_daily_mood) when mood changes
   - Log format for both cases
   - API failure retains previous snapshot
 
@@ -33,6 +33,25 @@ from main import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+from sentiment.mood_synthesizer import DailyMoodReport, MarketMood
+
+
+def _make_report(mood="risk_on", min_conf=7, mult=1.0, summary="test"):
+    """Build a DailyMoodReport stub (same type that _SWC_RUN returns)."""
+    return DailyMoodReport(
+        market_mood=MarketMood(mood),
+        confidence="medium",
+        one_line_summary=summary,
+        key_risk="test",
+        opportunity="test",
+        event_risk="none",
+        min_confluence_override=min_conf,
+        position_size_multiplier=mult,
+        news_blackout_windows=[],
+        source="test",
+    )
+
+
 def _make_state(mood=None, adj=0, mult=1.0):
     """Minimal EngineState-like stub."""
     class _S:
@@ -42,7 +61,7 @@ def _make_state(mood=None, adj=0, mult=1.0):
 
     s = _S()
     if mood is not None:
-        s.swc_snapshot = {"mood": mood, "min_confluence_adj": adj, "position_multiplier": mult}
+        s.swc_snapshot = _make_report(mood=mood, min_conf=7 + adj, mult=mult)
     return s
 
 
@@ -56,8 +75,8 @@ def _make_components(telegram=None):
     return c
 
 
-def _swc_dict(mood="risk_on", adj=0, mult=1.0):
-    return {"mood": mood, "min_confluence_adj": adj, "position_multiplier": mult}
+def _swc_report(mood="risk_on", min_conf=7, mult=1.0):
+    return _make_report(mood=mood, min_conf=min_conf, mult=mult)
 
 
 # ---------------------------------------------------------------------------
@@ -192,14 +211,14 @@ class TestRescanFunction:
             await _run_swc_rescan(comps, state, "08:15")
 
         comps.risk.set_swc_overrides.assert_not_called()
-        assert state.swc_snapshot["mood"] == "risk_on"  # unchanged
+        assert state.swc_snapshot.market_mood.value == "risk_on"  # unchanged
 
     @pytest.mark.asyncio
     async def test_applies_new_overrides(self):
         """Successful scan must call set_swc_overrides with new values."""
         state = _make_state(mood="risk_on")
         comps = _make_components()
-        fresh = _swc_dict(mood="risk_off", adj=2, mult=0.75)
+        fresh = _swc_report(mood="risk_off", min_conf=9, mult=0.75)
 
         with patch("main._SWC_RUN", return_value=fresh):
             await _run_swc_rescan(comps, state, "08:15")
@@ -210,12 +229,12 @@ class TestRescanFunction:
     async def test_updates_snapshot(self):
         state = _make_state(mood="risk_on")
         comps = _make_components()
-        fresh = _swc_dict(mood="choppy", adj=1, mult=0.9)
+        fresh = _swc_report(mood="choppy", min_conf=8, mult=0.9)
 
         with patch("main._SWC_RUN", return_value=fresh):
             await _run_swc_rescan(comps, state, "08:15")
 
-        assert state.swc_snapshot["mood"] == "choppy"
+        assert state.swc_snapshot.market_mood.value == "choppy"
 
     # ------------------------------------------------------------------ #
     # Telegram behaviour
@@ -226,27 +245,26 @@ class TestRescanFunction:
         tg = MagicMock()
         state = _make_state(mood="risk_on")
         comps = _make_components(telegram=tg)
-        fresh = _swc_dict(mood="risk_on")  # same mood
+        fresh = _swc_report(mood="risk_on")  # same mood
 
         with patch("main._SWC_RUN", return_value=fresh):
             await _run_swc_rescan(comps, state, "08:15")
 
-        tg.send_emergency_alert.assert_not_called()
+        tg.send_daily_mood.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_telegram_sent_when_mood_changes(self):
         tg = MagicMock()
         state = _make_state(mood="risk_on")
         comps = _make_components(telegram=tg)
-        fresh = _swc_dict(mood="risk_off", adj=2, mult=0.75)
+        fresh = _swc_report(mood="risk_off", min_conf=9, mult=0.75)
 
         with patch("main._SWC_RUN", return_value=fresh):
             await _run_swc_rescan(comps, state, "08:15")
 
-        tg.send_emergency_alert.assert_called_once()
-        msg = tg.send_emergency_alert.call_args.args[0]
-        assert "risk_on" in msg
-        assert "risk_off" in msg
+        tg.send_daily_mood.assert_called_once()
+        call_kwargs = tg.send_daily_mood.call_args.kwargs
+        assert "risk_on" in call_kwargs.get("summary", "")
 
     @pytest.mark.asyncio
     async def test_no_telegram_when_no_previous_snapshot_but_same_mood(self):
@@ -254,13 +272,13 @@ class TestRescanFunction:
         tg = MagicMock()
         state = _make_state()           # no previous snapshot
         comps = _make_components(telegram=tg)
-        fresh = _swc_dict(mood="risk_on")
+        fresh = _swc_report(mood="risk_on")
 
         with patch("main._SWC_RUN", return_value=fresh):
             await _run_swc_rescan(comps, state, "08:15")
 
         # old_mood is None → condition `old_mood is not None and new_mood != old_mood` is False
-        tg.send_emergency_alert.assert_not_called()
+        tg.send_daily_mood.assert_not_called()
 
     # ------------------------------------------------------------------ #
     # Log format
@@ -270,7 +288,7 @@ class TestRescanFunction:
     async def test_log_mood_changed_format(self, caplog):
         state = _make_state(mood="choppy")
         comps = _make_components()
-        fresh = _swc_dict(mood="risk_on")
+        fresh = _swc_report(mood="risk_on")
 
         with caplog.at_level(logging.INFO):
             with patch("main._SWC_RUN", return_value=fresh):
@@ -285,7 +303,7 @@ class TestRescanFunction:
     async def test_log_mood_unchanged_format(self, caplog):
         state = _make_state(mood="risk_on")
         comps = _make_components()
-        fresh = _swc_dict(mood="risk_on")
+        fresh = _swc_report(mood="risk_on")
 
         with caplog.at_level(logging.INFO):
             with patch("main._SWC_RUN", return_value=fresh):
@@ -307,7 +325,7 @@ class TestRescanFunction:
         with patch("main._SWC_RUN", side_effect=RuntimeError("timeout")):
             await _run_swc_rescan(comps, state, "08:15")
 
-        assert state.swc_snapshot["mood"] == "risk_on"
+        assert state.swc_snapshot.market_mood.value == "risk_on"
         comps.risk.set_swc_overrides.assert_not_called()
 
     @pytest.mark.asyncio
@@ -320,7 +338,7 @@ class TestRescanFunction:
         with patch("main._SWC_RUN", side_effect=RuntimeError("timeout")):
             await _run_swc_rescan(comps, state, "08:15")
 
-        tg.send_emergency_alert.assert_not_called()
+        tg.send_daily_mood.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_api_failure_does_not_raise(self):
