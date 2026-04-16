@@ -212,51 +212,55 @@ class TestFVGMitigation:
         det.detect(df, "5min")
         return det, det.fvgs[0]
 
-    def test_bullish_fvg_mitigated_at_midpoint(self):
-        """Bullish FVG mitigated when price drops to midpoint."""
+    def test_bullish_fvg_mitigated_at_mitigation_level(self):
+        """Bullish FVG (bottom=10, top=15) mitigated when price reaches 75% fill level.
+        mitigation_level = top - 0.75 * (top - bottom) = 15 - 3.75 = 11.25
+        """
         det, fvg = self._build_bullish_fvg()
-        assert fvg.midpoint == pytest.approx(12.5)
-        mitigated = det.update_mitigation(12.5)
+        assert fvg.midpoint == pytest.approx(12.5)   # midpoint unchanged (property)
+        mitigated = det.update_mitigation(11.25)
         assert len(mitigated) == 1
         assert fvg.mitigated
 
-    def test_bullish_fvg_mitigated_below_midpoint(self):
+    def test_bullish_fvg_mitigated_below_mitigation_level(self):
         det, fvg = self._build_bullish_fvg()
-        det.update_mitigation(11.0)   # below midpoint (12.5)
+        det.update_mitigation(10.5)   # below mitigation level (11.25)
         assert fvg.mitigated
 
-    def test_bullish_fvg_not_mitigated_above_midpoint(self):
+    def test_bullish_fvg_not_mitigated_above_mitigation_level(self):
         det, fvg = self._build_bullish_fvg()
-        det.update_mitigation(13.0)   # above midpoint
+        det.update_mitigation(12.5)   # above mitigation level (11.25) — old midpoint, no longer triggers
         assert not fvg.mitigated
 
-    def test_bearish_fvg_mitigated_at_midpoint(self):
-        """Bearish FVG mitigated when price rises to midpoint."""
+    def test_bearish_fvg_mitigated_at_mitigation_level(self):
+        """Bearish FVG (bottom=15, top=20) mitigated when price reaches 75% fill level.
+        mitigation_level = bottom + 0.75 * (top - bottom) = 15 + 3.75 = 18.75
+        """
         det, fvg = self._build_bearish_fvg()
-        assert fvg.midpoint == pytest.approx(17.5)
-        det.update_mitigation(17.5)
+        assert fvg.midpoint == pytest.approx(17.5)   # midpoint unchanged (property)
+        det.update_mitigation(18.75)
         assert fvg.mitigated
 
-    def test_bearish_fvg_mitigated_above_midpoint(self):
+    def test_bearish_fvg_mitigated_above_mitigation_level(self):
         det, fvg = self._build_bearish_fvg()
         det.update_mitigation(19.0)
         assert fvg.mitigated
 
-    def test_bearish_fvg_not_mitigated_below_midpoint(self):
+    def test_bearish_fvg_not_mitigated_below_mitigation_level(self):
         det, fvg = self._build_bearish_fvg()
-        det.update_mitigation(16.0)
+        det.update_mitigation(17.5)   # old midpoint, no longer triggers with 75% ratio
         assert not fvg.mitigated
 
     def test_double_mitigation_no_duplicate(self):
         """Once mitigated, calling update again must not append it twice."""
         det, fvg = self._build_bullish_fvg()
-        det.update_mitigation(12.0)
-        result2 = det.update_mitigation(12.0)
+        det.update_mitigation(11.0)   # below mitigation level (11.25) — triggers mitigation
+        result2 = det.update_mitigation(11.0)
         assert result2 == []
 
     def test_mitigation_returns_list_of_mitigated(self):
         det, _ = self._build_bullish_fvg()
-        result = det.update_mitigation(12.0)
+        result = det.update_mitigation(11.0)   # below mitigation level (11.25)
         assert isinstance(result, list)
         assert len(result) == 1
 

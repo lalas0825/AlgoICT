@@ -37,6 +37,7 @@ import config
 logger = logging.getLogger(__name__)
 
 FVG_MAX_HISTORY = getattr(config, "FVG_MAX_HISTORY", 100)
+FVG_MITIGATION_RATIO = getattr(config, "FVG_MITIGATION_RATIO", 0.75)
 
 
 @dataclass
@@ -151,7 +152,15 @@ class FairValueGapDetector:
 
     def update_mitigation(self, current_price: float) -> list[FVG]:
         """
-        Mark active FVGs as mitigated when price reaches their 50% level.
+        Mark active FVGs as mitigated when price fills FVG_MITIGATION_RATIO of the gap.
+
+        Bullish FVG: mitigated when price <= top   - ratio * (top - bottom)
+                     i.e. price fills ratio from the top downward
+        Bearish FVG: mitigated when price >= bottom + ratio * (top - bottom)
+                     i.e. price fills ratio from the bottom upward
+
+        With FVG_MITIGATION_RATIO=0.75 (vs ICT standard 0.50), FVGs survive longer,
+        giving more time for price to return after a sweep.
 
         Parameters
         ----------
@@ -165,15 +174,25 @@ class FairValueGapDetector:
         for fvg in self.fvgs:
             if fvg.mitigated:
                 continue
-            mid = fvg.midpoint
-            if fvg.direction == "bullish" and current_price <= mid:
-                fvg.mitigated = True
-                newly_mitigated.append(fvg)
-                logger.debug("Bullish FVG [%.2f–%.2f] mitigated at %.2f", fvg.bottom, fvg.top, current_price)
-            elif fvg.direction == "bearish" and current_price >= mid:
-                fvg.mitigated = True
-                newly_mitigated.append(fvg)
-                logger.debug("Bearish FVG [%.2f–%.2f] mitigated at %.2f", fvg.bottom, fvg.top, current_price)
+            gap = fvg.top - fvg.bottom
+            if fvg.direction == "bullish":
+                mitigation_level = fvg.top - FVG_MITIGATION_RATIO * gap
+                if current_price <= mitigation_level:
+                    fvg.mitigated = True
+                    newly_mitigated.append(fvg)
+                    logger.debug(
+                        "Bullish FVG [%.2f–%.2f] mitigated at %.2f (level=%.2f, ratio=%.2f)",
+                        fvg.bottom, fvg.top, current_price, mitigation_level, FVG_MITIGATION_RATIO,
+                    )
+            elif fvg.direction == "bearish":
+                mitigation_level = fvg.bottom + FVG_MITIGATION_RATIO * gap
+                if current_price >= mitigation_level:
+                    fvg.mitigated = True
+                    newly_mitigated.append(fvg)
+                    logger.debug(
+                        "Bearish FVG [%.2f–%.2f] mitigated at %.2f (level=%.2f, ratio=%.2f)",
+                        fvg.bottom, fvg.top, current_price, mitigation_level, FVG_MITIGATION_RATIO,
+                    )
         return newly_mitigated
 
     def get_active(
