@@ -899,15 +899,63 @@ def _log_bar_snapshot(components: Components, state: EngineState, ts) -> None:
         liq_total = len(tracked)
         liq_swept = sum(1 for lvl in tracked if getattr(lvl, "swept", False))
 
-        # Top-3 FVGs closest to current price (all timeframes + directions)
+        # ── FVG top-3 (all tf + directions, closest midpoint) ─────────────
         all_fvgs = det["fvg"].get_active()
         all_fvgs.sort(key=lambda f: abs((f.top + f.bottom) / 2 - close))
-        top3 = all_fvgs[:3]
-        top3_str = ", ".join(
+        fvg_top3_str = ", ".join(
             f"{f.bottom:.0f}-{f.top:.0f} {f.direction[:4]} {f.timeframe} "
             f"{((f.top + f.bottom) / 2 - close):+.0f}pts"
-            for f in top3
+            for f in all_fvgs[:3]
         ) or "none"
+
+        # ── IFVG top-3 ────────────────────────────────────────────────────
+        all_ifvgs = det["fvg"].get_active_ifvgs()
+        all_ifvgs.sort(key=lambda f: abs((f.top + f.bottom) / 2 - close))
+        ifvg_top3_str = ", ".join(
+            f"{f.bottom:.0f}-{f.top:.0f} {f.direction[:4]} {f.timeframe} "
+            f"{((f.top + f.bottom) / 2 - close):+.0f}pts"
+            for f in all_ifvgs[:3]
+        ) or "none"
+
+        # ── OB top-3 (closest midpoint high+low / 2) ──────────────────────
+        all_obs = det["ob"].get_active()
+        all_obs.sort(key=lambda o: abs((o.high + o.low) / 2 - close))
+        ob_top3_str = ", ".join(
+            f"{o.low:.0f}-{o.high:.0f} {o.direction[:4]} {o.timeframe} "
+            f"{((o.high + o.low) / 2 - close):+.0f}pts"
+            for o in all_obs[:3]
+        ) or "none"
+
+        # ── Tracked levels with swept state ───────────────────────────────
+        levels_str = ", ".join(
+            f"{lvl.type}@{lvl.price:.0f} {'SWEPT' if getattr(lvl, 'swept', False) else 'active'}"
+            for lvl in tracked
+        ) or "none"
+
+        # ── Equal highs / equal lows from tracked_levels ──────────────────
+        eql_prices = [lvl.price for lvl in tracked if getattr(lvl, "type", "") == "equal_lows"]
+        eqh_prices = [lvl.price for lvl in tracked if getattr(lvl, "type", "") == "equal_highs"]
+        eql_str = "[" + ", ".join(f"{p:.0f}" for p in eql_prices) + "]"
+        eqh_str = "[" + ", ".join(f"{p:.0f}" for p in eqh_prices) + "]"
+
+        # ── Structure: last 3 events (all tf) ─────────────────────────────
+        all_struct = det["structure"].get_events()
+        all_struct_sorted = sorted(all_struct, key=lambda e: e.timestamp)[-3:]
+        struct_last3_str = ", ".join(
+            f"{e.type} {e.direction[:4]} {e.timestamp.strftime('%H:%M')}CT"
+            for e in all_struct_sorted
+        ) or "none"
+
+        # ── Last displacement (5min, any direction) ────────────────────────
+        recent_disps = det["displacement"].get_recent(n=1, timeframe="5min")
+        if recent_disps:
+            d = recent_disps[0]
+            disp_str = (
+                f"{d.direction[:4]} mag={d.magnitude:.0f}pts "
+                f"{d.timestamp.strftime('%H:%M')}CT"
+            )
+        else:
+            disp_str = "none"
 
         vpin_val = getattr(state.vpin_status, "vpin", None) if state.vpin_status else None
         vpin_str = f"{vpin_val:.3f}" if vpin_val is not None else "—"
@@ -927,11 +975,29 @@ def _log_bar_snapshot(components: Components, state: EngineState, ts) -> None:
         except Exception as bexc:
             logger.debug("bar-snapshot bias compute failed: %s", bexc)
 
+        ts_str = ts.strftime("%H:%M")
+        rth_str = "Y" if in_rth else "N"
         logger.info(
-            "BAR [%s CT] close=%.2f rth=%s kz=%s | sw=%d fvg=%d ifvg=%d ob=%d struct=%d liq=%d(swept=%d) | VPIN=%s | bias=%s | fvg_top3=[%s]",
-            ts.strftime("%H:%M"), close, "Y" if in_rth else "N", kz,
+            "BAR [%s CT] close=%.2f rth=%s kz=%s | sw=%d fvg=%d ifvg=%d ob=%d struct=%d liq=%d(swept=%d) | VPIN=%s | bias=%s",
+            ts_str, close, rth_str, kz,
             sw_count, fvg_count, ifvg_count, ob_count, struct_count, liq_total, liq_swept,
-            vpin_str, bias_str, top3_str,
+            vpin_str, bias_str,
+        )
+        logger.info(
+            "  fvg_top3=[%s] | ifvg_top3=[%s]",
+            fvg_top3_str, ifvg_top3_str,
+        )
+        logger.info(
+            "  ob_top3=[%s]",
+            ob_top3_str,
+        )
+        logger.info(
+            "  levels=[%s] | eql=%s eqh=%s",
+            levels_str, eql_str, eqh_str,
+        )
+        logger.info(
+            "  struct_last3=[%s] | last_disp=%s",
+            struct_last3_str, disp_str,
         )
     except Exception as exc:
         logger.debug("bar-snapshot log failed: %s", exc)

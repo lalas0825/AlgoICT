@@ -31,11 +31,17 @@ def _make_components(ts: pd.Timestamp) -> Components:
     sess = SessionManager()
     comps = MagicMock(spec=Components)
     comps.session = sess
+    fvg_mock = MagicMock()
+    fvg_mock.get_active.return_value = []
+    fvg_mock.get_active_ifvgs.return_value = []
+    disp_mock = MagicMock()
+    disp_mock.get_recent.return_value = []
     comps.detectors = {
         "swing": MagicMock(swing_points=[]),
-        "fvg": MagicMock(**{"get_active.return_value": []}),
+        "fvg": fvg_mock,
         "ob": MagicMock(**{"get_active.return_value": []}),
         "structure": MagicMock(**{"get_events.return_value": []}),
+        "displacement": disp_mock,
         "tracked_levels": [],
     }
     return comps
