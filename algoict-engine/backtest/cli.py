@@ -135,8 +135,8 @@ def cmd_backtest(args):
     # Build detectors and managers
     print("Initializing detectors...")
     detectors = {
-        "swing_entry": SwingPointDetector("1min"),
-        "swing_context": SwingPointDetector("5min"),
+        "swing_entry": SwingPointDetector(),
+        "swing_context": SwingPointDetector(),
         "structure": MarketStructureDetector(),
         "fvg": FairValueGapDetector(),
         "ob": OrderBlockDetector(),

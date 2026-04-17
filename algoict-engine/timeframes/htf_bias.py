@@ -29,11 +29,13 @@ class BiasResult:
     confidence: str  # "high" | "medium" | "low"
     weekly_bias: str  # bullish | bearish | neutral
     daily_bias: str  # bullish | bearish | neutral
+    weekly_alignment_multiplier: float = 1.0  # 1.0 when aligned, 0.5 when opposing
 
     def __repr__(self) -> str:
         return (
             f"BiasResult(direction={self.direction}, premium_discount={self.premium_discount}, "
-            f"confidence={self.confidence}, weekly={self.weekly_bias}, daily={self.daily_bias})"
+            f"confidence={self.confidence}, weekly={self.weekly_bias}, daily={self.daily_bias}, "
+            f"weekly_mult={self.weekly_alignment_multiplier:.0%})"
         )
 
 
@@ -109,9 +111,11 @@ class HTFBiasDetector:
         daily_bias = self._fuse(daily_swing, daily_zone_bias)
         weekly_bias = self._fuse(weekly_swing, weekly_zone_bias)
 
-        # ── 5. Weekly > Daily (weekly institutional structure dominates) ─
+        # ── 5. Daily > Weekly for intraday bias (ICT: "banks use the daily
+        # chart for daily bias"). Weekly provides context, not direction.
         direction = self._determine_direction(daily_bias, weekly_bias)
         confidence = self._confidence_level(daily_bias, weekly_bias, direction)
+        weekly_mult = self._weekly_alignment_multiplier(daily_bias, weekly_bias)
 
         htf_levels = {
             "weekly_high": float(weekly_candle["high"]),
@@ -132,6 +136,7 @@ class HTFBiasDetector:
             confidence=confidence,
             weekly_bias=weekly_bias,
             daily_bias=daily_bias,
+            weekly_alignment_multiplier=weekly_mult,
         )
 
     # ------------------------------------------------------------------ #
@@ -236,11 +241,27 @@ class HTFBiasDetector:
         """
         Fuse daily and weekly bias.
 
-        Priority: Weekly > Daily (institutional structure defines primary direction)
+        Priority: Daily > Weekly for intraday trading.
+        ICT: "Banks and institutional traders mostly utilize the daily chart."
+        Weekly provides context (size multiplier) but daily defines direction.
         """
-        if weekly_bias != "neutral":
-            return weekly_bias
-        return daily_bias
+        if daily_bias != "neutral":
+            return daily_bias
+        return weekly_bias
+
+    @staticmethod
+    def _weekly_alignment_multiplier(daily_bias: str, weekly_bias: str) -> float:
+        """
+        Position-size multiplier based on daily/weekly agreement.
+
+        - daily aligned with weekly (or weekly neutral) → 1.0 (full size)
+        - daily opposed to weekly → 0.5 (trade with caution, half size)
+        """
+        if weekly_bias == "neutral" or daily_bias == "neutral":
+            return 1.0
+        if daily_bias == weekly_bias:
+            return 1.0
+        return 0.5
 
     @staticmethod
     def _confidence_level(daily_bias: str, weekly_bias: str, direction: str) -> str:

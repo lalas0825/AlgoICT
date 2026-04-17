@@ -353,3 +353,74 @@ class TestFVGClear:
         assert len(det.fvgs) == 1
         det.clear()
         assert det.fvgs == []
+
+
+# ─── Tests: IFVG displacement gate ──────────────────────────────────────────
+
+class TestIFVGDisplacementGate:
+    """IFVG only spawns when the mitigating candle shows displacement."""
+
+    def _setup_bullish_fvg(self):
+        det = FairValueGapDetector()
+        # Bullish FVG: bar[0].high < bar[2].low
+        highs  = [100, 115, 120]
+        lows   = [ 95, 105, 110]  # gap: 100–110
+        closes = [ 98, 112, 118]
+        df = _make_df(highs, lows, closes)
+        det.detect(df, "5min")
+        assert len(det.fvgs) == 1
+        assert det.fvgs[0].direction == "bullish"
+        return det
+
+    def test_displacement_cross_creates_ifvg(self):
+        """Strong candle (body > 1.5×ATR) crossing FVG → IFVG spawned."""
+        det = self._setup_bullish_fvg()
+        # Mitigate with displacement: body=20, ATR=5 → 20 > 1.5×5=7.5 ✓
+        det.update_mitigation(100.0, candle_body=20.0, atr_14=5.0)
+        assert det.fvgs[0].mitigated is True
+        ifvgs = det.get_active_ifvgs(timeframe="5min")
+        assert len(ifvgs) == 1
+        assert ifvgs[0].direction == "bearish"  # inverted from bullish
+        assert ifvgs[0].is_ifvg is True
+
+    def test_weak_cross_no_ifvg(self):
+        """Weak candle (body < 1.5×ATR) crossing FVG → just dies, no IFVG."""
+        det = self._setup_bullish_fvg()
+        # Mitigate with weak candle: body=3, ATR=5 → 3 < 7.5 ✗
+        det.update_mitigation(100.0, candle_body=3.0, atr_14=5.0)
+        assert det.fvgs[0].mitigated is True
+        ifvgs = det.get_active_ifvgs(timeframe="5min")
+        assert len(ifvgs) == 0
+
+    def test_no_atr_data_no_ifvg(self):
+        """No ATR data → conservative, no IFVG."""
+        det = self._setup_bullish_fvg()
+        det.update_mitigation(100.0)  # old-style call, no body/atr
+        assert det.fvgs[0].mitigated is True
+        assert len(det.get_active_ifvgs(timeframe="5min")) == 0
+
+    def test_ifvg_invalidation(self):
+        """IFVG gets invalidated when price breaches its opposite extreme."""
+        det = self._setup_bullish_fvg()
+        det.update_mitigation(100.0, candle_body=20.0, atr_14=5.0)
+        ifvgs = det.get_active_ifvgs()
+        assert len(ifvgs) == 1
+        # Bearish IFVG at [100–110] → invalidated when price > 110 (top)
+        det.update_mitigation(111.0)
+        assert len(det.get_active_ifvgs()) == 0
+
+    def test_bearish_fvg_to_bullish_ifvg(self):
+        """Bearish FVG mitigated with displacement → Bullish IFVG."""
+        det = FairValueGapDetector()
+        # Bearish FVG: bar[0].low > bar[2].high
+        highs  = [120, 105, 100]
+        lows   = [110, 100,  95]  # gap: 110–100
+        closes = [115, 102,  98]
+        df = _make_df(highs, lows, closes)
+        det.detect(df, "5min")
+        assert det.fvgs[0].direction == "bearish"
+        # Mitigate with displacement
+        det.update_mitigation(108.0, candle_body=25.0, atr_14=8.0)
+        ifvgs = det.get_active_ifvgs()
+        assert len(ifvgs) == 1
+        assert ifvgs[0].direction == "bullish"

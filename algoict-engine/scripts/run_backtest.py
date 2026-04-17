@@ -297,6 +297,11 @@ def build_backtester(
     df_1min: Optional[pd.DataFrame] = None,
     dynamic_bias: bool = False,
     topstep_mode: bool = False,
+    mll_warning_pct: float = 0.40,
+    mll_caution_pct: float = 0.80,
+    mll_stop_pct: float = 0.95,
+    ny_am_only: bool = False,
+    ifvg_enabled: bool = True,
 ) -> tuple[Backtester, dict]:
     """
     Wire up every collaborator the backtester needs. Returns a ready-to-run
@@ -366,8 +371,18 @@ def build_backtester(
 
     risk_mgr = RiskManager()
     if topstep_mode:
-        risk_mgr.enable_topstep_mode()
-        print("  Topstep $50K Combine mode ON (MLL-aware risk protection)")
+        risk_mgr.enable_topstep_mode(
+            warning_pct=mll_warning_pct,
+            caution_pct=mll_caution_pct,
+            stop_pct=mll_stop_pct,
+        )
+        mll = risk_mgr._mll_limit
+        print(
+            f"  Topstep $50K Combine mode ON "
+            f"(warn=${mll * mll_warning_pct:.0f} @ {mll_warning_pct:.0%}, "
+            f"caution=${mll * mll_caution_pct:.0f} @ {mll_caution_pct:.0%}, "
+            f"stop=${mll * mll_stop_pct:.0f} @ {mll_stop_pct:.0%})"
+        )
     tf_mgr = TimeframeManager()
     session_mgr = SessionManager()
 
@@ -400,6 +415,15 @@ def build_backtester(
             f"Unknown strategy '{strategy_name}'. "
             f"Valid: ny_am_reversal, silver_bullet"
         )
+
+    # Ablation overrides
+    if ny_am_only and strategy_name_lc == "ny_am_reversal":
+        strategy.KILL_ZONES = ("ny_am",)
+        strategy._trades_by_zone = {"ny_am": 0}
+        print("  ABLATION: KILL_ZONES restricted to ('ny_am',)")
+    if not ifvg_enabled and strategy_name_lc == "ny_am_reversal":
+        strategy._ifvg_enabled = False
+        print("  ABLATION: IFVG fallback disabled")
 
     # Optional: wrap with DynamicBiasStrategy if requested + we have data
     bias_label = "bullish (static stub)"
@@ -581,6 +605,11 @@ def main() -> int:
             df_1min=df,
             dynamic_bias=args.dynamic_bias,
             topstep_mode=args.topstep,
+            mll_warning_pct=args.mll_warning_pct,
+            mll_caution_pct=args.mll_caution_pct,
+            mll_stop_pct=args.mll_stop_pct,
+            ny_am_only=args.ny_am_only,
+            ifvg_enabled=not args.no_ifvg,
         )
     except Exception as e:
         print(f"✗ Build failed: {e}")
@@ -648,6 +677,57 @@ def main() -> int:
             notes=notes,
             symbol=args.symbol,
         )
+
+    # Step 5b: JSON export for post-hoc analysis (KZ splits, combine sim, etc.)
+    if args.export_json:
+        import json as _json
+        export_path = Path(args.export_json)
+        export_path.parent.mkdir(parents=True, exist_ok=True)
+        # Compute equity curve + max drawdown from trade sequence
+        trades_sorted = sorted(result.trades, key=lambda t: t.entry_time)
+        equity = 0.0
+        peak = 0.0
+        max_dd = 0.0
+        equity_curve = []
+        for t in trades_sorted:
+            equity += float(t.pnl)
+            peak = max(peak, equity)
+            dd = peak - equity
+            max_dd = max(max_dd, dd)
+            equity_curve.append({"t": str(t.entry_time), "equity": equity, "peak": peak, "dd": dd})
+        payload = {
+            "strategy": result.strategy,
+            "total_trades": int(result.total_trades),
+            "wins": int(result.wins),
+            "losses": int(result.losses),
+            "win_rate": float(result.win_rate),
+            "total_pnl": float(result.total_pnl),
+            "max_drawdown_dollars": float(max_dd),
+            "peak_equity": float(peak),
+            "start_date": str(result.start_date),
+            "end_date": str(result.end_date),
+            "trades": [
+                {
+                    "strategy": t.strategy,
+                    "symbol": t.symbol,
+                    "direction": t.direction,
+                    "entry_time": str(t.entry_time),
+                    "exit_time": str(t.exit_time),
+                    "entry_price": float(t.entry_price),
+                    "stop_price": float(t.stop_price),
+                    "target_price": float(t.target_price),
+                    "exit_price": float(t.exit_price),
+                    "contracts": int(t.contracts),
+                    "pnl": float(t.pnl),
+                    "reason": getattr(t, "reason", ""),
+                    "confluence_score": int(getattr(t, "confluence_score", 0) or 0),
+                    "kill_zone": getattr(t, "kill_zone", ""),
+                } for t in trades_sorted
+            ],
+        }
+        with open(export_path, "w", encoding="utf-8") as f:
+            _json.dump(payload, f, indent=2)
+        print(f"  ✓ trades exported to {export_path} (max_dd=${max_dd:,.2f})")
 
     # Step 6: success marker
     print()
@@ -735,6 +815,38 @@ def _parse_args() -> argparse.Namespace:
         "--no-supabase",
         action="store_true",
         help="Skip writing to Supabase (local only)",
+    )
+    p.add_argument(
+        "--export-json",
+        help="Also dump trades to a JSON file at this path",
+    )
+    p.add_argument(
+        "--mll-warning-pct",
+        type=float,
+        default=0.40,
+        help="MLL warning zone threshold (fraction of MLL). -25%% size when DD >= this. Default 0.40 = $800.",
+    )
+    p.add_argument(
+        "--mll-caution-pct",
+        type=float,
+        default=0.80,
+        help="MLL caution zone threshold. -50%% size when DD >= this. Default 0.80 = $1,600.",
+    )
+    p.add_argument(
+        "--mll-stop-pct",
+        type=float,
+        default=0.95,
+        help="MLL stop zone threshold. No new trades when DD >= this. Default 0.95 = $1,900.",
+    )
+    p.add_argument(
+        "--ny-am-only",
+        action="store_true",
+        help="Restrict strategy KILL_ZONES to ('ny_am',) only (ablation)",
+    )
+    p.add_argument(
+        "--no-ifvg",
+        action="store_true",
+        help="Disable IFVG fallback in NY AM Reversal (ablation)",
     )
     return p.parse_args()
 

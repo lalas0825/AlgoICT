@@ -356,6 +356,12 @@ class Backtester:
                 "entry_bar_idx": i,
             }
 
+            # Advance per-zone + daily trade counters. Must happen here
+            # (post-execution), not inside strategy.evaluate(), or a
+            # rejected order would still block the KZ on the next bar.
+            if hasattr(self.strategy, "notify_trade_executed"):
+                self.strategy.notify_trade_executed(signal)
+
         return self._build_result(daily_pnl, df.index[0], df.index[-1])
 
     # ------------------------------------------------------------------ #

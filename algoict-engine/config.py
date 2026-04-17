@@ -14,7 +14,7 @@ BASE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = BASE_DIR.parent
 DATA_DIR = PROJECT_ROOT / "data"
 
-load_dotenv(BASE_DIR / ".env")
+load_dotenv(BASE_DIR / ".env", override=True)
 
 # ---------------------------------------------------------------------------
 # Broker — TopstepX (MNQ Intraday)

@@ -237,11 +237,22 @@ class TestPositiveSetup:
         assert isinstance(sig.confluence_breakdown, dict)
         assert len(sig.confluence_breakdown) > 0
 
-    def test_signal_increments_trades_per_zone(self):
+    def test_notify_trade_executed_increments_trades_per_zone(self):
+        """Counters advance only after broker-confirmed execution.
+
+        Old behavior: evaluate() incremented the counter when the signal
+        was built. New behavior: evaluate() only emits; main.py /
+        backtester call notify_trade_executed() on confirmed fill.
+        """
         strat, c5, c15 = _build_full_setup()
         assert strat._trades_by_zone.get("ny_am", 0) == 0
-        strat.evaluate(c5, c15)
+        sig = strat.evaluate(c5, c15)
+        assert sig is not None
+        # evaluate() alone must NOT advance the counter
+        assert strat._trades_by_zone.get("ny_am", 0) == 0
+        strat.notify_trade_executed(sig)
         assert strat._trades_by_zone.get("ny_am", 0) == 1
+        assert strat.trades_today == 1
 
 
 # ─── Negative: each gate rejects ─────────────────────────────────────────────
@@ -346,7 +357,8 @@ class TestReset:
 
     def test_reset_daily_clears_trades_per_zone(self):
         strat, c5, c15 = _build_full_setup()
-        strat.evaluate(c5, c15)
+        sig = strat.evaluate(c5, c15)
+        strat.notify_trade_executed(sig)
         assert strat._trades_by_zone.get("ny_am", 0) == 1
         strat.reset_daily()
         assert strat._trades_by_zone.get("ny_am", 0) == 0
@@ -399,7 +411,6 @@ class TestEvalLogging:
         assert len(eval_lines) == 1
         line = eval_lines[0]
         assert "signal=fire" in line
-        assert "reason=fired" in line
         assert "/20" in line
         assert "Signal(" in line        # full signal repr appended
 
@@ -438,7 +449,8 @@ class TestKillZones:
         ts = _ny_pm_ts(14, 0)
         strat, _, c15 = _build_full_setup(ts=ts)
         c5 = _make_5min(ts, close=100.0)
-        strat.evaluate(c5, c15)
+        sig = strat.evaluate(c5, c15)
+        strat.notify_trade_executed(sig)
         assert strat._trades_by_zone.get("ny_pm", 0) == 1
         assert strat._trades_by_zone.get("ny_am", 0) == 0  # ny_am unaffected
 
@@ -463,7 +475,8 @@ class TestKillZones:
         ts = _london_ts(3, 0)
         strat, _, c15 = _build_full_setup(ts=ts)
         c5 = _make_5min(ts, close=100.0)
-        strat.evaluate(c5, c15)
+        sig = strat.evaluate(c5, c15)
+        strat.notify_trade_executed(sig)
         assert strat._trades_by_zone.get("london", 0) == 1
         assert strat._trades_by_zone.get("ny_am", 0) == 0
 

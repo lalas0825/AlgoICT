@@ -227,10 +227,17 @@ class TestPositiveSetup:
         assert isinstance(sig.confluence_breakdown, dict)
         assert len(sig.confluence_breakdown) > 0
 
-    def test_signal_increments_trades_today(self):
+    def test_notify_trade_executed_increments_trades_today(self):
+        """Counter advances only after broker-confirmed execution.
+        evaluate() emits the signal; notify_trade_executed() advances.
+        """
         strat, c1, c5 = _build_full_setup()
         assert strat.trades_today == 0
-        strat.evaluate(c1, c5)
+        sig = strat.evaluate(c1, c5)
+        assert sig is not None
+        # evaluate() alone must NOT advance
+        assert strat.trades_today == 0
+        strat.notify_trade_executed(sig)
         assert strat.trades_today == 1
 
 
@@ -414,12 +421,13 @@ class TestSweepDirection:
 class TestMaxTrades:
 
     def test_max_trades_is_one(self):
-        """MAX_TRADES=1: second call blocked."""
+        """MAX_TRADES=1: second call blocked once first trade is confirmed."""
         strat, c1, c5 = _build_full_setup()
         sig1 = strat.evaluate(c1, c5)
         assert sig1 is not None
+        strat.notify_trade_executed(sig1)
         assert strat.trades_today == 1
-        # Second evaluation — should be blocked
+        # Second evaluation — should be blocked now that counter advanced
         sig2 = strat.evaluate(c1, c5)
         assert sig2 is None
 
@@ -435,15 +443,17 @@ class TestReset:
 
     def test_reset_daily_clears_trades_today(self):
         strat, c1, c5 = _build_full_setup()
-        strat.evaluate(c1, c5)
+        sig = strat.evaluate(c1, c5)
+        strat.notify_trade_executed(sig)
         assert strat.trades_today == 1
         strat.reset_daily()
         assert strat.trades_today == 0
 
     def test_can_trade_again_after_reset(self):
         strat, c1, c5 = _build_full_setup()
-        strat.evaluate(c1, c5)
+        sig = strat.evaluate(c1, c5)
+        strat.notify_trade_executed(sig)
         assert strat.trades_today == 1
         strat.reset_daily()
-        sig = strat.evaluate(c1, c5)
-        assert sig is not None
+        sig2 = strat.evaluate(c1, c5)
+        assert sig2 is not None

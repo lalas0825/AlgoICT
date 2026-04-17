@@ -248,8 +248,9 @@ class TestConfidenceLevels:
 
         assert result.weekly_bias == "bullish"
         assert result.daily_bias == "bearish"
-        assert result.direction == "bullish"  # weekly priority
-        assert result.confidence == "medium"  # weekly agrees, daily doesn't
+        assert result.direction == "bearish"  # daily wins for intraday
+        assert result.confidence == "medium"  # daily agrees with direction
+        assert result.weekly_alignment_multiplier == 0.5  # cautious: daily vs weekly
 
     def test_low_confidence_disagree(self):
         """Confidence=low when weekly and daily disagree."""

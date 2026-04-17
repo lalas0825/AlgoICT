@@ -89,12 +89,13 @@ class RiskManager:
         self._peak_balance_eod: float = 0.0
         self._starting_balance: float = 0.0
         self._mll_limit: float = config.TOPSTEP_MLL            # $2,000
-        self._mll_caution_pct: float = 0.80                    # 80% = $1,600
-        self._mll_stop_pct: float = 0.95                       # 95% = $1,900
+        self._mll_warning_pct: float = 0.40                    # 40% = $800  → -25% size
+        self._mll_caution_pct: float = 0.80                    # 80% = $1,600 → -50% size
+        self._mll_stop_pct: float = 0.95                       # 95% = $1,900 → no trades
         self._profit_target: float = config.TOPSTEP_PROFIT_TARGET  # $3,000
         self._target_reached: bool = False
         self._protective_after_target: bool = False  # for funded account, not combine
-        self._mll_zone: str = "normal"  # normal | caution | stop
+        self._mll_zone: str = "normal"  # normal | warning | caution | stop
 
         # ── Cruise mode (post-target, accumulate trading days) ──────────
         self._cruise_mode: bool = False
@@ -114,6 +115,7 @@ class RiskManager:
         starting_balance: float = config.TOPSTEP_ACCOUNT_SIZE,
         mll: float = config.TOPSTEP_MLL,
         profit_target: float = config.TOPSTEP_PROFIT_TARGET,
+        warning_pct: float = 0.40,
         caution_pct: float = 0.80,
         stop_pct: float = 0.95,
         protective_after_target: bool = False,
@@ -135,6 +137,7 @@ class RiskManager:
         self._current_balance = starting_balance
         self._peak_balance_eod = starting_balance
         self._mll_limit = mll
+        self._mll_warning_pct = warning_pct
         self._mll_caution_pct = caution_pct
         self._mll_stop_pct = stop_pct
         self._profit_target = profit_target
@@ -427,8 +430,11 @@ class RiskManager:
         if self._cruise_mode:
             return self._cruise_min_confluence  # 12 — A+ trades only
         adj = self._min_confluence_adj
-        if self._topstep_mode and self._mll_zone == "caution":
-            adj += 2  # MLL caution: +2 confluence required
+        if self._topstep_mode:
+            if self._mll_zone == "caution":
+                adj += 2  # MLL caution: +2 confluence required
+            elif self._mll_zone == "warning":
+                adj += 1  # MLL warning: +1 confluence required
         return config.MIN_CONFLUENCE + adj
 
     @property
@@ -442,6 +448,8 @@ class RiskManager:
         if self._topstep_mode:
             if self._mll_zone == "caution" or self._target_reached:
                 mult = min(mult, 0.5)  # halve in caution or protective mode
+            elif self._mll_zone == "warning":
+                mult = min(mult, 0.75)  # -25% early size reduction
         return mult
 
     # ── Cruise mode properties ────────────────────────────────────────
@@ -543,6 +551,7 @@ class RiskManager:
         In 'caution' zone, position size is halved and min confluence +2.
         """
         dd = self.current_drawdown
+        warning_threshold = self._mll_limit * self._mll_warning_pct
         caution_threshold = self._mll_limit * self._mll_caution_pct
         stop_threshold = self._mll_limit * self._mll_stop_pct
 
@@ -552,6 +561,8 @@ class RiskManager:
             self._mll_zone = "stop"
         elif dd >= caution_threshold:
             self._mll_zone = "caution"
+        elif dd >= warning_threshold:
+            self._mll_zone = "warning"
         else:
             self._mll_zone = "normal"
 

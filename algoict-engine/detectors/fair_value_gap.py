@@ -50,15 +50,17 @@ class FVG:
     candle_index: int   # index of the middle candle (i in the 3-candle pattern)
     timestamp: pd.Timestamp   # timestamp of the middle candle
     mitigated: bool = False
+    is_ifvg: bool = False  # True when this is an Inversed FVG
 
     @property
     def midpoint(self) -> float:
         return self.bottom + 0.5 * (self.top - self.bottom)
 
     def __repr__(self) -> str:
+        kind = "IFVG" if self.is_ifvg else "FVG"
         status = "MITIGATED" if self.mitigated else "active"
         return (
-            f"FVG({self.direction} [{self.bottom:.2f}–{self.top:.2f}], "
+            f"{kind}({self.direction} [{self.bottom:.2f}-{self.top:.2f}], "
             f"tf={self.timeframe}, ts={self.timestamp}, {status})"
         )
 
@@ -149,31 +151,99 @@ class FairValueGapDetector:
         )
         return new_fvgs
 
-    def update_mitigation(self, current_price: float) -> list[FVG]:
+    # IFVG conversion threshold: crossing candle body must be >= this × ATR
+    IFVG_ATR_MULTIPLIER = 1.5
+
+    def update_mitigation(
+        self,
+        current_price: float,
+        candle_body: Optional[float] = None,
+        atr_14: Optional[float] = None,
+    ) -> list[FVG]:
         """
         Mark active FVGs as mitigated when price reaches their 50% level.
+        Also invalidate active IFVGs whose opposite extreme is breached.
+
+        IFVG conversion: a mitigated FVG is promoted to IFVG (inverted
+        direction) ONLY when the crossing candle shows displacement — i.e.
+        candle_body > 1.5 × ATR(14). Weak crosses just kill the FVG.
 
         Parameters
         ----------
         current_price : float — last traded price (close or bid/ask)
+        candle_body   : float, optional — abs(open - close) of the latest
+                        candle. Required for IFVG conversion.
+        atr_14        : float, optional — 14-period ATR at the latest candle.
+                        Required for IFVG conversion.
 
         Returns
         -------
         list[FVG] — FVGs newly mitigated in this call
         """
         newly_mitigated: list[FVG] = []
+        new_ifvgs: list[FVG] = []
+
+        # Can we evaluate displacement for IFVG conversion?
+        has_displacement_data = (
+            candle_body is not None
+            and atr_14 is not None
+            and atr_14 > 0
+        )
+        is_displacement = (
+            has_displacement_data
+            and candle_body > self.IFVG_ATR_MULTIPLIER * atr_14
+        )
+
         for fvg in self.fvgs:
             if fvg.mitigated:
                 continue
-            mid = fvg.midpoint
-            if fvg.direction == "bullish" and current_price <= mid:
-                fvg.mitigated = True
-                newly_mitigated.append(fvg)
-                logger.debug("Bullish FVG [%.2f–%.2f] mitigated at %.2f", fvg.bottom, fvg.top, current_price)
-            elif fvg.direction == "bearish" and current_price >= mid:
-                fvg.mitigated = True
-                newly_mitigated.append(fvg)
-                logger.debug("Bearish FVG [%.2f–%.2f] mitigated at %.2f", fvg.bottom, fvg.top, current_price)
+
+            # ── Regular FVG mitigation ─────────────────────────────────
+            if not fvg.is_ifvg:
+                mid = fvg.midpoint
+                mitigated_now = False
+                if fvg.direction == "bullish" and current_price <= mid:
+                    mitigated_now = True
+                elif fvg.direction == "bearish" and current_price >= mid:
+                    mitigated_now = True
+
+                if mitigated_now:
+                    fvg.mitigated = True
+                    newly_mitigated.append(fvg)
+
+                    if is_displacement:
+                        inv_dir = "bearish" if fvg.direction == "bullish" else "bullish"
+                        new_ifvgs.append(FVG(
+                            top=fvg.top, bottom=fvg.bottom,
+                            direction=inv_dir, timeframe=fvg.timeframe,
+                            candle_index=fvg.candle_index, timestamp=fvg.timestamp,
+                            is_ifvg=True,
+                        ))
+                        logger.debug(
+                            "%s FVG mitigated with displacement (body=%.2f > %.1fx ATR=%.2f) -> %s IFVG [%.2f-%.2f]",
+                            fvg.direction.title(), candle_body,
+                            self.IFVG_ATR_MULTIPLIER, atr_14,
+                            inv_dir.title(), fvg.bottom, fvg.top,
+                        )
+                    else:
+                        logger.debug(
+                            "%s FVG mitigated (weak cross, no IFVG) [%.2f-%.2f]",
+                            fvg.direction.title(), fvg.bottom, fvg.top,
+                        )
+
+            # ── IFVG invalidation: price breaches opposite extreme ─────
+            else:
+                if fvg.direction == "bullish" and current_price < fvg.bottom:
+                    fvg.mitigated = True
+                    logger.debug("Bullish IFVG [%.2f-%.2f] invalidated at %.2f", fvg.bottom, fvg.top, current_price)
+                elif fvg.direction == "bearish" and current_price > fvg.top:
+                    fvg.mitigated = True
+                    logger.debug("Bearish IFVG [%.2f-%.2f] invalidated at %.2f", fvg.bottom, fvg.top, current_price)
+
+        self.fvgs.extend(new_ifvgs)
+        if len(self.fvgs) > FVG_MAX_HISTORY:
+            self.fvgs = self.fvgs[-FVG_MAX_HISTORY:]
+
         return newly_mitigated
 
     def get_active(
@@ -199,6 +269,19 @@ class FairValueGapDetector:
         if direction is not None:
             active = [fvg for fvg in active if fvg.direction == direction]
         return sorted(active, key=lambda fvg: fvg.timestamp)
+
+    def get_active_ifvgs(
+        self,
+        timeframe: Optional[str] = None,
+        direction: Optional[str] = None,
+    ) -> list[FVG]:
+        """Return active IFVGs (inversed FVGs), optionally filtered."""
+        active = [f for f in self.fvgs if not f.mitigated and f.is_ifvg]
+        if timeframe is not None:
+            active = [f for f in active if f.timeframe == timeframe]
+        if direction is not None:
+            active = [f for f in active if f.direction == direction]
+        return sorted(active, key=lambda f: f.timestamp)
 
     def get_nearest(
         self,
