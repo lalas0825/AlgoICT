@@ -220,6 +220,13 @@ class EngineState:
     # Dedup: signal IDs already executed this day — prevents same bar firing twice
     executed_signals: set = None
 
+    # Bar-level dedup: last bar timestamp dispatched to _on_new_bar
+    last_dispatched_bar_ts: Optional[Any] = None
+
+    # Cross-bar guard: timestamp of a signal currently being executed
+    # Prevents re-fire on the next bar while broker call is in-flight
+    pending_signal_ts: Optional[Any] = None
+
     def __post_init__(self):
         if self.bars_1min is None:
             self.bars_1min = pd.DataFrame(
@@ -980,12 +987,38 @@ async def _execute_signal(
         logger.error("Stop order failed: %s", exc)
         stop_order = None
 
+    # Resolve effective fill price: prefer broker-reported fill, fall back to
+    # latest bar close.  Market orders are async — the broker returns status=
+    # submitted before the fill lands, so filled_price is usually None here.
+    # Using the latest close is an acceptable proxy for the spread correction.
+    effective_fill = entry_order.filled_price
+    if effective_fill is None and not state.bars_1min.empty:
+        effective_fill = float(state.bars_1min["close"].iloc[-1])
+
+    # Recalculate target if it would be invalid at the current price.
+    # For longs  a Limit SELL must be ABOVE the market → target > effective_fill.
+    # For shorts a Limit BUY  must be BELOW the market → target < effective_fill.
+    target_pts = signal.target_price - signal.entry_price   # signed offset
+    adjusted_target = signal.target_price
+    if effective_fill is not None:
+        candidate = effective_fill + target_pts
+        is_invalid = (
+            (signal.direction == "long"  and signal.target_price <= effective_fill) or
+            (signal.direction == "short" and signal.target_price >= effective_fill)
+        )
+        if is_invalid:
+            adjusted_target = candidate
+            logger.warning(
+                "Target price %.2f invalid vs fill %.2f — adjusted to %.2f (%.1f pts offset preserved)",
+                signal.target_price, effective_fill, adjusted_target, target_pts,
+            )
+
     try:
         target_order = await broker.submit_limit_order(
             symbol=signal.symbol,
             side=exit_side,
             contracts=signal.contracts,
-            limit_price=signal.target_price,
+            limit_price=adjusted_target,
         )
     except Exception as exc:
         logger.error("Target order failed: %s", exc)
@@ -1323,7 +1356,14 @@ async def _on_new_bar(
             if signal is not None:
                 allowed, reason = components.risk.can_trade()
                 if allowed:
-                    await _execute_signal(signal, components, state)
+                    if state.pending_signal_ts is not None:
+                        logger.info("NY AM signal suppressed: pending execution at %s", state.pending_signal_ts)
+                    else:
+                        state.pending_signal_ts = signal.timestamp
+                        try:
+                            await _execute_signal(signal, components, state)
+                        finally:
+                            state.pending_signal_ts = None
                 else:
                     logger.info("NY AM signal suppressed: %s", reason)
         except Exception as exc:
@@ -1342,7 +1382,14 @@ async def _on_new_bar(
             if signal is not None:
                 allowed, reason = components.risk.can_trade()
                 if allowed:
-                    await _execute_signal(signal, components, state)
+                    if state.pending_signal_ts is not None:
+                        logger.info("Silver Bullet signal suppressed: pending execution at %s", state.pending_signal_ts)
+                    else:
+                        state.pending_signal_ts = signal.timestamp
+                        try:
+                            await _execute_signal(signal, components, state)
+                        finally:
+                            state.pending_signal_ts = None
                 else:
                     logger.info("Silver Bullet signal suppressed: %s", reason)
         except Exception as exc:
@@ -1582,6 +1629,12 @@ async def run(mode: str = "paper") -> None:
     # ── 2a. Register bar callback BEFORE connect so _on_open subscribes ─
     def _bar_callback(bar: dict):
         """Schedule async handling on the event loop."""
+        # Deduplicate: TopstepX delivers the same bar via 3 contract-ID streams.
+        # All 3 share the same timestamp — skip if already dispatched this bar.
+        bar_ts = bar.get("timestamp")
+        if bar_ts == state.last_dispatched_bar_ts:
+            return
+        state.last_dispatched_bar_ts = bar_ts
         asyncio.create_task(_on_new_bar(bar, components, state))
 
     components.broker.subscribe_bars(state.symbol, _bar_callback)
