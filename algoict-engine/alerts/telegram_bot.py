@@ -76,6 +76,156 @@ class TelegramBot:
     # Trade Alerts
     # ------------------------------------------------------------------ #
 
+    # ------------------------------------------------------------------ #
+    # Factor labels for breakdown rendering
+    # ------------------------------------------------------------------ #
+
+    _FACTOR_LABELS: dict = {
+        "liquidity_grab":        "Sweep",
+        "fair_value_gap":        "FVG",
+        "order_block":           "OB",
+        "market_structure_shift":"Structure",
+        "kill_zone":             "Kill Zone",
+        "ote_fibonacci":         "OTE Fib",
+        "htf_bias_aligned":      "HTF Bias",
+        "htf_ob_fvg_alignment":  "HTF OB/FVG",
+        "target_at_pdh_pdl":     "Target Level",
+        "sentiment_alignment":   "SWC",
+        "gex_wall_alignment":    "GEX Wall",
+        "gamma_regime":          "GEX Regime",
+        "vpin_validated_sweep":  "VPIN Sweep",
+        "vpin_quality_session":  "VPIN Session",
+    }
+
+    # ------------------------------------------------------------------ #
+    # Signal / Trade Alerts
+    # ------------------------------------------------------------------ #
+
+    async def send_signal_fired(
+        self,
+        signal,
+        vpin_value: Optional[float] = None,
+        vpin_zone: str = "unknown",
+        swc_mood: Optional[str] = None,
+        gex_status: str = "no data",
+        htf_daily: str = "n/a",
+        htf_weekly: str = "n/a",
+        size_pct: float = 1.0,
+    ) -> bool:
+        """Send the rich SIGNAL FIRED alert when a setup is confirmed."""
+        try:
+            direction = signal.direction.upper()
+            bd = signal.confluence_breakdown
+            reasons = getattr(signal, "confluence_reasons", [])
+
+            stop_pts  = abs(signal.entry_price - signal.stop_price)
+            tgt_pts   = abs(signal.target_price - signal.entry_price)
+            rr        = tgt_pts / stop_pts if stop_pts else 0.0
+            risk_usd  = stop_pts * 2.0 * signal.contracts  # MNQ $2/pt
+
+            stop_sign  = "-" if signal.direction == "long" else "+"
+            tgt_sign   = "+" if signal.direction == "long" else "-"
+
+            lines = [
+                "🔔 SIGNAL FIRED",
+                f"Strategy: {signal.strategy}",
+                f"Kill Zone: {signal.kill_zone}",
+                f"Direction: {direction}",
+                f"Confluence: {signal.confluence_score}/20",
+                "",
+                f"Entry:    ${signal.entry_price:,.2f}",
+                f"Stop:     ${signal.stop_price:,.2f} ({stop_sign}{stop_pts:.2f} pts)",
+                f"Target:   ${signal.target_price:,.2f} ({tgt_sign}{tgt_pts:.2f} pts, 1:{rr:.1f} RR)",
+                f"Contracts: {signal.contracts}x {signal.symbol}",
+                f"Risk:     ${risk_usd:,.0f}",
+                "",
+                "Breakdown:",
+            ]
+
+            # ICT scored factors — ✅ if in breakdown
+            ict_factors = [
+                ("liquidity_grab",        lambda: next((r for r in reasons if "sweep" in r), "swept")),
+                ("fair_value_gap",        lambda: next((r for r in reasons if "FVG" in r), "entry inside FVG")),
+                ("order_block",           lambda: next((r for r in reasons if "OB" in r), "entry inside OB")),
+                ("market_structure_shift",lambda: next((r for r in reasons if any(t in r for t in ("MSS","CHoCH","BOS"))), "confirmed")),
+                ("kill_zone",             lambda: signal.kill_zone),
+                ("ote_fibonacci",         lambda: "61.8-78.6%"),
+                ("htf_bias_aligned",      lambda: htf_daily),
+                ("htf_ob_fvg_alignment",  lambda: "HTF overlap"),
+                ("target_at_pdh_pdl",     lambda: "at key level"),
+                ("sentiment_alignment",   lambda: swc_mood or "aligned"),
+                ("gex_wall_alignment",    lambda: "GEX wall"),
+                ("gamma_regime",          lambda: "regime aligned"),
+                ("vpin_validated_sweep",  lambda: f"{vpin_value:.3f}" if vpin_value else ""),
+                ("vpin_quality_session",  lambda: "quality session"),
+            ]
+            for key, detail_fn in ict_factors:
+                if key in bd:
+                    pts = bd[key]
+                    label = self._FACTOR_LABELS.get(key, key)
+                    detail = detail_fn()
+                    lines.append(f"✅ {label}: {detail} (+{pts})")
+
+            # Contextual (not scored) — always shown
+            vpin_str = f"{vpin_value:.3f}" if vpin_value is not None else "N/A"
+            lines.append(f"⬜ VPIN: {vpin_str} ({vpin_zone})")
+            mood_str = swc_mood if swc_mood else "N/A"
+            lines.append(f"⬜ SWC: {mood_str}")
+            lines.append(f"⬜ GEX: {gex_status}")
+
+            lines += [
+                "",
+                f"HTF: daily={htf_daily}, weekly={htf_weekly} ({size_pct:.0%} size)",
+            ]
+
+            msg = "\n".join(lines)
+            await self._bot.send_message(chat_id=self._chat_id, text=msg)
+            logger.info("Signal fired alert sent: %s %s score=%d", signal.strategy, direction, signal.confluence_score)
+            return True
+
+        except Exception as exc:
+            logger.error("Failed to send signal fired alert: %s", exc)
+            return False
+
+    async def send_trade_opened(
+        self,
+        symbol: str,
+        direction: str,
+        contracts: int,
+        fill_price: float,
+    ) -> bool:
+        """Send confirmation when entry order is filled."""
+        try:
+            side = "BUY" if direction == "long" else "SELL"
+            msg = f"✅ TRADE OPENED: {side} {contracts}x {symbol} @ ${fill_price:,.2f}"
+            await self._bot.send_message(chat_id=self._chat_id, text=msg)
+            logger.info("Trade opened alert sent: %s %s %dx @ %.2f", symbol, side, contracts, fill_price)
+            return True
+        except Exception as exc:
+            logger.error("Failed to send trade opened alert: %s", exc)
+            return False
+
+    async def send_trade_closed(
+        self,
+        symbol: str,
+        pnl: float,
+        reason: str,
+        close_price: float,
+    ) -> bool:
+        """Send result when position closes (target hit or stop hit)."""
+        try:
+            is_win = pnl >= 0
+            emoji = "✅" if is_win else "❌"
+            outcome = "WIN" if is_win else "LOSS"
+            label = "target hit" if reason == "target" else "stop hit"
+            msg = f"{emoji} {outcome}: ${abs(pnl):+,.0f} ({label}) @ ${close_price:,.2f} | {symbol}"
+            await self._bot.send_message(chat_id=self._chat_id, text=msg)
+            logger.info("Trade closed alert sent: %s %s pnl=%.2f", symbol, outcome, pnl)
+            return True
+        except Exception as exc:
+            logger.error("Failed to send trade closed alert: %s", exc)
+            return False
+
     async def send_trade_alert(
         self,
         symbol: str,
@@ -86,23 +236,7 @@ class TelegramBot:
         pnl: Optional[float] = None,
         confluence_score: Optional[int] = None,
     ) -> bool:
-        """
-        Send a trade entry or exit alert.
-
-        If exit_price is None, it's an entry alert. Otherwise, it's an exit.
-
-        Parameters
-        ----------
-        symbol   : e.g. "MNQ", "TSLA"
-        side     : "BUY" or "SELL"
-        contracts: number of contracts
-        entry_price: entry price
-        exit_price: exit price (None for entry)
-        pnl: profit/loss (None for entry)
-        confluence_score: 0-20 confluence
-
-        Returns True on success.
-        """
+        """Legacy trade alert — kept for backward compatibility with existing callers."""
         try:
             side_upper = side.upper()
             is_entry = exit_price is None
@@ -117,17 +251,10 @@ class TelegramBot:
                 status = "EXIT (WIN)" if is_win else "EXIT (LOSS)"
                 price_line = f"Entry: ${entry_price:.2f} → Exit: ${exit_price:.2f}"
 
-            msg = f"""
-{emoji} {status}
-
-Symbol: {symbol}
-Side: {side_upper} {contracts}x
-{price_line}
-"""
+            msg = f"{emoji} {status}\nSymbol: {symbol}\nSide: {side_upper} {contracts}x\n{price_line}\n"
             if pnl is not None:
                 pnl_emoji = "📈" if pnl > 0 else "📉"
                 msg += f"P&L: {pnl_emoji} ${pnl:+,.2f}\n"
-
             if confluence_score is not None:
                 msg += f"Confluence: {confluence_score}/20\n"
 

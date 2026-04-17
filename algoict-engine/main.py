@@ -1051,18 +1051,56 @@ async def _execute_signal(
         except Exception as exc:
             logger.warning("Supabase signal write failed: %s", exc)
 
-    # Telegram alert
+    # Telegram — rich signal fired alert
     if components.telegram is not None:
         try:
-            await components.telegram.send_trade_alert(
-                symbol=signal.symbol,
-                side=side.upper(),
-                contracts=signal.contracts,
-                entry_price=signal.entry_price,
-                confluence_score=signal.confluence_score,
+            vs = state.vpin_status
+            vpin_val  = getattr(vs, "vpin",  None) if vs else None
+            vpin_zone = getattr(vs, "label", "unknown") if vs else "unknown"
+            swc_mood  = getattr(state.swc_snapshot, "mood", None) if state.swc_snapshot else None
+            gex_ok    = state.gex_snapshot is not None
+            gex_status = "active" if gex_ok else "no data"
+            size_pct  = getattr(components.risk, "position_multiplier", 1.0)
+
+            # HTF bias — recompute from latest bars (same as _log_bar_snapshot)
+            htf_daily = htf_weekly = "n/a"
+            try:
+                bars = state.bars_1min
+                if not bars.empty:
+                    tf_mgr = components.tf_manager
+                    df_d = tf_mgr.aggregate(bars, "D")
+                    df_w = tf_mgr.aggregate(bars, "W")
+                    bias = components.htf_bias.determine_bias(df_d, df_w, signal.entry_price)
+                    htf_daily  = getattr(bias, "daily_bias",  "n/a")
+                    htf_weekly = getattr(bias, "weekly_bias", "n/a")
+            except Exception:
+                pass
+
+            await components.telegram.send_signal_fired(
+                signal=signal,
+                vpin_value=vpin_val,
+                vpin_zone=vpin_zone,
+                swc_mood=swc_mood,
+                gex_status=gex_status,
+                htf_daily=htf_daily,
+                htf_weekly=htf_weekly,
+                size_pct=size_pct,
             )
         except Exception as exc:
-            logger.warning("Telegram alert failed: %s", exc)
+            logger.warning("Telegram signal fired alert failed: %s", exc)
+
+    # Telegram — trade opened (fill confirmation)
+    if components.telegram is not None:
+        try:
+            fill = entry_order.filled_price or signal.entry_price
+            await components.telegram.send_trade_opened(
+                symbol=signal.symbol,
+                direction=signal.direction,
+                contracts=signal.contracts,
+                fill_price=fill,
+            )
+        except Exception as exc:
+            logger.warning("Telegram trade opened alert failed: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -1489,6 +1527,7 @@ def _reset_for_new_day(components: Components, state: EngineState) -> None:
     state.swc_london_rescan_done = False
     state.swc_nyam_rescan_done = False
     state.executed_signals = set()
+    state.pending_signal_ts = None
 
     # ── Seed tracked_levels immediately so London KZ (01:00-04:00 CT)
     # has PDH/PDL/PWH/PWL available before pre-market runs at 06:00 CT.

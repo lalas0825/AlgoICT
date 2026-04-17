@@ -79,6 +79,7 @@ class Signal:
     contracts: int
     confluence_score: int
     confluence_breakdown: dict = field(default_factory=dict)
+    confluence_reasons: list = field(default_factory=list)
     timestamp: pd.Timestamp = None
     kill_zone: str = ""
 
@@ -342,6 +343,7 @@ class NYAMReversalStrategy:
             contracts=contracts,
             confluence_score=conf.total_score,
             confluence_breakdown=dict(conf.breakdown),
+            confluence_reasons=list(conf.reasons),
             timestamp=ts,
             kill_zone=active_zone,
         )
