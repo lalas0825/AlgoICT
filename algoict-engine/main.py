@@ -45,7 +45,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import atexit
 import logging
+import os
 import signal
 import sys
 from dataclasses import dataclass
@@ -1978,12 +1980,132 @@ def _confirm_live_mode() -> bool:
     return answer == "YES I CONFIRM"
 
 
+# ---------------------------------------------------------------------------
+# Single-instance lock (cross-process dedup defense)
+# ---------------------------------------------------------------------------
+#
+# On 2026-04-17 three zombie engine instances ran overnight (startup banners
+# 22:31 / 22:53 / 23:01 CT 2026-04-16). At 04:31 CT Friday a single London
+# ny_am signal fired 6 Market BUY orders — each instance independently
+# passed its per-process dedup (EngineState.executed_signals,
+# Strategy._last_evaluated_bar_ts) and submitted orders. In-process dedup
+# is necessary but not sufficient; concurrent processes must be prevented
+# at startup, before any component initialises.
+#
+# Cross-host distributed lock is NOT needed — the engine runs on one Windows
+# box. A PID file with liveness check is enough.
+
+_LOCK_PATH = Path(__file__).resolve().parent / ".engine.lock"
+
+
+def _is_pid_alive(pid: int) -> bool:
+    """Return True if a process with this PID is currently running.
+
+    Uses os.kill(pid, 0): zero signal, no-op if process exists, raises
+    ProcessLookupError if not. On Windows os.kill with signal 0 works the
+    same way for querying existence.
+    """
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except (ProcessLookupError, OSError):
+        # ProcessLookupError: definitely dead.
+        # OSError (PermissionError in particular on Windows): process exists
+        # but belongs to another user / is protected. Treat as alive to be
+        # safe — we'd rather fail-closed than fire duplicate orders.
+        import errno
+        if isinstance(sys.exc_info()[1], PermissionError):
+            return True
+        exc = sys.exc_info()[1]
+        if hasattr(exc, "errno") and exc.errno == errno.EPERM:
+            return True
+        return False
+
+
+def _release_engine_lock() -> None:
+    """Remove the lock file if we own it. Safe to call multiple times."""
+    try:
+        if not _LOCK_PATH.exists():
+            return
+        try:
+            stored_pid = int(_LOCK_PATH.read_text().strip())
+        except (ValueError, OSError):
+            stored_pid = -1
+        if stored_pid == os.getpid():
+            _LOCK_PATH.unlink(missing_ok=True)
+    except Exception:
+        # Never let cleanup crash the shutdown path.
+        pass
+
+
+def _acquire_engine_lock() -> bool:
+    """Refuse to start if another engine instance is already running.
+
+    Returns True on success (lock acquired), False if another live instance
+    owns the lock. Registers atexit + signal handlers so the lock is
+    released on normal exit, Ctrl-C, or SIGTERM.
+    """
+    if _LOCK_PATH.exists():
+        try:
+            stored_pid = int(_LOCK_PATH.read_text().strip())
+        except (ValueError, OSError):
+            stored_pid = -1
+        if stored_pid > 0 and stored_pid != os.getpid() and _is_pid_alive(stored_pid):
+            print(
+                f"[FATAL] Another AlgoICT engine is already running "
+                f"(PID {stored_pid}). Kill it first:\n"
+                f"         taskkill /F /PID {stored_pid}\n"
+                f"         (or delete {_LOCK_PATH} if you are sure no other "
+                f"instance is alive)",
+                file=sys.stderr,
+            )
+            return False
+        # Stale lock — previous process exited without cleanup. Reclaim.
+        try:
+            _LOCK_PATH.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    try:
+        _LOCK_PATH.write_text(str(os.getpid()))
+    except OSError as exc:
+        print(f"[FATAL] Cannot write lock file {_LOCK_PATH}: {exc}", file=sys.stderr)
+        return False
+
+    atexit.register(_release_engine_lock)
+
+    def _signal_release(signum, _frame):
+        _release_engine_lock()
+        # Propagate the default behavior for the signal.
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
+
+    # SIGTERM on POSIX / taskkill triggers it on Windows for most cases;
+    # SIGINT covers Ctrl-C. SIGBREAK on Windows covers Ctrl-Break.
+    for sig_name in ("SIGINT", "SIGTERM", "SIGBREAK"):
+        sig = getattr(signal, sig_name, None)
+        if sig is not None:
+            try:
+                signal.signal(sig, _signal_release)
+            except (ValueError, OSError):
+                # Some signals aren't settable from non-main threads.
+                pass
+
+    return True
+
+
 def main() -> int:
     args = _parse_args()
+
+    if not _acquire_engine_lock():
+        return 1
 
     if args.mode == "live":
         if not _confirm_live_mode():
             print("Live mode aborted.")
+            _release_engine_lock()
             return 1
 
     try:
@@ -1992,6 +2114,8 @@ def main() -> int:
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
         return 130
+    finally:
+        _release_engine_lock()
 
 
 if __name__ == "__main__":
