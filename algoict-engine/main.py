@@ -899,6 +899,16 @@ def _log_bar_snapshot(components: Components, state: EngineState, ts) -> None:
         liq_total = len(tracked)
         liq_swept = sum(1 for lvl in tracked if getattr(lvl, "swept", False))
 
+        # Top-3 FVGs closest to current price (all timeframes + directions)
+        all_fvgs = det["fvg"].get_active()
+        all_fvgs.sort(key=lambda f: abs((f.top + f.bottom) / 2 - close))
+        top3 = all_fvgs[:3]
+        top3_str = ", ".join(
+            f"{f.bottom:.0f}-{f.top:.0f} {f.direction[:4]} {f.timeframe} "
+            f"{((f.top + f.bottom) / 2 - close):+.0f}pts"
+            for f in top3
+        ) or "none"
+
         vpin_val = getattr(state.vpin_status, "vpin", None) if state.vpin_status else None
         vpin_str = f"{vpin_val:.3f}" if vpin_val is not None else "—"
 
@@ -918,10 +928,10 @@ def _log_bar_snapshot(components: Components, state: EngineState, ts) -> None:
             logger.debug("bar-snapshot bias compute failed: %s", bexc)
 
         logger.info(
-            "BAR [%s CT] close=%.2f rth=%s kz=%s | sw=%d fvg=%d ifvg=%d ob=%d struct=%d liq=%d(swept=%d) | VPIN=%s | bias=%s",
+            "BAR [%s CT] close=%.2f rth=%s kz=%s | sw=%d fvg=%d ifvg=%d ob=%d struct=%d liq=%d(swept=%d) | VPIN=%s | bias=%s | fvg_top3=[%s]",
             ts.strftime("%H:%M"), close, "Y" if in_rth else "N", kz,
             sw_count, fvg_count, ifvg_count, ob_count, struct_count, liq_total, liq_swept,
-            vpin_str, bias_str,
+            vpin_str, bias_str, top3_str,
         )
     except Exception as exc:
         logger.debug("bar-snapshot log failed: %s", exc)
