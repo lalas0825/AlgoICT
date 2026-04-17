@@ -130,6 +130,9 @@ class NYAMReversalStrategy:
         self.htf_bias_fn = htf_bias_fn
         self.trades_today: int = 0
         self._trades_by_zone: dict[str, int] = {z: 0 for z in self.KILL_ZONES}
+        self._last_evaluated_bar_ts = None
+        # Ablation toggles (set via run_backtest CLI flags)
+        self._ifvg_enabled: bool = True
 
     # ------------------------------------------------------------------ #
     # Public API                                                           #
@@ -152,6 +155,10 @@ class NYAMReversalStrategy:
         last_5 = candles_5min.iloc[-1]
         ts = candles_5min.index[-1]
         last_close = float(last_5["close"])
+
+        if ts == self._last_evaluated_bar_ts:
+            return None
+        self._last_evaluated_bar_ts = ts
 
         active_zone = next(
             (kz for kz in self.KILL_ZONES if self.session.is_kill_zone(ts, kz)),
@@ -212,13 +219,19 @@ class NYAMReversalStrategy:
             return None
         last_struct = aligned[-1]
 
-        # ── 4. 5min entry: FVG + OB + Displacement + Sweep ─────────────
+        # ── 4. 5min entry: FVG (or IFVG) + OB + Displacement + Sweep ──
         fvgs = self.detectors["fvg"].get_active(
             timeframe="5min", direction=bias_dir,
         )
+        used_ifvg = False
+        if not fvgs and self._ifvg_enabled:
+            fvgs = self.detectors["fvg"].get_active_ifvgs(
+                timeframe="5min", direction=bias_dir,
+            )
+            used_ifvg = bool(fvgs)
         if not fvgs:
             logger.info(
-                "EVAL ny_am [%s]: confluence=N/A, signal=reject, reason=no_valid_setup (no_fvg)",
+                "EVAL ny_am [%s]: confluence=N/A, signal=reject, reason=no_valid_setup (no_fvg_or_ifvg)",
                 _ts_hm(ts),
             )
             return None
@@ -333,15 +346,33 @@ class NYAMReversalStrategy:
             kill_zone=active_zone,
         )
 
-        self.trades_today += 1
-        self._trades_by_zone[active_zone] = self._trades_by_zone.get(active_zone, 0) + 1
+        ifvg_tag = " (IFVG)" if used_ifvg else ""
         logger.info(
-            "EVAL ny_am [%s]: confluence=%d/20, signal=fire, reason=fired | %s",
-            _ts_hm(ts), signal.confluence_score, signal,
+            "EVAL ny_am [%s]: confluence=%d/20, signal=fire%s | %s",
+            _ts_hm(ts), signal.confluence_score, ifvg_tag, signal,
         )
         return signal
+
+    def notify_trade_executed(self, signal) -> None:
+        """Called by the main loop AFTER the broker confirms entry fill.
+
+        Previously the per-zone and daily counters were incremented inside
+        ``evaluate()`` the moment a signal was built. If the entry order
+        then failed (broker rejection, disconnect, paper-mode quirk), the
+        counter stayed bumped and subsequent bars rejected the KZ with
+        ``max_trades`` despite zero positions ever opening. This bug kept
+        the live paper engine from ever executing a trade in London KZ.
+
+        With the split, ``evaluate()`` only emits the signal; counters
+        only advance on a confirmed execution.
+        """
+        zone = getattr(signal, "kill_zone", "") or ""
+        if zone in self._trades_by_zone:
+            self._trades_by_zone[zone] = self._trades_by_zone[zone] + 1
+        self.trades_today += 1
 
     def reset_daily(self) -> None:
         """Reset trade counters — call at session start."""
         self.trades_today = 0
         self._trades_by_zone = {z: 0 for z in self.KILL_ZONES}
+        self._last_evaluated_bar_ts = None

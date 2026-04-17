@@ -135,6 +135,7 @@ class SilverBulletStrategy:
         self.htf_bias_fn = htf_bias_fn
         self.trades_today: int = 0
         self._trades_by_zone: dict[str, int] = {z: 0 for z in self.KILL_ZONES}
+        self._last_evaluated_bar_ts = None
 
     # ------------------------------------------------------------------ #
     # Public API                                                           #
@@ -157,6 +158,10 @@ class SilverBulletStrategy:
         last_1 = candles_1min.iloc[-1]
         ts = candles_1min.index[-1]
         last_close = float(last_1["close"])
+
+        if ts == self._last_evaluated_bar_ts:
+            return None
+        self._last_evaluated_bar_ts = ts
 
         active_zone = next(
             (kz for kz in self.KILL_ZONES if self.session.is_kill_zone(ts, kz)),
@@ -347,15 +352,27 @@ class SilverBulletStrategy:
             kill_zone=active_zone,
         )
 
-        self.trades_today += 1
-        self._trades_by_zone[active_zone] = self._trades_by_zone.get(active_zone, 0) + 1
         logger.info(
             "EVAL silver_bullet [%s]: confluence=%d/20, signal=fire, reason=fired | %s",
             _ts_hm(ts), signal.confluence_score, signal,
         )
         return signal
 
+    def notify_trade_executed(self, signal) -> None:
+        """Advance counters only after broker-confirmed entry.
+
+        Previously the per-zone counter incremented inside ``evaluate()``
+        at signal build. A failed entry order left the counter bumped
+        and blocked the KZ with ``max_trades`` despite no position open.
+        Split: ``evaluate()`` builds signal only; counters advance here.
+        """
+        zone = getattr(signal, "kill_zone", "") or ""
+        if zone in self._trades_by_zone:
+            self._trades_by_zone[zone] = self._trades_by_zone[zone] + 1
+        self.trades_today += 1
+
     def reset_daily(self) -> None:
         """Reset trade counters — call at session start."""
         self.trades_today = 0
         self._trades_by_zone = {z: 0 for z in self.KILL_ZONES}
+        self._last_evaluated_bar_ts = None

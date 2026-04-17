@@ -217,6 +217,9 @@ class EngineState:
     # Open position tracking — {order_id: {...}}
     open_positions: dict = None
 
+    # Dedup: signal IDs already executed this day — prevents same bar firing twice
+    executed_signals: set = None
+
     def __post_init__(self):
         if self.bars_1min is None:
             self.bars_1min = pd.DataFrame(
@@ -226,6 +229,8 @@ class EngineState:
             self.last_completed_tf_ts = {}
         if self.open_positions is None:
             self.open_positions = {}
+        if self.executed_signals is None:
+            self.executed_signals = set()
 
 
 # ---------------------------------------------------------------------------
@@ -794,7 +799,27 @@ def _update_detectors(
             components.detectors["fvg"].detect(df_5min, "5min")
             components.detectors["ob"].detect(df_5min, "5min")
             components.detectors["displacement"].detect(df_5min, timeframe="5min")
-            components.detectors["fvg"].update_mitigation(float(df_5min.iloc[-1]["close"]))
+            # Compute candle body + ATR for IFVG displacement gate
+            last_5 = df_5min.iloc[-1]
+            _close_5 = float(last_5["close"])
+            _body_5 = abs(float(last_5["close"]) - float(last_5["open"]))
+            _atr_5 = None
+            if len(df_5min) >= 15:
+                import numpy as np
+                _highs = df_5min["high"].values[-14:]
+                _lows = df_5min["low"].values[-14:]
+                _closes = df_5min["close"].values[-15:-1]
+                _tr = np.maximum(
+                    _highs - _lows,
+                    np.maximum(
+                        np.abs(_highs - _closes),
+                        np.abs(_lows - _closes),
+                    ),
+                )
+                _atr_5 = float(_tr.mean())
+            components.detectors["fvg"].update_mitigation(
+                _close_5, candle_body=_body_5, atr_14=_atr_5,
+            )
             components.detectors["ob"].update_mitigation(df_5min)
 
             # ── Liquidity: check sweeps on the just-closed 5min candle ──
@@ -857,7 +882,9 @@ def _log_bar_snapshot(components: Components, state: EngineState, ts) -> None:
         det = components.detectors
         all_swings = getattr(det["swing"], "swing_points", [])
         sw_count = sum(1 for sp in all_swings if getattr(sp, "timeframe", "") == "5min")
-        fvg_count = len(det["fvg"].get_active(timeframe="5min"))
+        fvg_active = det["fvg"].get_active(timeframe="5min")
+        fvg_count = len(fvg_active)
+        ifvg_count = len(det["fvg"].get_active_ifvgs(timeframe="5min"))
         ob_count = len(det["ob"].get_active(timeframe="5min"))
         struct_events = det["structure"].get_events(timeframe="15min")
         struct_count = len(struct_events)
@@ -884,9 +911,9 @@ def _log_bar_snapshot(components: Components, state: EngineState, ts) -> None:
             logger.debug("bar-snapshot bias compute failed: %s", bexc)
 
         logger.info(
-            "BAR [%s CT] close=%.2f rth=%s kz=%s | sw=%d fvg=%d ob=%d struct=%d liq=%d(swept=%d) | VPIN=%s | bias=%s",
+            "BAR [%s CT] close=%.2f rth=%s kz=%s | sw=%d fvg=%d ifvg=%d ob=%d struct=%d liq=%d(swept=%d) | VPIN=%s | bias=%s",
             ts.strftime("%H:%M"), close, "Y" if in_rth else "N", kz,
-            sw_count, fvg_count, ob_count, struct_count, liq_total, liq_swept,
+            sw_count, fvg_count, ifvg_count, ob_count, struct_count, liq_total, liq_swept,
             vpin_str, bias_str,
         )
     except Exception as exc:
@@ -903,6 +930,12 @@ async def _execute_signal(
     state: EngineState,
 ) -> None:
     """Submit entry + stop + target orders, log, and alert."""
+    signal_id = f"{signal.strategy}_{signal.direction}_{signal.timestamp}"
+    if signal_id in state.executed_signals:
+        logger.info("Signal %s already executed this bar — skipping duplicate", signal_id)
+        return
+    state.executed_signals.add(signal_id)
+
     logger.info("EXECUTING signal: %s", signal)
 
     broker = components.broker
@@ -918,6 +951,23 @@ async def _execute_signal(
     except Exception as exc:
         logger.error("Entry order failed: %s", exc)
         return
+
+    # Broker confirmed the entry — advance per-zone + daily trade counters.
+    # Doing this here (not inside strategy.evaluate()) ensures a rejected
+    # or timed-out order does NOT consume the KZ budget. Previously the
+    # counter lived inside evaluate(), so failed entries left London
+    # permanently max_trades-blocked with zero positions open.
+    strat_name = getattr(signal, "strategy", "")
+    strat = None
+    if strat_name == "ny_am_reversal":
+        strat = getattr(components, "ny_am_strategy", None)
+    elif strat_name == "silver_bullet":
+        strat = getattr(components, "silver_bullet_strategy", None)
+    if strat is not None and hasattr(strat, "notify_trade_executed"):
+        try:
+            strat.notify_trade_executed(signal)
+        except Exception as exc:
+            logger.warning("notify_trade_executed failed: %s", exc)
 
     try:
         stop_order = await broker.submit_stop_order(
@@ -950,7 +1000,12 @@ async def _execute_signal(
         "opened_at": datetime.now(timezone.utc),
     }
 
-    # Log to Supabase
+    # Log to Supabase. Only fields KNOWN to exist in the `signals` table
+    # schema are sent. Previously the code spread **signal.confluence_breakdown
+    # which blew up the whole insert whenever the scorer added a new key
+    # (e.g. htf_bias_aligned) without a matching DB migration — PGRST204
+    # swallowed the trade log. Breakdown is kept out of DB until a JSONB
+    # migration lands; the raw score is still persisted.
     if components.supabase is not None:
         try:
             components.supabase.write_signal({
@@ -959,7 +1014,6 @@ async def _execute_signal(
                 "signal_type": signal.direction,
                 "price": signal.entry_price,
                 "confluence_score": signal.confluence_score,
-                **signal.confluence_breakdown,
             })
         except Exception as exc:
             logger.warning("Supabase signal write failed: %s", exc)
@@ -1387,6 +1441,7 @@ def _reset_for_new_day(components: Components, state: EngineState) -> None:
     state.swc_mood_sent_today = False
     state.swc_london_rescan_done = False
     state.swc_nyam_rescan_done = False
+    state.executed_signals = set()
 
     # ── Seed tracked_levels immediately so London KZ (01:00-04:00 CT)
     # has PDH/PDL/PWH/PWL available before pre-market runs at 06:00 CT.
