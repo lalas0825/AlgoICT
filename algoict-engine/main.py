@@ -963,6 +963,7 @@ def _log_bar_snapshot(components: Components, state: EngineState, ts) -> None:
         # HTF bias (swing-based). Cheap to recompute per bar — ~7 daily + 2-3
         # weekly bars only. Lets us see live bias evolution in the log.
         bias_str = "n/a"
+        fvg_5m_dir = 0
         try:
             tf_mgr = components.tf_manager
             df_daily = tf_mgr.aggregate(bars, "D")
@@ -972,15 +973,17 @@ def _log_bar_snapshot(components: Components, state: EngineState, ts) -> None:
                 f"{bias.direction}({bias.premium_discount}) "
                 f"d={bias.daily_bias} w={bias.weekly_bias}"
             )
+            bias_dir = bias.direction  # 'bullish' | 'bearish'
+            fvg_5m_dir = len(det["fvg"].get_active(timeframe="5min", direction=bias_dir))
         except Exception as bexc:
             logger.debug("bar-snapshot bias compute failed: %s", bexc)
 
         ts_str = ts.strftime("%H:%M")
         rth_str = "Y" if in_rth else "N"
         logger.info(
-            "BAR [%s CT] close=%.2f rth=%s kz=%s | sw=%d fvg=%d ifvg=%d ob=%d struct=%d liq=%d(swept=%d) | VPIN=%s | bias=%s",
+            "BAR [%s CT] close=%.2f rth=%s kz=%s | sw=%d fvg=%d(5m_dir=%d) ifvg=%d ob=%d struct=%d liq=%d(swept=%d) | VPIN=%s | bias=%s",
             ts_str, close, rth_str, kz,
-            sw_count, fvg_count, ifvg_count, ob_count, struct_count, liq_total, liq_swept,
+            sw_count, fvg_count, fvg_5m_dir, ifvg_count, ob_count, struct_count, liq_total, liq_swept,
             vpin_str, bias_str,
         )
         logger.info(

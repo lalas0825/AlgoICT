@@ -247,6 +247,15 @@ SWING_MAX_HISTORY = 50   # Keep last 50 swing points per detector instance
 GEX_REFRESH_INTERVAL_MIN = 30  # Refresh GEX data every 30 minutes
 
 # ---------------------------------------------------------------------------
+# FVG Mitigation Ratio
+# ICT standard: 50% (midpoint). Extended to 75% to keep FVGs alive longer,
+# allowing more time for price to return to the gap after a sweep.
+# Bearish FVG: mitigated when price >= bottom + ratio * range (filling upward)
+# Bullish FVG: mitigated when price <= top   - ratio * range (filling downward)
+# ---------------------------------------------------------------------------
+FVG_MITIGATION_RATIO = 0.75
+
+# ---------------------------------------------------------------------------
 # Database Tables
 # ---------------------------------------------------------------------------
 DB_TABLES = [

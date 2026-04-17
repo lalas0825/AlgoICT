@@ -37,6 +37,7 @@ import config
 logger = logging.getLogger(__name__)
 
 FVG_MAX_HISTORY = getattr(config, "FVG_MAX_HISTORY", 100)
+FVG_MITIGATION_RATIO = getattr(config, "FVG_MITIGATION_RATIO", 0.75)
 
 
 @dataclass
@@ -161,8 +162,14 @@ class FairValueGapDetector:
         atr_14: Optional[float] = None,
     ) -> list[FVG]:
         """
-        Mark active FVGs as mitigated when price reaches their 50% level.
-        Also invalidate active IFVGs whose opposite extreme is breached.
+        Mark active FVGs as mitigated when price fills FVG_MITIGATION_RATIO
+        of the gap from the entry side (M17a, configurable; 0.75 default vs
+        ICT standard 0.50 — FVGs survive longer so post-sweep returns still
+        qualify). Also invalidate active IFVGs whose opposite extreme is
+        breached.
+
+        Bullish FVG: mitigated when price <= top   - ratio * (top - bottom)
+        Bearish FVG: mitigated when price >= bottom + ratio * (top - bottom)
 
         IFVG conversion: a mitigated FVG is promoted to IFVG (inverted
         direction) ONLY when the crossing candle shows displacement — i.e.
@@ -198,14 +205,18 @@ class FairValueGapDetector:
             if fvg.mitigated:
                 continue
 
-            # ── Regular FVG mitigation ─────────────────────────────────
+            # ── Regular FVG mitigation (uses configurable ratio) ───────
             if not fvg.is_ifvg:
-                mid = fvg.midpoint
+                gap = fvg.top - fvg.bottom
                 mitigated_now = False
-                if fvg.direction == "bullish" and current_price <= mid:
-                    mitigated_now = True
-                elif fvg.direction == "bearish" and current_price >= mid:
-                    mitigated_now = True
+                if fvg.direction == "bullish":
+                    mitigation_level = fvg.top - FVG_MITIGATION_RATIO * gap
+                    if current_price <= mitigation_level:
+                        mitigated_now = True
+                elif fvg.direction == "bearish":
+                    mitigation_level = fvg.bottom + FVG_MITIGATION_RATIO * gap
+                    if current_price >= mitigation_level:
+                        mitigated_now = True
 
                 if mitigated_now:
                     fvg.mitigated = True
@@ -220,15 +231,17 @@ class FairValueGapDetector:
                             is_ifvg=True,
                         ))
                         logger.debug(
-                            "%s FVG mitigated with displacement (body=%.2f > %.1fx ATR=%.2f) -> %s IFVG [%.2f-%.2f]",
-                            fvg.direction.title(), candle_body,
-                            self.IFVG_ATR_MULTIPLIER, atr_14,
+                            "%s FVG mitigated (ratio=%.2f) with displacement "
+                            "(body=%.2f > %.1fx ATR=%.2f) -> %s IFVG [%.2f-%.2f]",
+                            fvg.direction.title(), FVG_MITIGATION_RATIO,
+                            candle_body, self.IFVG_ATR_MULTIPLIER, atr_14,
                             inv_dir.title(), fvg.bottom, fvg.top,
                         )
                     else:
                         logger.debug(
-                            "%s FVG mitigated (weak cross, no IFVG) [%.2f-%.2f]",
-                            fvg.direction.title(), fvg.bottom, fvg.top,
+                            "%s FVG mitigated (ratio=%.2f, weak cross, no IFVG) [%.2f-%.2f]",
+                            fvg.direction.title(), FVG_MITIGATION_RATIO,
+                            fvg.bottom, fvg.top,
                         )
 
             # ── IFVG invalidation: price breaches opposite extreme ─────
@@ -243,7 +256,6 @@ class FairValueGapDetector:
         self.fvgs.extend(new_ifvgs)
         if len(self.fvgs) > FVG_MAX_HISTORY:
             self.fvgs = self.fvgs[-FVG_MAX_HISTORY:]
-
         return newly_mitigated
 
     def get_active(
