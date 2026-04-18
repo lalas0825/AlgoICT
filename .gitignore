@@ -35,3 +35,13 @@ Thumbs.db
 # Node (dashboard)
 node_modules/
 .next/
+
+# Engine logs (local only)
+algoict-engine/engine.log
+algoict-engine/engine_*.log
+algoict-engine/strategy_lab*.log
+.claude/worktrees/
+# Ablation scratch
+abl_*.json
+abl_*_out.txt
+
