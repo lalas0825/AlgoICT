@@ -161,8 +161,15 @@ class Backtester:
         risk_manager,
         tf_manager,
         session_manager,
-        trade_management: str = "fixed",
+        trade_management: Optional[str] = None,
     ):
+        # Default to config.TRADE_MANAGEMENT so backtest and live share the
+        # same exit regime out of the box. Prior default "fixed" silently
+        # diverged from live (which reads config directly) — meta-audit
+        # 2026-04-17 flagged every backtest this week ran fixed exits
+        # while live ran trailing. Explicit arg still wins.
+        if trade_management is None:
+            trade_management = getattr(config, "TRADE_MANAGEMENT", "fixed")
         if trade_management not in VALID_TRADE_MGMT:
             raise ValueError(
                 f"trade_management must be one of {VALID_TRADE_MGMT}, got {trade_management!r}"
@@ -616,6 +623,35 @@ class Backtester:
         fvg = d.get("fvg")
         if fvg is not None and not df_entry.empty:
             fvg.detect(df_entry, entry_tf)
+            # Age active FVGs against the latest close. Without this call
+            # FVGs are never marked mitigated AND IFVGs are never born —
+            # the backtest used to see a strictly monotonic FVG pool while
+            # live saw a realistic pool that turns over. Meta-audit
+            # 2026-04-17 flagged this as the largest backtest/live
+            # asymmetry. candle_body + atr_14 are computed on the entry
+            # TF (mirrors main.py:855-870). When the window is too small
+            # for a 14-period ATR, pass None — fvg.update_mitigation
+            # degrades to "no IFVG conversion" and just ages FVGs.
+            last_bar = df_entry.iloc[-1]
+            close_price = float(last_bar["close"])
+            body_px = abs(float(last_bar["close"]) - float(last_bar["open"]))
+            atr_14: Optional[float] = None
+            if len(df_entry) >= 15:
+                import numpy as _np
+                highs = df_entry["high"].values[-14:]
+                lows = df_entry["low"].values[-14:]
+                prev_closes = df_entry["close"].values[-15:-1]
+                tr = _np.maximum(
+                    highs - lows,
+                    _np.maximum(
+                        _np.abs(highs - prev_closes),
+                        _np.abs(lows - prev_closes),
+                    ),
+                )
+                atr_14 = float(tr.mean())
+            fvg.update_mitigation(
+                close_price, candle_body=body_px, atr_14=atr_14,
+            )
 
         ob = d.get("ob")
         if ob is not None and not df_entry.empty:

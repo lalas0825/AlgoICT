@@ -297,12 +297,17 @@ def build_backtester(
     df_1min: Optional[pd.DataFrame] = None,
     dynamic_bias: bool = False,
     topstep_mode: bool = False,
+    # MLL defaults aligned with live (main.py + risk_manager.py). Prior
+    # 0.80/0.95 here diverged from 0.60/0.85 everywhere else — meta-audit
+    # 2026-04-17 flagged it as live-vs-backtest parity break.
     mll_warning_pct: float = 0.40,
-    mll_caution_pct: float = 0.80,
-    mll_stop_pct: float = 0.95,
+    mll_caution_pct: float = 0.60,
+    mll_stop_pct: float = 0.85,
     ny_am_only: bool = False,
     ifvg_enabled: bool = True,
-    trade_management: str = "fixed",
+    # None → fall back to config.TRADE_MANAGEMENT (default "trailing") so
+    # backtest and live agree on exit regime unless caller opts in.
+    trade_management: Optional[str] = None,
     kill_zones_override: Optional[tuple] = None,
 ) -> tuple[Backtester, dict]:
     """
@@ -867,14 +872,14 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--trade-management",
-        default="fixed",
+        default=None,  # None → fall back to config.TRADE_MANAGEMENT at Backtester ctor
         choices=("fixed", "partials_be", "trailing"),
         help=(
             "Exit mode: "
             "fixed=standard SL/TP; "
             "partials_be=close 50%% at 1R + move stop to BE; "
             "trailing=no fixed target, trail last 5min swing. "
-            "Default: fixed"
+            "Default: config.TRADE_MANAGEMENT (currently: trailing) — matches live."
         ),
     )
     p.add_argument(

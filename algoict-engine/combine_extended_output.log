@@ -1,0 +1,246 @@
+
+=== AlgoICT Extended Combine Simulator ===
+Config: NYAM London-only, trailing stop
+Years: [2023, 2024, 2025]
+
+Loading C:\Users\lalas\OneDrive\Desktop\Developer\AI\Projects\AlgoICT\data\nq_1minute.csv...
+Loaded 2,559,241 bars in 10.8s
+
+  [Running backtest 2023]...
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-805.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-869.00)
+  2023: 500 trades  WR=53.8%  P&L=$+168,272  (972s)
+
+  [Running backtest 2024]...
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-941.00)
+  2024: 504 trades  WR=50.2%  P&L=$+144,937  (1133s)
+
+  [Running backtest 2025]...
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-799.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-849.00)
+  2025: 146 trades  WR=45.9%  P&L=$+32,507  (416s)
+
+================================================================================
+  COMBINE SIMULATOR RESULTS
+================================================================================
+
+  ── $50K  Combine 2023 (500 trades) ──
+    Attempt  1: FAIL  mll_breach on 2023-03-14: balance=$71849.50 (peak_
+    Attempt  2: FAIL  mll_breach on 2023-04-11: balance=$54237.00 (peak_
+    Attempt  3: FAIL  mll_breach on 2023-09-11: balance=$134118.50 (peak
+    Attempt  4: PASS  cal_days=4  pnl=$+58,957
+    Attempt  5: PASS  cal_days=3  pnl=$+54,952
+    Attempt  6: PASS  cal_days=12  pnl=$+50,972
+    Attempt  7: PASS  cal_days=8  pnl=$+43,501
+    Attempt  8: PASS  cal_days=22  pnl=$+37,502
+    Attempt  9: PASS  cal_days=13  pnl=$+33,539
+    Attempt 10: PASS  cal_days=7  pnl=$+29,137
+    Attempt 11: PASS  cal_days=3  pnl=$+25,913
+    Attempt 12: PASS  cal_days=3  pnl=$+22,583
+    Attempt 13: PASS  cal_days=9  pnl=$+19,162
+    Attempt 14: PASS  cal_days=8  pnl=$+15,570
+    Attempt 15: PASS  cal_days=3  pnl=$+6,040
+    Attempt 16: FAIL  profit_target_not_reached: pnl=$1540.00 < target=$
+
+  ── $150K Combine 2023 (500 trades) ──
+    Attempt  1: PASS  cal_days=24  pnl=$+168,272
+    Attempt  2: PASS  cal_days=29  pnl=$+158,300
+    Attempt  3: PASS  cal_days=49  pnl=$+149,212
+    Attempt  4: PASS  cal_days=22  pnl=$+139,658
+    Attempt  5: PASS  cal_days=9  pnl=$+129,397
+    Attempt  6: PASS  cal_days=19  pnl=$+111,024
+    Attempt  7: PASS  cal_days=37  pnl=$+99,853
+    Attempt  8: PASS  cal_days=20  pnl=$+90,788
+    Attempt  9: PASS  cal_days=8  pnl=$+80,649
+    Attempt 10: PASS  cal_days=14  pnl=$+68,735
+    Attempt 11: PASS  cal_days=28  pnl=$+59,316
+    Attempt 12: PASS  cal_days=19  pnl=$+49,472
+    Attempt 13: PASS  cal_days=37  pnl=$+37,502
+    Attempt 14: PASS  cal_days=14  pnl=$+28,137
+    Attempt 15: PASS  cal_days=18  pnl=$+19,096
+    Attempt 16: FAIL  profit_target_not_reached: pnl=$6040.00 < target=$
+
+  ── $50K  Combine 2024 (504 trades) ──
+    Attempt  1: FAIL  mll_breach on 2024-02-02: balance=$66689.00 (peak_
+    Attempt  2: FAIL  mll_breach on 2024-11-04: balance=$159716.50 (peak
+    Attempt  3: FAIL  mll_breach on 2024-12-02: balance=$57111.00 (peak_
+    Attempt  4: PASS  cal_days=11  pnl=$+11,900
+    Attempt  5: PASS  cal_days=4  pnl=$+8,008
+    Attempt  6: FAIL  consistency_rule_violated: best_day=$2914 >= 50% o
+
+  ── $150K Combine 2024 (504 trades) ──
+    Attempt  1: PASS  cal_days=10  pnl=$+144,937
+    Attempt  2: PASS  cal_days=31  pnl=$+130,841
+    Attempt  3: PASS  cal_days=41  pnl=$+121,235
+    Attempt  4: PASS  cal_days=24  pnl=$+111,941
+    Attempt  5: PASS  cal_days=1  pnl=$+102,423
+    Attempt  6: PASS  cal_days=30  pnl=$+87,937
+    Attempt  7: PASS  cal_days=28  pnl=$+78,534
+    Attempt  8: PASS  cal_days=19  pnl=$+68,289
+    Attempt  9: PASS  cal_days=24  pnl=$+59,117
+    Attempt 10: PASS  cal_days=19  pnl=$+49,776
+    Attempt 11: PASS  cal_days=23  pnl=$+40,591
+    Attempt 12: PASS  cal_days=35  pnl=$+30,644
+    Attempt 13: PASS  cal_days=39  pnl=$+19,263
+    Attempt 14: PASS  cal_days=31  pnl=$+9,843
+    Attempt 15: FAIL  insufficient_trading_days: 3 < 5
+
+  ── $50K  Combine 2025 (146 trades) ──
+    Attempt  1: FAIL  mll_breach on 2025-02-04: balance=$65905.00 (peak_
+    Attempt  2: FAIL  mll_breach on 2025-03-07: balance=$58726.00 (peak_
+    Attempt  3: FAIL  mll_breach on 2025-03-20: balance=$50060.50 (peak_
+    Attempt  4: PASS  cal_days=15  pnl=$+8,051
+    Attempt  5: FAIL  consistency_rule_violated: best_day=$3220 >= 50% o
+
+  ── $150K Combine 2025 (146 trades) ──
+    Attempt  1: PASS  cal_days=19  pnl=$+32,507
+    Attempt  2: PASS  cal_days=21  pnl=$+23,342
+    Attempt  3: PASS  cal_days=57  pnl=$+13,377
+    Attempt  4: FAIL  profit_target_not_reached: pnl=$2063.00 < target=$
+
+
+================================================================================
+  TABLE A — $50K COMBINE  (MLL=$2K trailing, DLL=$1K, PT=$3K)
+================================================================================
+
+  $50K  Combine 2023
+  Account: $50,000  MLL: $2,000  DLL: $1,000  PT: $3,000
+  Attempts: 16  Passes: 12  Fails: 4  Pass rate: 75.0%
+  Avg calendar days to pass: 7.9
+  Fail reasons: {'mll_breach': 3, 'profit_target_not_reached': 1}
+
+      #  Result  Period                               Trd         P&L  TradDays  CalDays
+  ──────────────────────────────────────────────────────────────────────────────
+      1  FAIL    2023-01-04 → 2023-03-14   500  $   +21,850        50       70
+      2  FAIL    2023-03-15 → 2023-04-11   401  $    +4,237        20       28
+      3  FAIL    2023-04-12 → 2023-09-11   363  $   +84,119       109      153
+      4  PASS    2023-09-12 → 2023-09-15   152  $   +58,957        78        4
+      5  PASS    2023-09-18 → 2023-09-20   144  $   +54,952        74        3
+      6  PASS    2023-09-21 → 2023-10-02   138  $   +50,972        71       12
+      7  PASS    2023-10-03 → 2023-10-10   123  $   +43,501        63        8
+      8  PASS    2023-10-11 → 2023-11-01   112  $   +37,502        57       22
+      9  PASS    2023-11-02 → 2023-11-14    81  $   +33,539        41       13
+     10  PASS    2023-11-15 → 2023-11-21    63  $   +29,137        32        7
+     11  PASS    2023-11-22 → 2023-11-24    53  $   +25,913        27        3
+     12  PASS    2023-11-27 → 2023-11-29    47  $   +22,583        24        3
+     13  PASS    2023-11-30 → 2023-12-08    41  $   +19,162        21        9
+     14  PASS    2023-12-11 → 2023-12-18    27  $   +15,570        14        8
+     15  PASS    2023-12-19 → 2023-12-21    16  $    +6,040         8        3
+     16  FAIL    2023-12-22 → 2023-12-29    10  $    +1,540         5        8
+  ──────────────────────────────────────────────────────────────────────────────
+
+  $50K  Combine 2024
+  Account: $50,000  MLL: $2,000  DLL: $1,000  PT: $3,000
+  Attempts: 6  Passes: 2  Fails: 4  Pass rate: 33.3%
+  Avg calendar days to pass: 7.5
+  Fail reasons: {'mll_breach': 3, 'consistency_rule': 1}
+
+      #  Result  Period                               Trd         P&L  TradDays  CalDays
+  ──────────────────────────────────────────────────────────────────────────────
+      1  FAIL    2024-01-03 → 2024-02-02   504  $   +16,689        23       31
+      2  FAIL    2024-02-05 → 2024-11-04   458  $  +109,717       195      274
+      3  FAIL    2024-11-05 → 2024-12-02    79  $    +7,111        20       28
+      4  PASS    2024-12-03 → 2024-12-13    39  $   +11,900        20       11
+      5  PASS    2024-12-16 → 2024-12-19    21  $    +8,008        11        4
+      6  FAIL    2024-12-20 → 2024-12-31    13  $    +4,220         7       12
+  ──────────────────────────────────────────────────────────────────────────────
+
+  $50K  Combine 2025
+  Account: $50,000  MLL: $2,000  DLL: $1,000  PT: $3,000
+  Attempts: 5  Passes: 1  Fails: 4  Pass rate: 20.0%
+  Avg calendar days to pass: 15.0
+  Fail reasons: {'mll_breach': 3, 'consistency_rule': 1}
+
+      #  Result  Period                               Trd         P&L  TradDays  CalDays
+  ──────────────────────────────────────────────────────────────────────────────
+      1  FAIL    2025-01-03 → 2025-02-04   146  $   +15,905        23       33
+      2  FAIL    2025-02-05 → 2025-03-07   102  $    +8,726        23       31
+      3  FAIL    2025-03-10 → 2025-03-20    57  $       +60         9       11
+      4  PASS    2025-03-21 → 2025-04-04    39  $    +8,051        20       15
+      5  FAIL    2025-04-07 → 2025-04-17    17  $    +4,580         9       11
+  ──────────────────────────────────────────────────────────────────────────────
+
+
+================================================================================
+  TABLE B — $150K COMBINE  (MLL=$4.5K trailing, DLL=$3K, PT=$9K)
+================================================================================
+
+  $150K Combine 2023
+  Account: $150,000  MLL: $4,500  DLL: $3,000  PT: $9,000
+  Attempts: 16  Passes: 15  Fails: 1  Pass rate: 93.8%
+  Avg calendar days to pass: 23.1
+  Fail reasons: {'profit_target_not_reached': 1}
+
+      #  Result  Period                               Trd         P&L  TradDays  CalDays
+  ──────────────────────────────────────────────────────────────────────────────
+      1  PASS    2023-01-04 → 2023-01-27   500  $  +168,272       257       24
+      2  PASS    2023-01-30 → 2023-02-27   465  $  +158,300       239       29
+      3  PASS    2023-02-28 → 2023-04-17   423  $  +149,212       218       49
+      4  PASS    2023-04-18 → 2023-05-09   355  $  +139,658       183       22
+      5  PASS    2023-05-10 → 2023-05-18   323  $  +129,397       167        9
+      6  PASS    2023-05-19 → 2023-06-06   310  $  +111,024       160       19
+      7  PASS    2023-06-07 → 2023-07-13   284  $   +99,853       147       37
+      8  PASS    2023-07-14 → 2023-08-02   230  $   +90,788       120       20
+      9  PASS    2023-08-03 → 2023-08-10   203  $   +80,649       106        8
+     10  PASS    2023-08-11 → 2023-08-24   193  $   +68,735       100       14
+     11  PASS    2023-08-25 → 2023-09-21   175  $   +59,316        90       28
+     12  PASS    2023-09-22 → 2023-10-10   136  $   +49,472        70       19
+     13  PASS    2023-10-11 → 2023-11-16   112  $   +37,502        57       37
+     14  PASS    2023-11-17 → 2023-11-30    59  $   +28,137        30       14
+     15  PASS    2023-12-01 → 2023-12-18    39  $   +19,096        20       18
+     16  FAIL    2023-12-19 → 2023-12-29    16  $    +6,040         8       11
+  ──────────────────────────────────────────────────────────────────────────────
+
+  $150K Combine 2024
+  Account: $150,000  MLL: $4,500  DLL: $3,000  PT: $9,000
+  Attempts: 15  Passes: 14  Fails: 1  Pass rate: 93.3%
+  Avg calendar days to pass: 25.4
+  Fail reasons: {'other': 1}
+
+      #  Result  Period                               Trd         P&L  TradDays  CalDays
+  ──────────────────────────────────────────────────────────────────────────────
+      1  PASS    2024-01-03 → 2024-01-12   504  $  +144,937       258       10
+      2  PASS    2024-01-15 → 2024-02-14   488  $  +130,841       250       31
+      3  PASS    2024-02-15 → 2024-03-26   442  $  +121,235       227       41
+      4  PASS    2024-03-27 → 2024-04-19   384  $  +111,941       198       24
+      5  PASS    2024-04-22 → 2024-04-22   351  $  +102,423       181        1
+      6  PASS    2024-04-23 → 2024-05-22   350  $   +87,937       180       30
+      7  PASS    2024-05-23 → 2024-06-19   306  $   +78,534       158       28
+      8  PASS    2024-06-20 → 2024-07-08   267  $   +68,289       138       19
+      9  PASS    2024-07-09 → 2024-08-01   241  $   +59,117       125       24
+     10  PASS    2024-08-02 → 2024-08-20   206  $   +49,776       107       19
+     11  PASS    2024-08-21 → 2024-09-12   180  $   +40,591        94       23
+     12  PASS    2024-09-13 → 2024-10-17   149  $   +30,644        77       35
+     13  PASS    2024-10-18 → 2024-11-25   102  $   +19,263        52       39
+     14  PASS    2024-11-26 → 2024-12-26    49  $    +9,843        25       31
+     15  FAIL    2024-12-27 → 2024-12-31     5  $      +322         3        5
+  ──────────────────────────────────────────────────────────────────────────────
+
+  $150K Combine 2025
+  Account: $150,000  MLL: $4,500  DLL: $3,000  PT: $9,000
+  Attempts: 4  Passes: 3  Fails: 1  Pass rate: 75.0%
+  Avg calendar days to pass: 32.3
+  Fail reasons: {'profit_target_not_reached': 1}
+
+      #  Result  Period                               Trd         P&L  TradDays  CalDays
+  ──────────────────────────────────────────────────────────────────────────────
+      1  PASS    2025-01-03 → 2025-01-21   146  $   +32,507        75       19
+      2  PASS    2025-01-22 → 2025-02-11   120  $   +23,342        62       21
+      3  PASS    2025-02-12 → 2025-04-09    93  $   +13,377        47       57
+      4  FAIL    2025-04-10 → 2025-04-17    12  $    +2,063         6        8
+  ──────────────────────────────────────────────────────────────────────────────
+
+
+================================================================================
+  COMPARISON SUMMARY
+================================================================================
+
+  Scenario                       Attempts  Passes  Fails  PassRate  AvgDaysPass
+  ───────────────────────────────────────────────────────────────────────────
+  $50K  Combine 2023                   16      12      4     75.0%         7.9
+  $50K  Combine 2024                    6       2      4     33.3%         7.5
+  $50K  Combine 2025                    5       1      4     20.0%        15.0
+  $150K Combine 2023                   16      15      1     93.8%        23.1
+  $150K Combine 2024                   15      14      1     93.3%        25.4
+  $150K Combine 2025                    4       3      1     75.0%        32.3
+

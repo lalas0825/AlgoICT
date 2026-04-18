@@ -1632,10 +1632,27 @@ async def _reconcile_positions(components: Components, state: EngineState) -> No
         logger.debug("Reconcile: get_positions failed: %s", exc)
         return
 
-    broker_symbols = {getattr(p, "symbol", "") for p in broker_positions
-                      if getattr(p, "contracts", 0) != 0}
+    # Normalize both sides to a root-symbol set. Broker can return either
+    # the short name ("MNQ") or the full TopstepX contract id
+    # ("CON.F.US.MNQ.M26"); local state always stores signal.symbol
+    # ("MNQ"). Without normalization, every single bar flagged every local
+    # position as ORPHAN and every broker position as GHOST — spam drowned
+    # real reconcile signal. Meta-audit 2026-04-17.
+    def _root(sym: str) -> str:
+        if not sym:
+            return ""
+        s = str(sym).upper()
+        # TopstepX format: "CON.F.US.<ROOT>.<CONTRACT>" → extract <ROOT>
+        if s.startswith("CON.F.") and "." in s:
+            parts = s.split(".")
+            if len(parts) >= 4:
+                return parts[3]
+        return s
+
+    broker_symbols = {_root(getattr(p, "symbol", "")) for p in broker_positions
+                      if getattr(p, "contracts", 0) != 0} - {""}
     local_symbols = {
-        (pos.get("signal") and pos["signal"].symbol) or ""
+        _root((pos.get("signal") and pos["signal"].symbol) or "")
         for pos in state.open_positions.values()
     } - {""}
 
@@ -1822,9 +1839,29 @@ async def _on_new_bar(
         if state.hard_close_done:
             return
 
-        # ── 4b. Trailing stop management ─────────────────────────────
-        if config.TRADE_MANAGEMENT == "trailing" and state.open_positions:
-            await _manage_open_positions(components, state)
+        # ── 4b. Trade management (trailing stop / partials) ──────────
+        if state.open_positions:
+            mode = getattr(config, "TRADE_MANAGEMENT", "fixed")
+            if mode == "trailing":
+                await _manage_open_positions(components, state)
+            elif mode == "partials_be":
+                # NOT YET IMPLEMENTED in live (backtester has it). If
+                # someone flips config to partials_be, shout loudly every
+                # bar rather than silently fall through to fixed SL/TP —
+                # that would leave the user thinking they're running
+                # partials-and-BE while the bot just passively waits for
+                # stop or target. Meta-audit 2026-04-17.
+                if not getattr(state, "_partials_be_warned", False):
+                    logger.error(
+                        "config.TRADE_MANAGEMENT='partials_be' is NOT implemented "
+                        "in the live engine (only in backtest). The bracket will "
+                        "behave as 'fixed' (full size to SL or TP). Either "
+                        "implement partials_be in main._manage_open_positions "
+                        "or switch config.TRADE_MANAGEMENT back to 'trailing' "
+                        "or 'fixed'."
+                    )
+                    state._partials_be_warned = True  # type: ignore[attr-defined]
+            # mode == "fixed": nothing to do — bracket runs to SL/TP
 
         # ── 5. Strategy evaluation ────────────────────────────────────
         bars = state.bars_1min
@@ -1928,10 +1965,104 @@ async def _flatten_all(
         ``state.hard_close_done`` flag already prevents new trades.
     """
     logger.warning("FLATTEN ALL triggered: %s", reason)
+
+    # ── Capture + synthesize _on_trade_closed for every open position ──
+    # broker.flatten_all() submits fresh market orders whose order_ids do
+    # NOT match the tracked stop/target, so _on_broker_fill() would never
+    # match them — that path was silently losing P&L accounting on every
+    # VPIN-extreme / hard-close / signalr-exhausted / unhandled-exception
+    # flatten. Meta-audit 2026-04-17. Now we:
+    #   1. Cancel the tracked stop+target brackets FIRST (prevents them
+    #      from firing after the flatten market order closes the position)
+    #   2. Capture each position's details for trade_dict synthesis
+    #   3. Call broker.flatten_all()
+    #   4. Synthesize a trade_dict using last 1-min close as exit proxy
+    #      (market flatten fills within a tick; exact fill price isn't
+    #      available from broker.flatten_all today — a future refactor
+    #      can wait for fill callbacks, but synthesising here is strictly
+    #      better than the prior silent P&L loss)
+    #   5. Call _on_trade_closed per position (risk.record_trade + Supabase
+    #      trade row + Telegram exit alert + post-mortem if loss)
+    captured: list[dict] = []
+    for pos_key, pos in list(state.open_positions.items()):
+        signal = pos.get("signal")
+        if signal is None:
+            continue
+
+        # Pre-cancel bracket to prevent post-flatten ghost fills
+        for order_attr in ("stop_order", "target_order"):
+            ord_obj = pos.get(order_attr)
+            if ord_obj is not None:
+                try:
+                    await components.broker.cancel_order(str(ord_obj.order_id))
+                except Exception as exc:
+                    logger.debug(
+                        "Pre-flatten cancel of %s %s failed (continuing): %s",
+                        order_attr, ord_obj.order_id, exc,
+                    )
+
+        captured.append({
+            "pos_key": pos_key,
+            "signal": signal,
+            "opened_at": pos.get("opened_at"),
+            "current_stop_price": pos.get("current_stop_price"),
+        })
+
     try:
         await components.broker.flatten_all()
     except Exception as exc:
         logger.error("Broker flatten failed: %s", exc)
+
+    # Resolve an exit price once for all positions — last completed 1-min
+    # close is the best available proxy when broker.flatten_all doesn't
+    # return per-fill prices.
+    exit_price_proxy: Optional[float] = None
+    try:
+        if not state.bars_1min.empty:
+            exit_price_proxy = float(state.bars_1min["close"].iloc[-1])
+    except Exception:
+        exit_price_proxy = None
+
+    for cap in captured:
+        signal = cap["signal"]
+        entry_price = float(signal.entry_price)
+        contracts = int(signal.contracts)
+        direction = signal.direction
+        exit_price = exit_price_proxy if exit_price_proxy is not None else entry_price
+        if direction == "long":
+            pnl = (exit_price - entry_price) * contracts * config.MNQ_POINT_VALUE
+        else:
+            pnl = (entry_price - exit_price) * contracts * config.MNQ_POINT_VALUE
+        current_stop = cap["current_stop_price"] if cap["current_stop_price"] is not None else float(signal.stop_price)
+        stop_points = abs(current_stop - entry_price)
+
+        trade_dict = {
+            "id": cap["pos_key"],
+            "strategy": signal.strategy,
+            "direction": direction,
+            "symbol": signal.symbol,
+            "entry_price": entry_price,
+            "exit_price": exit_price,
+            "entry_time": str(cap["opened_at"]) if cap["opened_at"] else "",
+            "exit_time": str(datetime.now(timezone.utc)),
+            "pnl": pnl,
+            "confluence_score": getattr(signal, "confluence_score", 0),
+            "ict_concepts": list(getattr(signal, "confluence_breakdown", {}).keys()),
+            "kill_zone": getattr(signal, "kill_zone", ""),
+            "stop_points": stop_points,
+            "contracts": contracts,
+            "reason": f"flatten:{reason}",
+            "exit_price_is_proxy": exit_price_proxy is not None and exit_price_proxy != entry_price,
+        }
+        logger.info(
+            "TRADE CLOSED (flatten): %s %s %dx @ %.2f | P&L: $%.2f | reason=flatten:%s",
+            direction, signal.symbol, contracts, exit_price, pnl, reason,
+        )
+        try:
+            await _on_trade_closed(components, state, trade_dict)
+        except Exception as exc:
+            logger.error("_on_trade_closed raised during flatten: %s", exc)
+
     state.open_positions.clear()
     if emergency:
         components.risk.emergency_flatten()

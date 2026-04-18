@@ -38,7 +38,7 @@ try:
 except ImportError:
     TELEGRAM_AVAILABLE = False
 
-from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, MAX_CONFLUENCE
+from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, MAX_CONFLUENCE, MNQ_POINT_VALUE
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +121,7 @@ class TelegramBot:
             stop_pts  = abs(signal.entry_price - signal.stop_price)
             tgt_pts   = abs(signal.target_price - signal.entry_price)
             rr        = tgt_pts / stop_pts if stop_pts else 0.0
-            risk_usd  = stop_pts * 2.0 * signal.contracts  # MNQ $2/pt
+            risk_usd  = stop_pts * MNQ_POINT_VALUE * signal.contracts
 
             stop_sign  = "-" if signal.direction == "long" else "+"
             tgt_sign   = "+" if signal.direction == "long" else "-"
