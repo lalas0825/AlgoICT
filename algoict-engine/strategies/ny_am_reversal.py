@@ -157,9 +157,16 @@ class NYAMReversalStrategy:
         ts = candles_5min.index[-1]
         last_close = float(last_5["close"])
 
+        # Layer-1 dedup: only block re-evaluation of bars that SUCCESSFULLY
+        # produced a signal. Previously the timestamp was stamped BEFORE the
+        # gates ran (KZ, risk, HTF bias, structure, FVG, OB, displacement,
+        # sweep, confluence), so a single reject would lock the bar out for
+        # the rest of its WS delivery window. If a stale reject was caused
+        # by late-arriving detector state (e.g. FVG mitigation updates
+        # between two deliveries of the same minute), the correct setup
+        # could never re-eval. Now we stamp only at the success exit.
         if ts == self._last_evaluated_bar_ts:
             return None
-        self._last_evaluated_bar_ts = ts
 
         active_zone = next(
             (kz for kz in self.KILL_ZONES if self.session.is_kill_zone(ts, kz)),
@@ -347,6 +354,10 @@ class NYAMReversalStrategy:
             timestamp=ts,
             kill_zone=active_zone,
         )
+
+        # Stamp the bar as evaluated only on successful fire — rejects are
+        # NOT cached, so late-arriving state can re-evaluate the same bar.
+        self._last_evaluated_bar_ts = ts
 
         ifvg_tag = " (IFVG)" if used_ifvg else ""
         logger.info(

@@ -163,6 +163,10 @@ ROLLING_1MIN_BARS = 12000       # Keep ~8 Globex days of 1-min data in memory
                                 # Gives headroom above WARMUP_BARS so no trim
                                 # happens during a session.
 WARMUP_BARS = 10000             # Historical bars to preload before WS starts.
+MIN_WARMUP_BARS_FOR_TRADING = 1000   # Hard gate: below this, block trades.
+                                     # ~1 full session; less leaves swing /
+                                     # structure / FVG detectors too thin
+                                     # to produce reliable signals.
                                 # 10000 1-min bars ≈ 7 Globex trading days ≈
                                 # 1.5 completed weekly bars + 7 daily bars.
                                 # Probed API cap is 20000+, so 10000 is safe.
@@ -229,6 +233,14 @@ class EngineState:
     # Prevents re-fire on the next bar while broker call is in-flight
     pending_signal_ts: Optional[Any] = None
 
+    # Warm-up gate: True once enough historical bars are loaded for every
+    # detector to produce non-degraded output. Trades are blocked until
+    # this flips. Set in run() after _warmup_historical_bars() returns,
+    # validated against MIN_WARMUP_BARS_FOR_TRADING. Prevents the silent-
+    # failure path where a broker fetch failure leaves the buffer empty
+    # and signals fire on stub/neutral detector state.
+    warmup_complete: bool = False
+
     def __post_init__(self):
         if self.bars_1min is None:
             self.bars_1min = pd.DataFrame(
@@ -294,7 +306,13 @@ def _init_detectors(risk: RiskManager) -> dict:
     }
 
 
-def _init_components(mode: str) -> Components:
+def _init_components(
+    mode: str,
+    topstep_mode: bool = True,
+    mll_warning_pct: float = 0.40,
+    mll_caution_pct: float = 0.60,
+    mll_stop_pct: float = 0.85,
+) -> Components:
     """
     Construct every component. Required modules crash on failure; optional
     modules (Supabase, Telegram, VPIN) degrade to None.
@@ -306,6 +324,22 @@ def _init_components(mode: str) -> Components:
 
     # ── Risk + timeframes ─────────────────────────────────────────────
     risk = RiskManager()
+    if topstep_mode:
+        risk.enable_topstep_mode(
+            warning_pct=mll_warning_pct,
+            caution_pct=mll_caution_pct,
+            stop_pct=mll_stop_pct,
+        )
+        logger.info(
+            "Topstep MLL protection ON: warn=$%.0f @ %.0f%%, caution=$%.0f @ %.0f%%, stop=$%.0f @ %.0f%%",
+            config.TOPSTEP_MLL * mll_warning_pct, mll_warning_pct * 100,
+            config.TOPSTEP_MLL * mll_caution_pct, mll_caution_pct * 100,
+            config.TOPSTEP_MLL * mll_stop_pct,    mll_stop_pct * 100,
+        )
+    else:
+        logger.warning(
+            "Topstep MLL protection DISABLED via --no-topstep — trading with RAW risk rules only"
+        )
     tf_manager = TimeframeManager()
     session = SessionManager()
     htf_bias_det = HTFBiasDetector()
@@ -1018,7 +1052,38 @@ async def _execute_signal(
     state: EngineState,
 ) -> None:
     """Submit entry + stop + target orders, log, and alert."""
-    signal_id = f"{signal.strategy}_{signal.direction}_{signal.timestamp}"
+    # Warm-up gate: block trade submission until enough bars have loaded
+    # for detectors to produce non-degraded output. Prevents the silent-
+    # failure path where _warmup_historical_bars() returned 0 (broker
+    # fetch failure) and early WS ticks drove trades on cold state.
+    if not state.warmup_complete:
+        buffer_len = len(state.bars_1min)
+        if buffer_len >= MIN_WARMUP_BARS_FOR_TRADING:
+            state.warmup_complete = True
+            logger.info(
+                "Warm-up gate lifted via WS buffer: %d bars accumulated",
+                buffer_len,
+            )
+        else:
+            logger.info(
+                "Signal %s %s blocked — warm-up incomplete (%d/%d bars)",
+                signal.strategy, signal.direction,
+                buffer_len, MIN_WARMUP_BARS_FOR_TRADING,
+            )
+            return
+
+    # signal_id must be stable across duplicate deliveries of the SAME
+    # setup but unique across distinct setups. Previously it was just
+    # `{strategy}_{direction}_{timestamp}` — two distinct setups at the
+    # same bar/strategy/direction (e.g., two separate OBs both qualifying
+    # on the same 5-min bar) would collide and the second would silently
+    # be blocked as a "duplicate". Entry price is the natural per-setup
+    # differentiator (stop/target derive from it). Rounded to 2 dp so
+    # float noise between re-deliveries doesn't create phantom IDs.
+    signal_id = (
+        f"{signal.strategy}_{signal.direction}_{signal.timestamp}_"
+        f"{float(signal.entry_price):.2f}"
+    )
     if signal_id in state.executed_signals:
         logger.info("Signal %s already executed this bar — skipping duplicate", signal_id)
         return
@@ -1040,11 +1105,37 @@ async def _execute_signal(
         logger.error("Entry order failed: %s", exc)
         return
 
-    # Broker confirmed the entry — advance per-zone + daily trade counters.
-    # Doing this here (not inside strategy.evaluate()) ensures a rejected
-    # or timed-out order does NOT consume the KZ budget. Previously the
-    # counter lived inside evaluate(), so failed entries left London
-    # permanently max_trades-blocked with zero positions open.
+    # Guard against broker-level rejection / non-fill. `_submit_order` in
+    # brokers/topstepx.py can return OrderResult(status="rejected") WITHOUT
+    # raising when the API replies success=False (audit finding, 2026-04-17).
+    # The previous code path then happily submitted stop + target for a
+    # position that never opened AND advanced the per-zone counter via
+    # notify_trade_executed — consuming the KZ budget for zero real trades.
+    #
+    # Treat anything that isn't an active fill as a hard failure: abort the
+    # signal, do NOT submit stop/target, do NOT advance counters. The
+    # executed_signals guard above already blocks a retry on the same bar.
+    entry_status = (entry_order.status or "").lower() if entry_order else ""
+    fill_confirmed = entry_status in ("filled", "submitted", "working")
+    if not entry_order or not fill_confirmed:
+        logger.warning(
+            "Entry order NOT confirmed (status=%s message=%r) — aborting "
+            "stop/target submission and rolling back zone counter reservation",
+            entry_status or "<none>", getattr(entry_order, "message", ""),
+        )
+        # Release the executed_signals slot so a later bar with the same
+        # signal_id can retry cleanly (otherwise a reject would permanently
+        # block that exact signal for the rest of the session).
+        state.executed_signals.discard(signal_id)
+        return
+
+    # Entry is either already filled or working (market order pending fill).
+    # NOTE: "submitted"/"working" is not yet a confirmed fill — we advance
+    # counters optimistically because TopstepX fills market orders within
+    # milliseconds and the alternative (waiting for a fill callback) would
+    # block the bar-tick path. If the market order somehow rejects AFTER
+    # submission (rare), the position-reconciliation pass should surface
+    # the discrepancy. (Follow-up: wire a fill-confirmation callback.)
     strat_name = getattr(signal, "strategy", "")
     strat = None
     if strat_name == "ny_am_reversal":
@@ -1095,11 +1186,16 @@ async def _execute_signal(
             )
 
     try:
+        # Pass reference_price so the broker client rejects any target that
+        # would fall outside the allowed deviation band BEFORE a round-trip
+        # to TopstepX (which would silently reject with errorCode=2
+        # "Invalid price outside allowed range" as it did 6× on 2026-04-17).
         target_order = await broker.submit_limit_order(
             symbol=signal.symbol,
             side=exit_side,
             contracts=signal.contracts,
             limit_price=adjusted_target,
+            reference_price=effective_fill,
         )
     except Exception as exc:
         logger.error("Target order failed: %s", exc)
@@ -1378,6 +1474,49 @@ async def _on_trade_closed(
             logger.error("Post-mortem analysis failed: %s", exc)
 
 
+async def _reconcile_positions(components: Components, state: EngineState) -> None:
+    """Compare broker-reported open positions with local state.open_positions.
+
+    Runs every 5 minutes during active trading. Logs WARNING on any
+    divergence:
+      - ghost: broker has a position we don't track (manual trade?
+        orphaned bracket from a failed submit flow?)
+      - orphan: we track a position the broker says is flat (broker
+        filled our stop/target and we missed the fill callback)
+
+    Does NOT auto-heal — only reports. Manual intervention or the
+    hard-close flatten will converge state.
+    """
+    if components.broker is None:
+        return
+    try:
+        broker_positions = await components.broker.get_positions()
+    except Exception as exc:
+        logger.debug("Reconcile: get_positions failed: %s", exc)
+        return
+
+    broker_symbols = {getattr(p, "symbol", "") for p in broker_positions
+                      if getattr(p, "contracts", 0) != 0}
+    local_symbols = {
+        (pos.get("signal") and pos["signal"].symbol) or ""
+        for pos in state.open_positions.values()
+    } - {""}
+
+    ghosts = broker_symbols - local_symbols
+    orphans = local_symbols - broker_symbols
+
+    if ghosts:
+        logger.warning(
+            "Position reconcile: GHOST at broker (not in local state): %s",
+            sorted(ghosts),
+        )
+    if orphans:
+        logger.warning(
+            "Position reconcile: ORPHAN in local state (not at broker): %s",
+            sorted(orphans),
+        )
+
+
 async def _on_new_bar(
     bar: dict,
     components: Components,
@@ -1435,6 +1574,17 @@ async def _on_new_bar(
 
         # ── 3d. Bar-level visibility log (detector + session snapshot) ─
         _log_bar_snapshot(components, state, ts)
+
+        # ── 3e. Reconcile broker positions with local state (every 5 min) ─
+        # Catches ghost positions (broker says open, we don't track) and
+        # orphaned tracking (we think open, broker says flat). Either
+        # indicates a prior bug path or network partition. Logged at
+        # WARNING so Telegram surfaces via the alert hook.
+        if ts.minute % 5 == 0:
+            try:
+                await _reconcile_positions(components, state)
+            except Exception as exc:
+                logger.debug("Reconcile failed (non-fatal): %s", exc)
 
         # ── 4. Hard close ─────────────────────────────────────────────
         if (not state.hard_close_done
@@ -1720,7 +1870,13 @@ def _make_state_snapshot(components: "Components", state: "EngineState") -> dict
 # Main entry point
 # ---------------------------------------------------------------------------
 
-async def run(mode: str = "paper") -> None:
+async def run(
+    mode: str = "paper",
+    topstep_mode: bool = True,
+    mll_warning_pct: float = 0.40,
+    mll_caution_pct: float = 0.60,
+    mll_stop_pct: float = 0.85,
+) -> None:
     """
     Main orchestrator coroutine.
 
@@ -1738,7 +1894,13 @@ async def run(mode: str = "paper") -> None:
 
     # ── 1. Initialize components ──────────────────────────────────────
     try:
-        components = _init_components(mode)
+        components = _init_components(
+            mode,
+            topstep_mode=topstep_mode,
+            mll_warning_pct=mll_warning_pct,
+            mll_caution_pct=mll_caution_pct,
+            mll_stop_pct=mll_stop_pct,
+        )
     except Exception as exc:
         logger.critical("Failed to initialize components: %s", exc, exc_info=True)
         return
@@ -1759,6 +1921,19 @@ async def run(mode: str = "paper") -> None:
 
     components.broker.subscribe_bars(state.symbol, _bar_callback)
     logger.info("Registered bar callback for %s", state.symbol)
+
+    # Register emergency-flatten hook: when SignalR exhausts all reconnect
+    # retries we lose the price feed entirely — stops can't be monitored,
+    # VPIN halts can't fire, hard-close can't flatten. Anything open at
+    # that moment is uncovered risk. flatten_all now runs BEFORE the
+    # TopstepXConnectionError propagates out of the listener task.
+    if hasattr(components.broker, "set_on_ws_exhausted"):
+        async def _ws_exhausted_flatten() -> None:
+            logger.critical(
+                "SignalR feed permanently lost — emergency flatten before engine exits"
+            )
+            await _flatten_all(components, state, reason="signalr_exhausted", emergency=True)
+        components.broker.set_on_ws_exhausted(_ws_exhausted_flatten)
 
     # ── 2b. Connect broker (starts SignalR with symbols already registered) ─
     try:
@@ -1824,11 +1999,23 @@ async def run(mode: str = "paper") -> None:
 
     # ── 4. Warm-up: preload historical bars so detectors start primed ─
     seeded = await _warmup_historical_bars(components, state)
-    if seeded == 0:
+    if seeded >= MIN_WARMUP_BARS_FOR_TRADING:
+        state.warmup_complete = True
+        logger.info(
+            "Warm-up complete: %d bars loaded (>= %d required) — trading enabled",
+            seeded, MIN_WARMUP_BARS_FOR_TRADING,
+        )
+    elif seeded == 0:
         logger.warning(
             "Running with cold detectors — first %d WS bars will be "
             "used to build context before strategies can fire",
             ROLLING_1MIN_BARS // 50,
+        )
+    else:
+        logger.warning(
+            "Partial warm-up: %d bars loaded (need %d) — trading BLOCKED "
+            "until enough bars flow in from WS",
+            seeded, MIN_WARMUP_BARS_FOR_TRADING,
         )
 
     # ── 5. Main daily loop ────────────────────────────────────────────
@@ -1962,6 +2149,36 @@ def _parse_args() -> argparse.Namespace:
         choices=["paper", "live"],
         default="paper",
         help="Trading mode: paper (Practice Account) or live (Combine)",
+    )
+    # MLL protection flags (default ON for both paper and live — the whole
+    # point of paper is to simulate Combine rules). Thresholds default to
+    # M17b validated values (Combine rolling pass rate 19/20 = 95%).
+    parser.add_argument(
+        "--no-topstep",
+        action="store_true",
+        help="Disable Topstep MLL-aware risk protection (NOT recommended — "
+             "default is ON for both paper and live).",
+    )
+    parser.add_argument(
+        "--mll-warning-pct",
+        type=float,
+        default=0.40,
+        help="MLL warning zone threshold (fraction of MLL). -25%% size + "
+             "min_confluence +1 when DD >= this. Default 0.40 = $800.",
+    )
+    parser.add_argument(
+        "--mll-caution-pct",
+        type=float,
+        default=0.60,
+        help="MLL caution zone threshold. -50%% size + min_confluence +2 "
+             "when DD >= this. Default 0.60 = $1,200 (validated 2026-04-17).",
+    )
+    parser.add_argument(
+        "--mll-stop-pct",
+        type=float,
+        default=0.85,
+        help="MLL stop zone threshold. No new trades when DD >= this. "
+             "Default 0.85 = $1,700 (validated 2026-04-17).",
     )
     return parser.parse_args()
 
@@ -2109,7 +2326,13 @@ def main() -> int:
             return 1
 
     try:
-        asyncio.run(run(mode=args.mode))
+        asyncio.run(run(
+            mode=args.mode,
+            topstep_mode=not args.no_topstep,
+            mll_warning_pct=args.mll_warning_pct,
+            mll_caution_pct=args.mll_caution_pct,
+            mll_stop_pct=args.mll_stop_pct,
+        ))
         return 0
     except KeyboardInterrupt:
         logger.info("Interrupted by user")

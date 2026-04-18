@@ -58,6 +58,10 @@ class TimeframeManager:
 
     def __init__(self):
         self._cache: dict[str, pd.DataFrame] = {}
+        # Most recent 1-min bar open timestamp seen — used by
+        # get_completed_bars() to decide whether the tail higher-TF bar
+        # is still forming.
+        self._last_1min_ts: Optional[pd.Timestamp] = None
 
     # ------------------------------------------------------------------ #
     # Public API                                                           #
@@ -82,6 +86,12 @@ class TimeframeManager:
                 f"Choose from: {sorted(self.SUPPORTED)}"
             )
 
+        # Track the reference clock for get_completed_bars(). Safe even
+        # when a cache hit short-circuits — the caller still tells us
+        # what 1-min window they're querying against.
+        if not df_1min.empty:
+            self._last_1min_ts = df_1min.index[-1]
+
         if target_tf in self._cache:
             return self._cache[target_tf]
 
@@ -105,11 +115,59 @@ class TimeframeManager:
         self._cache.clear()
 
     def get_latest(self, target_tf: str) -> Optional[pd.Series]:
-        """Return the most-recent completed bar for the given timeframe."""
+        """Return the most-recent bar for the given timeframe.
+
+        NOTE: the returned bar is only guaranteed COMPLETED if the caller
+        passed completed 1-min bars into ``aggregate()``. The aggregator
+        has no way to tell a forming 1-min bar from a closed one. For a
+        strict "only closed bars" guarantee use ``get_completed_bars()``.
+        """
         df = self._cache.get(target_tf)
         if df is None or df.empty:
             return None
         return df.iloc[-1]
+
+    def get_completed_bars(
+        self,
+        target_tf: str,
+        as_of: Optional[pd.Timestamp] = None,
+    ) -> Optional[pd.DataFrame]:
+        """Return cached bars for ``target_tf`` excluding any still forming.
+
+        A bar is "forming" if ``bar_open_time + tf_width > as_of`` — i.e.,
+        its window hasn't elapsed yet relative to the provided clock.
+        Default ``as_of`` is the latest 1-min bar seen during the most
+        recent ``aggregate()`` call.
+
+        Added 2026-04-17 to close the look-ahead risk where callers
+        (mistakenly) consumed a partially-formed higher-TF bar. Returns
+        None if the TF was never aggregated.
+        """
+        df = self._cache.get(target_tf)
+        if df is None or df.empty:
+            return None
+        if as_of is None:
+            as_of = getattr(self, "_last_1min_ts", None)
+        if as_of is None:
+            # No reference clock available → best effort: return as-is.
+            return df
+
+        # Determine the TF width. Daily/Weekly aren't supported here —
+        # session anchoring makes the forming-bar check ambiguous without
+        # explicit session boundaries. Callers for D/W should compute
+        # their own completeness from the session schedule.
+        tf_width_minutes = {
+            "5min": 5, "15min": 15, "1H": 60, "4H": 240,
+        }.get(target_tf)
+        if tf_width_minutes is None:
+            return df
+
+        tf_delta = pd.Timedelta(minutes=tf_width_minutes)
+        last_ts = df.index[-1]
+        if last_ts + tf_delta > as_of:
+            # Last bar is still forming — drop it.
+            return df.iloc[:-1] if len(df) > 1 else df.iloc[0:0]
+        return df
 
     # ------------------------------------------------------------------ #
     # Private helpers                                                      #

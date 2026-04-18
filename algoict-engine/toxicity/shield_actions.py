@@ -29,10 +29,15 @@ from toxicity.toxicity_classifier import ToxicityClassifier, ToxicityLevel
 
 logger = logging.getLogger(__name__)
 
-# Resume threshold: once halted, VPIN must drop to or below this to resume.
-# No hysteresis — mirrors the activate threshold exactly.
-_DEACTIVATE_THRESHOLD = 0.70   # resume as soon as VPIN exits extreme
-_FLATTEN_THRESHOLD = 0.70       # extreme threshold
+# Hysteresis: activate at 0.70 (extreme threshold), resume only when VPIN
+# drops to or below 0.55. Without a gap between the two, VPIN oscillating
+# around 0.70 (very common near the extreme boundary) causes halt / resume
+# / halt every single bucket — flapping alerts to Telegram and spurious
+# flatten calls. The 0.15-wide dead band matches the gap between the
+# "extreme" (0.70+) and "high" (0.55-0.70) toxicity classifier levels.
+# Audit finding 2026-04-17.
+_FLATTEN_THRESHOLD = 0.70       # activate: VPIN >= 0.70 → halt + flatten
+_DEACTIVATE_THRESHOLD = 0.55    # resume: VPIN <= 0.55 → clear halt
 
 
 # ---------------------------------------------------------------------------

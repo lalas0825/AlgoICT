@@ -136,33 +136,47 @@ class SwingPointDetector:
         )
         return new_swings
 
-    def update_broken(self, current_price: float) -> list[SwingPoint]:
+    def update_broken(self, bar_close: Optional[float] = None, current_price: Optional[float] = None) -> list[SwingPoint]:
         """
-        Mark active swing points as broken when price trades through them.
+        Mark active swing points as broken by a CLOSE through the level.
 
-        Swing High broken: current_price > swing_high.price
-        Swing Low broken:  current_price < swing_low.price
+        ICT definition: a swing is "broken" only when a candle closes
+        beyond it — a wick / intra-bar poke does NOT count. Wick-based
+        breaks produced false BOS/CHoCH inputs upstream (audit finding
+        2026-04-17): swing levels invalidated by intra-bar noise before
+        a true structural break was confirmed.
+
+        Swing High broken: bar_close > swing_high.price
+        Swing Low broken:  bar_close < swing_low.price
 
         Parameters
         ----------
-        current_price : float — last traded price (close or current bid/ask)
+        bar_close : float — close of the most recently completed bar.
+            Must NOT be a live tick / mid / bid / ask. Pass only when
+            a bar has closed. (The legacy keyword ``current_price`` is
+            still accepted for one release for backward compatibility.)
 
         Returns
         -------
         list[SwingPoint] — swing points newly marked broken in this call
         """
+        # Backward-compat: older callers passed ``current_price=...``
+        if bar_close is None:
+            if current_price is None:
+                raise TypeError("update_broken requires bar_close (or legacy current_price)")
+            bar_close = current_price
         newly_broken: list[SwingPoint] = []
         for sp in self.swing_points:
             if sp.broken:
                 continue
-            if sp.type == "high" and current_price > sp.price:
+            if sp.type == "high" and bar_close > sp.price:
                 sp.broken = True
                 newly_broken.append(sp)
-                logger.debug("Swing High %.2f broken at %.2f", sp.price, current_price)
-            elif sp.type == "low" and current_price < sp.price:
+                logger.debug("Swing High %.2f broken on close at %.2f", sp.price, bar_close)
+            elif sp.type == "low" and bar_close < sp.price:
                 sp.broken = True
                 newly_broken.append(sp)
-                logger.debug("Swing Low %.2f broken at %.2f", sp.price, current_price)
+                logger.debug("Swing Low %.2f broken on close at %.2f", sp.price, bar_close)
         return newly_broken
 
     def get_active(self, type_filter: Optional[str] = None) -> list[SwingPoint]:

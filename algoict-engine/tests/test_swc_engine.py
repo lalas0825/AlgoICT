@@ -345,13 +345,22 @@ class TestSWCEngineScan:
         assert report.event_risk == "high"
         assert report.min_confluence_override == 9
 
-    def test_scan_normal_day_standard_params(self):
-        # 2024-01-03 is a Wednesday (no events)
+    def test_scan_normal_day_applies_mood_adjustment(self):
+        """Event-free day with no news/fed signals falls to CHOPPY mood,
+        which now applies the mood penalty (+2 confluence, -25% size).
+        Before 2026-04-17 the mood label was ignored and event_risk='none'
+        left the trader with full size on a day the engine itself flagged
+        as choppy — contrary to the documented design.
+        """
         engine = SWCEngine()
         report = engine.run_premarket_scan(date=datetime.date(2024, 1, 3))
         assert report.event_risk == "none"
-        assert report.min_confluence_override == 7
-        assert report.position_size_multiplier == 1.0
+        # Fallback mood is CHOPPY when there's nothing to push toward
+        # risk_on / risk_off. combine_adjustments applies the stricter
+        # of event_risk (none → 7/1.0) and mood (choppy → 9/0.75).
+        assert report.market_mood.value == "choppy"
+        assert report.min_confluence_override == 9
+        assert report.position_size_multiplier == 0.75
 
     def test_scan_with_mock_news_scanner(self):
         mock_news = MagicMock()

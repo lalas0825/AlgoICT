@@ -37,7 +37,7 @@ from sentiment.economic_calendar import (
     get_events_on_date,
     _max_risk,
 )
-from sentiment.confluence_adjuster import get_adjustments
+from sentiment.confluence_adjuster import get_adjustments, combine_adjustments
 from sentiment.mood_synthesizer import DailyMoodReport, MarketMood, MoodSynthesizer
 
 logger = logging.getLogger(__name__)
@@ -274,12 +274,10 @@ class SWCEngine:
         Simple heuristic mood determination without Claude API.
         Used as fallback when mood_synthesizer is unavailable.
         """
-        try:
-            adj = get_adjustments(event_risk)
-        except Exception:
-            adj = {"min_confluence": 7, "position_multiplier": 1.0}
-
-        # Determine mood from available signals
+        # Determine mood from available signals FIRST so we can feed it
+        # to combine_adjustments() — the risk output must reflect mood,
+        # not just event_risk (audit finding 2026-04-17: a "choppy" day
+        # without a scheduled event previously got zero penalty).
         if event_risk in ("high", "extreme"):
             mood = MarketMood.EVENT_DRIVEN
             summary = f"Major event day ({event_risk} risk) — elevated caution"
@@ -293,6 +291,21 @@ class SWCEngine:
             mood = MarketMood.CHOPPY
             summary = "Mixed signals — wait for clear price action"
 
+        try:
+            mood_label = getattr(mood, "value", str(mood)).lower()
+            combined = combine_adjustments(event_risk, mood_label)
+            min_conf_out = combined.min_confluence
+            pos_mult_out = combined.position_multiplier
+        except Exception:
+            # Fall back to event-only on any mood-adjustment error
+            try:
+                adj = get_adjustments(event_risk)
+                min_conf_out = adj["min_confluence"]
+                pos_mult_out = adj["position_multiplier"]
+            except Exception:
+                min_conf_out = 7
+                pos_mult_out = 1.0
+
         event_names = [getattr(e, "name", "?") for e in events] if events else []
 
         return DailyMoodReport(
@@ -302,8 +315,8 @@ class SWCEngine:
             key_risk=", ".join(event_names) if event_names else "No major scheduled events",
             opportunity="ICT setups in Kill Zone with confluence >= min",
             event_risk=event_risk,
-            min_confluence_override=adj["min_confluence"],
-            position_size_multiplier=adj["position_multiplier"],
+            min_confluence_override=min_conf_out,
+            position_size_multiplier=pos_mult_out,
             news_blackout_windows=[],
             news_sentiment=news_sentiment,
             fedwatch_shift=fedwatch_shift,

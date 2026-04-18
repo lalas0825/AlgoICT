@@ -95,6 +95,94 @@ RISK_LEVELS = ("none", "low", "medium", "high", "extreme")
 
 
 # ---------------------------------------------------------------------------
+# Mood-driven adjustments
+# ---------------------------------------------------------------------------
+#
+# Added 2026-04-17 after audit showed `mood` labels (choppy, risk_off,
+# event_driven, etc.) were informational only and never reached the risk
+# manager. A "choppy" mood on an event-free day used to get zero penalty,
+# contrary to the documented design.
+#
+# Mood adjustments COMPOSE with event_risk adjustments by taking the
+# stricter of the two: max(min_confluence), min(position_multiplier).
+# This way a choppy day WITH a high-impact event still applies the full
+# event tightening, and a choppy day WITHOUT an event still gets a
+# meaningful conservatism bump.
+
+_MOOD_ADJUSTMENTS: dict[str, Adjustments] = {
+    "choppy": Adjustments(
+        risk_level="choppy",
+        min_confluence=9,
+        position_multiplier=0.75,
+        description="Choppy mood: whipsaw risk, tighter quality bar + -25% size",
+    ),
+    "event_driven": Adjustments(
+        risk_level="event_driven",
+        min_confluence=9,
+        position_multiplier=0.75,
+        description="Event-driven: uncertainty, tighter quality + -25% size",
+    ),
+    "risk_off": Adjustments(
+        risk_level="risk_off",
+        min_confluence=8,
+        position_multiplier=0.90,
+        description="Risk-off mood: slight tightening, -10% size",
+    ),
+    "risk_on": Adjustments(
+        risk_level="risk_on",
+        min_confluence=7,
+        position_multiplier=1.0,
+        description="Risk-on mood: standard ICT rules apply",
+    ),
+    "normal": Adjustments(
+        risk_level="normal",
+        min_confluence=7,
+        position_multiplier=1.0,
+        description="Normal mood: standard ICT rules apply",
+    ),
+}
+
+
+def get_mood_adjustments(mood: str) -> Adjustments:
+    """Return Adjustments for a mood label; defaults to 'normal' if unknown."""
+    key = (mood or "").lower().strip().replace("-", "_").replace(" ", "_")
+    return _MOOD_ADJUSTMENTS.get(key, _MOOD_ADJUSTMENTS["normal"])
+
+
+def combine_adjustments(
+    event_risk: str,
+    mood: str,
+) -> Adjustments:
+    """Return the strictest of event-risk and mood adjustments.
+
+    Stricter = higher min_confluence (quality bar) + lower
+    position_multiplier (size). risk_level is labeled with the
+    dominant source so logs stay readable.
+    """
+    event_adj = get_adjustments_obj(event_risk)
+    mood_adj = get_mood_adjustments(mood)
+    # Stricter: max min_conf, min pos_mult
+    combined_min_conf = max(event_adj.min_confluence, mood_adj.min_confluence)
+    combined_pos_mult = min(event_adj.position_multiplier, mood_adj.position_multiplier)
+    # Label with whichever side drove the decision; event wins on ties
+    if combined_min_conf == event_adj.min_confluence and combined_pos_mult == event_adj.position_multiplier:
+        label = f"event:{event_adj.risk_level}"
+        desc = event_adj.description
+    elif combined_min_conf == mood_adj.min_confluence and combined_pos_mult == mood_adj.position_multiplier:
+        label = f"mood:{mood_adj.risk_level}"
+        desc = mood_adj.description
+    else:
+        label = f"event:{event_adj.risk_level}+mood:{mood_adj.risk_level}"
+        desc = f"{event_adj.description} | {mood_adj.description}"
+    return Adjustments(
+        risk_level=label,
+        min_confluence=combined_min_conf,
+        position_multiplier=combined_pos_mult,
+        description=desc,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 

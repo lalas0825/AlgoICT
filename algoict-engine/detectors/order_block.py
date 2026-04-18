@@ -327,19 +327,40 @@ class OrderBlockDetector:
 
         Bullish displacement → look for last bearish candle (close < open)
         Bearish displacement → look for last bullish candle (close > open)
+
+        Termination rules:
+          - MATCH opposite   → return index
+          - MATCH same-dir   → break (we've entered the impulse leg; the
+                               OB must sit immediately before displacement)
+          - DOJI (close==open) → continue walking back (indecision bar;
+                               not yet in the impulse leg, OB may lie
+                               beyond). This preserves OB quality for
+                               the typical M-shape / W-shape sequences
+                               where one or two balance bars separate
+                               the OB from the displacement.
+
+        Rewrite 2026-04-17: the prior chained-elif form had the correct
+        semantics for strict directional candles but relied on four
+        guarded branches where two were de-facto unreachable if read
+        in a cold review. The explicit if-tree below is easier to audit
+        and makes doji handling explicit.
         """
-        opposite = "bearish" if displacement_dir == "bullish" else "bullish"
+        opposite_dir = "bearish" if displacement_dir == "bullish" else "bullish"
         for j in range(displacement_idx - 1, -1, -1):
-            if opposite == "bearish" and closes[j] < opens[j]:
-                return j
-            elif opposite == "bullish" and closes[j] > opens[j]:
-                return j
-            # Stop if we hit a candle in the same direction as displacement
-            # (means we've gone past the consolidation zone)
-            elif opposite == "bearish" and closes[j] > opens[j]:
-                break
-            elif opposite == "bullish" and closes[j] < opens[j]:
-                break
+            is_bullish = closes[j] > opens[j]
+            is_bearish = closes[j] < opens[j]
+            if opposite_dir == "bearish":
+                if is_bearish:
+                    return j
+                if is_bullish:
+                    # same direction as displacement → entered impulse leg
+                    break
+                # doji → keep walking back
+            else:  # opposite_dir == "bullish"
+                if is_bullish:
+                    return j
+                if is_bearish:
+                    break
         return None
 
     @staticmethod

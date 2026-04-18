@@ -89,9 +89,12 @@ class RiskManager:
         self._peak_balance_eod: float = 0.0
         self._starting_balance: float = 0.0
         self._mll_limit: float = config.TOPSTEP_MLL            # $2,000
+        # Locked 2026-04-17 via M17b validation (Combine rolling pass rate
+        # 19/20 = 95% on NY AM 2024 vs 1/10 without MLL). Changing these
+        # requires re-running the Combine simulator at the new thresholds.
         self._mll_warning_pct: float = 0.40                    # 40% = $800  → -25% size
-        self._mll_caution_pct: float = 0.80                    # 80% = $1,600 → -50% size
-        self._mll_stop_pct: float = 0.95                       # 95% = $1,900 → no trades
+        self._mll_caution_pct: float = 0.60                    # 60% = $1,200 → -50% size
+        self._mll_stop_pct: float = 0.85                       # 85% = $1,700 → no trades
         self._profit_target: float = config.TOPSTEP_PROFIT_TARGET  # $3,000
         self._target_reached: bool = False
         self._protective_after_target: bool = False  # for funded account, not combine
@@ -116,8 +119,8 @@ class RiskManager:
         mll: float = config.TOPSTEP_MLL,
         profit_target: float = config.TOPSTEP_PROFIT_TARGET,
         warning_pct: float = 0.40,
-        caution_pct: float = 0.80,
-        stop_pct: float = 0.95,
+        caution_pct: float = 0.60,
+        stop_pct: float = 0.85,
         protective_after_target: bool = False,
         cruise_mode: bool = False,
     ) -> None:

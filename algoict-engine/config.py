@@ -103,8 +103,13 @@ VPIN_HIGH_SIZE_REDUCTION = 0.25   # Reduce position size by 25% when VPIN high
 VPIN_HIGH_CONFLUENCE_BUMP = 1     # Add +1 to min confluence when VPIN high
 
 # ---------------------------------------------------------------------------
-# Confluence Scoring (max 20 pts)
+# Confluence Scoring
 # ---------------------------------------------------------------------------
+# Weights sum to 19, so the ACHIEVABLE max is 19 — MAX_CONFLUENCE used to
+# advertise 20 which was a drift between the table and the actual
+# factors (audit finding 2026-04-17). The tier thresholds (12+=A+, 9+=high,
+# 7+=standard) are calibrated against the real ceiling and unchanged.
+# If a 20th factor is added in the future, bump MAX_CONFLUENCE accordingly.
 CONFLUENCE_WEIGHTS = {
     "liquidity_grab":       2,   # ICT
     "fair_value_gap":       2,   # ICT
@@ -121,7 +126,8 @@ CONFLUENCE_WEIGHTS = {
     "vpin_validated_sweep":  1,  # VPIN
     "vpin_quality_session":  1,  # VPIN
 }
-MAX_CONFLUENCE = 20
+# Derived — single source of truth is CONFLUENCE_WEIGHTS above.
+MAX_CONFLUENCE = sum(CONFLUENCE_WEIGHTS.values())
 
 # Confluence tiers
 CONFLUENCE_A_PLUS = 12        # 12+ = A+ full position

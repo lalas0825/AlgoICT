@@ -184,6 +184,7 @@ class TopstepXClient:
         self._ws_running = False
         self._bar_callbacks: list[Callable] = []
         self._subscribed_symbols: set[str] = set()
+        self._on_ws_exhausted: Optional[Callable[[], Any]] = None
 
         # Account selection — resolved via /Account/search after auth
         self._requested_account_id: str = str(account_id or "")
@@ -418,11 +419,37 @@ class TopstepXClient:
         side: str,
         contracts: int,
         limit_price: float,
+        reference_price: Optional[float] = None,
+        max_deviation_pct: float = 0.02,
     ) -> OrderResult:
-        """Submit a limit order at limit_price."""
+        """Submit a limit order at ``limit_price``.
+
+        Parameters
+        ----------
+        reference_price : float | None
+            Current market reference (last trade or mid). When provided, the
+            limit price is rejected pre-submission if it deviates from this
+            anchor by more than ``max_deviation_pct``. This guards against
+            the TopstepX "Invalid price outside allowed range" errorCode=2
+            which silently rejected 6 bracket targets on 2026-04-17.
+        max_deviation_pct : float
+            Maximum allowed fractional deviation from ``reference_price``.
+            Default 0.02 (±2%). TopstepX's actual range is narrower and
+            undocumented, but ±2% catches the mis-computed targets we've
+            seen without producing false positives for legitimate setups.
+        """
         _validate_order_params(symbol, side, contracts)
         if limit_price <= 0:
             raise TopstepXOrderError("limit_price must be positive")
+        if reference_price is not None and reference_price > 0:
+            deviation = abs(limit_price - reference_price) / reference_price
+            if deviation > max_deviation_pct:
+                raise TopstepXOrderError(
+                    f"limit_price ${limit_price:.2f} deviates {deviation * 100:.2f}% "
+                    f"from reference ${reference_price:.2f} "
+                    f"(max {max_deviation_pct * 100:.2f}%). Refusing to submit — "
+                    f"broker would reject with 'Invalid price outside allowed range'."
+                )
         contract_id = await self._resolve_contract_id(symbol)
         payload = _build_order_payload(
             contract_id=contract_id,
@@ -727,6 +754,16 @@ class TopstepXClient:
         self._bar_callbacks.append(callback)
         logger.info("Subscribed to 1-min bars: %s", symbol)
 
+    def set_on_ws_exhausted(self, callback: Callable[[], Any]) -> None:
+        """Register an emergency-flatten callback invoked when the SignalR
+        reconnect loop exhausts WS_MAX_RETRIES. Without this hook, the
+        listener task raised TopstepXConnectionError and the engine
+        crashed with open positions unmanaged (audit finding 2026-04-17).
+        The callback is called FIRST (best-effort flatten), then the
+        exception is re-raised so the engine's outer supervisor sees it.
+        Callback can be sync or return a coroutine."""
+        self._on_ws_exhausted = callback
+
     async def _ws_listener_loop(self) -> None:
         """
         Outer retry loop around the SignalR connection. Runs as an asyncio
@@ -748,6 +785,20 @@ class TopstepXClient:
                     logger.error(
                         "SignalR: exceeded max retries (%d). Giving up.", WS_MAX_RETRIES,
                     )
+                    # Emergency flatten BEFORE propagating. We've lost the
+                    # market feed — without a price stream we can't monitor
+                    # stops, can't detect VPIN spikes, can't exit on
+                    # hard-close. Any open position here is uncovered risk.
+                    cb = getattr(self, "_on_ws_exhausted", None)
+                    if cb is not None:
+                        try:
+                            result = cb()
+                            if asyncio.iscoroutine(result):
+                                await result
+                        except Exception as cb_exc:
+                            logger.critical(
+                                "on_ws_exhausted callback failed: %s", cb_exc, exc_info=True,
+                            )
                     raise TopstepXConnectionError(
                         f"SignalR failed after {WS_MAX_RETRIES} retries: {exc}"
                     ) from exc

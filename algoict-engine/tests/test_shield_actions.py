@@ -457,23 +457,43 @@ class TestVPINHaltResume:
         assert rm.vpin_halt_active is True
         assert rm.kill_switch_active is False
 
-    def test_resume_at_threshold_clears_halt(self):
-        """VPIN == 0.70 (exits extreme) → vpin_halt_active=False."""
+    def test_resume_at_deactivate_threshold_clears_halt(self):
+        """VPIN == 0.55 (deactivate threshold) → halt cleared.
+
+        Hysteresis (2026-04-17): activate at 0.70, deactivate at 0.55 —
+        VPIN must drop all the way through the dead band for resume,
+        not just exit the extreme zone.
+        """
         rm = self._make_risk()
         rm.activate_vpin_halt()
         shield = ShieldManager(risk_manager=rm)
         shield._halt_active = True
-        deactivated = shield.check_deactivate(0.70)
+        deactivated = shield.check_deactivate(0.55)
         assert deactivated is True
         assert rm.vpin_halt_active is False
 
-    def test_resume_below_threshold_clears_halt(self):
-        """VPIN < 0.70 after halt → vpin_halt_active=False."""
+    def test_resume_inside_dead_band_keeps_halt(self):
+        """VPIN in 0.55 < v < 0.70 while halted → halt PERSISTS.
+
+        The dead band is the whole point of hysteresis — values that
+        merely exited extreme but haven't fully normalized must not
+        trigger a resume (would cause flapping).
+        """
         rm = self._make_risk()
         rm.activate_vpin_halt()
         shield = ShieldManager(risk_manager=rm)
         shield._halt_active = True
         deactivated = shield.check_deactivate(0.65)
+        assert deactivated is False
+        assert rm.vpin_halt_active is True
+
+    def test_resume_below_deactivate_threshold_clears_halt(self):
+        """VPIN < 0.55 after halt → vpin_halt_active=False."""
+        rm = self._make_risk()
+        rm.activate_vpin_halt()
+        shield = ShieldManager(risk_manager=rm)
+        shield._halt_active = True
+        deactivated = shield.check_deactivate(0.40)
         assert deactivated is True
         assert rm.vpin_halt_active is False
 

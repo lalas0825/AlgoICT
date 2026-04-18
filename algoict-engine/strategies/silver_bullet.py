@@ -160,9 +160,10 @@ class SilverBulletStrategy:
         ts = candles_1min.index[-1]
         last_close = float(last_1["close"])
 
+        # Layer-1 dedup: cache only the timestamp of SUCCESSFUL fires, not
+        # rejects. See strategies/ny_am_reversal.py for the rationale.
         if ts == self._last_evaluated_bar_ts:
             return None
-        self._last_evaluated_bar_ts = ts
 
         active_zone = next(
             (kz for kz in self.KILL_ZONES if self.session.is_kill_zone(ts, kz)),
@@ -353,6 +354,9 @@ class SilverBulletStrategy:
             timestamp=ts,
             kill_zone=active_zone,
         )
+
+        # Stamp bar as evaluated only on success — rejects do not cache.
+        self._last_evaluated_bar_ts = ts
 
         logger.info(
             "EVAL silver_bullet [%s]: confluence=%d/20, signal=fire, reason=fired | %s",
