@@ -1,12 +1,17 @@
-# Environment
+# ─── Environment ────────────────────────────────────────────────────────────
 .env
+*.env
 algoict-engine/.env
+algoict-dashboard/.env*
 
-# Engine runtime state
+# ─── Engine runtime state ───────────────────────────────────────────────────
 algoict-engine/engine.log
+algoict-engine/engine_*.log
+algoict-engine/strategy_lab*.log
 algoict-engine/.swc_mood_sent.txt
+algoict-engine/.engine.lock
 
-# Python
+# ─── Python ─────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -14,34 +19,49 @@ dist/
 build/
 .venv/
 venv/
+.pytest_cache/
 
-# Data (large files — not in git)
+# ─── Data (large files) ─────────────────────────────────────────────────────
 data/*.csv
 data/nq_options_oi/
 data/sp500/
 data/strategy_lab/
 
-# Claude Code transient state
+# ─── Claude Code transient / worktrees ──────────────────────────────────────
+# Worktrees can appear at the repo root OR nested inside subprojects
+# (e.g. algoict-engine/.claude/worktrees/). Match at any depth.
+**/.claude/worktrees/
 .claude/scheduled_tasks.lock
+.claude/settings.local.json
+**/.claude/settings.local.json
 
-# IDE
-.vscode/
-.idea/
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Node (dashboard)
-node_modules/
-.next/
-
-# Engine logs (local only)
-algoict-engine/engine.log
-algoict-engine/engine_*.log
-algoict-engine/strategy_lab*.log
-.claude/worktrees/
-# Ablation scratch
+# ─── Backtest / analysis scratch outputs ────────────────────────────────────
+# Produced by scripts/run_backtest.py --export-json and analyze_trades_json.py
+# during ablations and validation runs. Not checked into git.
 abl_*.json
 abl_*_out.txt
+ny_am_*.json
+ny_am_*.txt
+sb_*.json
+sb_*.txt
+backtest_results.txt
+demo_report.txt
+vpin_analysis_report.txt
+walk_forward_output.txt
+*_analysis.txt
+*_trades.json
 
+# ─── IDE ────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+
+# ─── OS ─────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ─── Node (dashboard) ───────────────────────────────────────────────────────
+node_modules/
+.next/
+*.tsbuildinfo
