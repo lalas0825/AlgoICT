@@ -1435,6 +1435,114 @@ def _update_edge_state(components: Components, state: EngineState) -> None:
     )
 
 
+async def _on_broker_fill(
+    order_data: dict,
+    components: "Components",
+    state: "EngineState",
+) -> None:
+    """
+    Called by the broker's fill callback (user hub GatewayUserOrder status=2).
+
+    Matches the filled order ID against every open position's stop_order and
+    target_order. On a match:
+      - Computes realised P&L
+      - Builds the trade dict expected by _on_trade_closed()
+      - Calls _on_trade_closed() (risk accounting + Supabase + Telegram + post-mortem)
+      - Cancels the surviving counter-order (target if stop hit; stop if target hit)
+      - Removes the position from state.open_positions
+
+    Unknown order IDs are silently ignored (already-closed positions or
+    broker-initiated flattens handled elsewhere).
+    """
+    order_id = str(order_data.get("orderId") or order_data.get("id") or "")
+    fill_price_raw = (
+        order_data.get("filledPrice")
+        or order_data.get("avgPrice")
+        or order_data.get("price")
+    )
+    if not order_id or fill_price_raw is None:
+        logger.warning("Fill event missing orderId or filledPrice: %s", order_data)
+        return
+
+    fill_price = float(fill_price_raw)
+
+    for pos_key, pos in list(state.open_positions.items()):
+        stop_order = pos.get("stop_order")
+        target_order = pos.get("target_order")
+        stop_id = str(stop_order.order_id) if stop_order else ""
+        target_id = str(target_order.order_id) if target_order else ""
+
+        is_stop = bool(stop_id and stop_id == order_id)
+        is_target = bool(target_id and target_id == order_id)
+        if not is_stop and not is_target:
+            continue
+
+        signal = pos["signal"]
+        entry_price = float(signal.entry_price)
+        contracts = int(signal.contracts)
+        direction = signal.direction
+        opened_at = pos.get("opened_at")
+        current_stop = pos.get("current_stop_price", float(signal.stop_price))
+        stop_points = abs(current_stop - entry_price)
+
+        if direction == "long":
+            pnl = (fill_price - entry_price) * contracts * config.MNQ_POINT_VALUE
+        else:
+            pnl = (entry_price - fill_price) * contracts * config.MNQ_POINT_VALUE
+
+        reason = "trailing_stop" if is_stop else "target"
+
+        trade_dict = {
+            "id": pos_key,
+            "strategy": signal.strategy,
+            "direction": direction,
+            "symbol": signal.symbol,
+            "entry_price": entry_price,
+            "exit_price": fill_price,
+            "entry_time": str(opened_at) if opened_at else "",
+            "exit_time": str(datetime.now(timezone.utc)),
+            "pnl": pnl,
+            "confluence_score": getattr(signal, "confluence_score", 0),
+            "ict_concepts": list(
+                getattr(signal, "confluence_breakdown", {}).keys()
+            ),
+            "kill_zone": getattr(signal, "kill_zone", ""),
+            "stop_points": stop_points,
+            "contracts": contracts,
+            "reason": reason,
+        }
+
+        logger.info(
+            "TRADE CLOSED: %s %s %dx @ %.2f | P&L: $%.2f | Reason: %s",
+            direction, signal.symbol, contracts, fill_price, pnl, reason,
+        )
+
+        await _on_trade_closed(components, state, trade_dict)
+        del state.open_positions[pos_key]
+
+        # Cancel the surviving counter-order
+        try:
+            if is_stop and target_order:
+                await components.broker.cancel_order(str(target_order.order_id))
+                logger.info(
+                    "Cancelled target order %s after stop fill", target_order.order_id
+                )
+            elif is_target and stop_order:
+                await components.broker.cancel_order(str(stop_order.order_id))
+                logger.info(
+                    "Cancelled stop order %s after target fill", stop_order.order_id
+                )
+        except Exception as exc:
+            logger.warning("Counter-order cancel failed: %s", exc)
+
+        return  # position found and processed — stop iterating
+
+    logger.debug(
+        "Fill for order %s not matched to any open position (already closed?)",
+        order_id,
+    )
+
+
 async def _on_trade_closed(
     components: Components,
     state: EngineState,
@@ -1469,7 +1577,19 @@ async def _on_trade_closed(
         except Exception as exc:
             logger.warning("Supabase trade write failed: %s", exc)
 
-    # 3. post-mortem on losses
+    # 3. Telegram WIN/LOSS alert
+    if components.telegram is not None:
+        try:
+            await components.telegram.send_trade_closed(
+                symbol=trade.get("symbol", "MNQ"),
+                pnl=pnl,
+                reason=trade.get("reason", "stop"),
+                close_price=float(trade.get("exit_price", 0.0)),
+            )
+        except Exception as exc:
+            logger.warning("Telegram trade closed alert failed: %s", exc)
+
+    # 5. post-mortem on losses
     if pnl < 0 and components.post_mortem is not None:
         try:
             market_ctx = {
@@ -2051,6 +2171,14 @@ async def run(
             )
             await _flatten_all(components, state, reason="signalr_exhausted", emergency=True)
         components.broker.set_on_ws_exhausted(_ws_exhausted_flatten)
+
+    # Register fill callback — routes broker order fills to _on_trade_closed().
+    # Must be set before broker.connect() so the user hub task picks it up.
+    if hasattr(components.broker, "set_fill_callback"):
+        async def _fill_cb(order_data: dict) -> None:
+            await _on_broker_fill(order_data, components, state)
+        components.broker.set_fill_callback(_fill_cb)
+        logger.info("Registered broker fill callback")
 
     # ── 2b. Connect broker (starts SignalR with symbols already registered) ─
     try:

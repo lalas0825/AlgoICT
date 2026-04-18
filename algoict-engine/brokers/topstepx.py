@@ -179,12 +179,16 @@ class TopstepXClient:
         self._token: Optional[AuthToken] = None
         self._session: Optional[aiohttp.ClientSession] = None
 
-        # WebSocket
+        # WebSocket — market hub (bars)
         self._ws_task: Optional[asyncio.Task] = None
         self._ws_running = False
         self._bar_callbacks: list[Callable] = []
         self._subscribed_symbols: set[str] = set()
         self._on_ws_exhausted: Optional[Callable[[], Any]] = None
+
+        # WebSocket — user hub (order fills)
+        self._user_hub_task: Optional[asyncio.Task] = None
+        self._fill_callback: Optional[Callable] = None
 
         # Account selection — resolved via /Account/search after auth
         self._requested_account_id: str = str(account_id or "")
@@ -199,22 +203,24 @@ class TopstepXClient:
     # ------------------------------------------------------------------ #
 
     async def connect(self) -> None:
-        """Authenticate and start the WebSocket listener task."""
+        """Authenticate and start the WebSocket listener tasks."""
         self._session = aiohttp.ClientSession()
         await self._authenticate()
         self._ws_running = True
         self._ws_task = asyncio.create_task(self._ws_listener_loop())
+        self._user_hub_task = asyncio.create_task(self._user_hub_listener_loop())
         logger.info("TopstepXClient connected (account: %s)", self._account_id)
 
     async def close(self) -> None:
         """Gracefully stop WS and close HTTP session."""
         self._ws_running = False
-        if self._ws_task:
-            self._ws_task.cancel()
-            try:
-                await self._ws_task
-            except asyncio.CancelledError:
-                pass
+        for task in (self._ws_task, self._user_hub_task):
+            if task:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
         if self._session and not self._session.closed:
             await self._session.close()
         logger.info("TopstepXClient closed")
@@ -724,6 +730,119 @@ class TopstepXClient:
         return parsed
 
     # ------------------------------------------------------------------ #
+    # Real-time streaming — SignalR user hub → order fill events         #
+    # ------------------------------------------------------------------ #
+
+    # User hub URL — receives GatewayUserOrder fill notifications
+    _USER_HUB = "wss://rtc.topstepx.com/hubs/user"
+
+    async def _user_hub_listener_loop(self) -> None:
+        """Outer retry loop for the user/account hub (order fills).
+
+        Mirrors the market hub retry pattern: exponential backoff,
+        re-auth on reconnect. Does NOT have a hard max-retries limit
+        (fills are too critical to give up on).
+        """
+        backoff = WS_RECONNECT_BASE_S
+        while self._ws_running:
+            try:
+                await self._connect_user_hub_and_listen()
+                backoff = WS_RECONNECT_BASE_S  # reset on clean exit
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning(
+                    "User hub disconnected (%s). Reconnecting in %.1fs", exc, backoff
+                )
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, WS_RECONNECT_MAX_S)
+                try:
+                    await self._ensure_token()
+                except Exception:
+                    pass
+
+    async def _connect_user_hub_and_listen(self) -> None:
+        """Connect to the TopstepX user hub and listen for GatewayUserOrder events.
+
+        ProjectX user hub emits GatewayUserOrder(accountId, orderData) whenever
+        an order status changes. Status code 2 = Filled (complete fill).
+        We route complete fills to ``_fill_callback`` so the engine can call
+        ``_on_trade_closed()`` and update daily risk accounting.
+        """
+        token = await self._ensure_token()
+        loop = asyncio.get_running_loop()
+        url = f"{self._USER_HUB}?access_token={token}"
+        conn = HubConnectionBuilder()\
+            .with_url(url, options={"skip_negotiation": True})\
+            .build()
+
+        disconnected = asyncio.Event()
+
+        def _on_order_update(args: list) -> None:
+            """Runs in signalrcore's thread — bridge fills to asyncio loop."""
+            try:
+                # GatewayUserOrder args shape: [accountId, orderData] or [orderData]
+                order_data: dict
+                if len(args) >= 2 and isinstance(args[1], dict):
+                    order_data = args[1]
+                elif len(args) >= 1 and isinstance(args[0], dict):
+                    order_data = args[0]
+                else:
+                    return
+
+                # ProjectX status codes: 2 = Filled
+                if order_data.get("status") != 2:
+                    return
+
+                # Ignore partial fills — wait for the complete fill event
+                filled_qty = order_data.get("filledQuantity") or 0
+                total_qty = order_data.get("qty") or order_data.get("contracts") or 0
+                if filled_qty and total_qty and int(filled_qty) < int(total_qty):
+                    return
+
+                oid = order_data.get("orderId") or order_data.get("id")
+                fp = order_data.get("filledPrice") or 0
+                logger.info("User hub: order %s FILLED @ %.2f", oid, fp)
+
+                if self._fill_callback is not None:
+                    asyncio.run_coroutine_threadsafe(
+                        self._fill_callback(order_data), loop
+                    )
+            except Exception as exc:
+                logger.exception("User hub order handler error: %s", exc)
+
+        def _on_open() -> None:
+            logger.info(
+                "User hub: connected, subscribing account %s", self._account_id
+            )
+            conn.send("SubscribeAccounts", [self._account_id])
+
+        def _on_close() -> None:
+            logger.warning("User hub: disconnected")
+            loop.call_soon_threadsafe(disconnected.set)
+
+        def _on_error(err: Exception) -> None:
+            logger.error("User hub: error — %s", err)
+            loop.call_soon_threadsafe(disconnected.set)
+
+        conn.on("GatewayUserOrder", _on_order_update)
+        conn.on_open(_on_open)
+        conn.on_close(_on_close)
+        conn.on_error(_on_error)
+
+        logger.info("User hub: connecting to %s", self._USER_HUB)
+        conn.start()
+        try:
+            while self._ws_running and not disconnected.is_set():
+                await asyncio.sleep(1)
+        finally:
+            try:
+                conn.stop()
+            except Exception:
+                pass
+            logger.info("User hub: connection stopped")
+
+    # ------------------------------------------------------------------ #
     # Real-time streaming — SignalR market hub → 1-min bar aggregation   #
     # ------------------------------------------------------------------ #
     #
@@ -753,6 +872,15 @@ class TopstepXClient:
         self._subscribed_symbols.add(symbol.upper())
         self._bar_callbacks.append(callback)
         logger.info("Subscribed to 1-min bars: %s", symbol)
+
+    def set_fill_callback(self, callback: Callable) -> None:
+        """Register callback invoked when any order is fully filled.
+
+        The callback signature is: ``async def cb(order_data: dict) -> None``
+        where ``order_data`` is the raw GatewayUserOrder payload from the
+        TopstepX user hub (contains orderId, filledPrice, status, etc.).
+        """
+        self._fill_callback = callback
 
     def set_on_ws_exhausted(self, callback: Callable[[], Any]) -> None:
         """Register an emergency-flatten callback invoked when the SignalR
