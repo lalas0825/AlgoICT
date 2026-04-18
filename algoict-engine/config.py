@@ -76,7 +76,7 @@ HARD_CLOSE_MINUTE = 0
 MIN_CONFLUENCE = 7            # Minimum 7/20 to take a trade
 MAX_MNQ_TRADES_PER_DAY = 3   # Max 3 MNQ trades per day
 MAX_CONTRACTS = 50            # Max 50 MNQ contracts
-TRADE_MANAGEMENT = "fixed"   # "fixed" | "partials_be" | "trailing"
+TRADE_MANAGEMENT = "trailing"  # "fixed" | "partials_be" | "trailing"
 
 # Topstep Compliance
 TOPSTEP_MLL = 2000            # Maximum Loss Limit: $2,000

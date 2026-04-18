@@ -1224,6 +1224,7 @@ async def _execute_signal(
         "stop_order": stop_order,
         "target_order": target_order,
         "opened_at": datetime.now(timezone.utc),
+        "current_stop_price": float(signal.stop_price),
     }
 
     # Log to Supabase. Only fields KNOWN to exist in the `signals` table
@@ -1533,6 +1534,82 @@ async def _reconcile_positions(components: Components, state: EngineState) -> No
         )
 
 
+async def _manage_open_positions(
+    components: Components,
+    state: EngineState,
+) -> None:
+    """
+    Trail the protective stop to the most recent 5min swing low (long) or
+    swing high (short) for every open position.
+
+    Mirrors backtester._update_trailing_stop exactly:
+      - Same swing source: components.detectors["swing"] (5min + 15min)
+      - Same tighten-only logic: LONG new_stop > current_stop;
+        SHORT new_stop < current_stop
+      - On improvement: cancel old stop order, place new stop order
+
+    Race condition handling: if cancel_order fails the old stop may already
+    have been executed (position closed), so we log a warning and skip the
+    replace to avoid double-cancelling a filled order.
+    """
+    swing = components.detectors.get("swing")
+    if swing is None or not state.open_positions:
+        return
+
+    broker = components.broker
+
+    for pos in list(state.open_positions.values()):
+        signal = pos["signal"]
+        direction = signal.direction
+        symbol = signal.symbol
+        contracts = signal.contracts
+        current_stop = pos.get("current_stop_price", float(signal.stop_price))
+
+        if direction == "long":
+            sp = swing.get_latest_swing_low()
+            if sp is None or sp.price <= current_stop:
+                continue
+            new_stop = sp.price
+        else:
+            sp = swing.get_latest_swing_high()
+            if sp is None or sp.price >= current_stop:
+                continue
+            new_stop = sp.price
+
+        old_stop_order = pos.get("stop_order")
+        old_order_id = old_stop_order.order_id if old_stop_order else None
+
+        if old_order_id:
+            try:
+                await broker.cancel_order(old_order_id)
+            except Exception as exc:
+                logger.warning(
+                    "TRAILING STOP: cancel order %s failed (may already be filled): %s",
+                    old_order_id, exc,
+                )
+                continue  # stop may be executed — do not replace
+
+        exit_side = "sell" if direction == "long" else "buy"
+        try:
+            new_stop_order = await broker.submit_stop_order(
+                symbol=symbol,
+                side=exit_side,
+                contracts=contracts,
+                stop_price=new_stop,
+            )
+        except Exception as exc:
+            logger.error("TRAILING STOP: failed to submit new stop: %s", exc)
+            continue
+
+        diff = new_stop - current_stop if direction == "long" else current_stop - new_stop
+        logger.info(
+            "TRAILING STOP updated: %s %s stop %.2f → %.2f (+%.1f pts)",
+            direction, symbol, current_stop, new_stop, diff,
+        )
+        pos["stop_order"] = new_stop_order
+        pos["current_stop_price"] = new_stop
+
+
 async def _on_new_bar(
     bar: dict,
     components: Components,
@@ -1624,6 +1701,10 @@ async def _on_new_bar(
 
         if state.hard_close_done:
             return
+
+        # ── 4b. Trailing stop management ─────────────────────────────
+        if config.TRADE_MANAGEMENT == "trailing" and state.open_positions:
+            await _manage_open_positions(components, state)
 
         # ── 5. Strategy evaluation ────────────────────────────────────
         bars = state.bars_1min
