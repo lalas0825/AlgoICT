@@ -65,3 +65,7 @@ desktop.ini
 node_modules/
 .next/
 *.tsbuildinfo
+
+# Backtest output logs (catchall)
+algoict-engine/*_output.log
+algoict-engine/*_output.txt
