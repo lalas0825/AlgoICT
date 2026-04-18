@@ -81,6 +81,7 @@ class Trade:
     reason: str                 # 'target' | 'stop' | 'hard_close'
     confluence_score: int
     duration_bars: int          # number of 1-min bars held
+    kill_zone: str = ""         # which KZ produced this trade
 
     def __repr__(self) -> str:
         return (
@@ -130,20 +131,27 @@ class BacktestResult:
         )
 
 
+VALID_TRADE_MGMT = ("fixed", "partials_be", "trailing")
+
+
 class Backtester:
     """
     Candle-by-candle strategy simulator.
 
     Parameters
     ----------
-    strategy       : strategy instance with ENTRY_TF, CONTEXT_TF, evaluate(), reset_daily()
-    detectors      : dict — standard detector bag shared with the strategy;
-                     may contain 'swing_entry', 'swing_context', 'structure',
-                     'fvg', 'ob', 'displacement', 'liquidity', 'confluence',
-                     'tracked_levels'. Missing keys are skipped silently.
-    risk_manager   : RiskManager instance
-    tf_manager     : TimeframeManager instance (its cache is cleared at run start)
-    session_manager: SessionManager instance (used by strategy, not backtester)
+    strategy        : strategy instance with ENTRY_TF, CONTEXT_TF, evaluate(), reset_daily()
+    detectors       : dict — standard detector bag shared with the strategy;
+                      may contain 'swing_entry', 'swing_context', 'structure',
+                      'fvg', 'ob', 'displacement', 'liquidity', 'confluence',
+                      'tracked_levels'. Missing keys are skipped silently.
+    risk_manager    : RiskManager instance
+    tf_manager      : TimeframeManager instance (its cache is cleared at run start)
+    session_manager : SessionManager instance (used by strategy, not backtester)
+    trade_management: "fixed" (default) | "partials_be" | "trailing"
+                      fixed      — standard 1:RR exit at stop/target
+                      partials_be — at 1R close 50 %, move stop to BE; remainder runs to target
+                      trailing   — no fixed target; stop trails last 5min swing low/high
     """
 
     def __init__(
@@ -153,12 +161,18 @@ class Backtester:
         risk_manager,
         tf_manager,
         session_manager,
+        trade_management: str = "fixed",
     ):
+        if trade_management not in VALID_TRADE_MGMT:
+            raise ValueError(
+                f"trade_management must be one of {VALID_TRADE_MGMT}, got {trade_management!r}"
+            )
         self.strategy = strategy
         self.detectors = detectors
         self.risk = risk_manager
         self.tf = tf_manager
         self.session = session_manager
+        self.trade_management = trade_management
 
         self.trades: list = []
         self.signals: list = []
@@ -255,13 +269,21 @@ class Backtester:
                 if i == open_position["entry_bar_idx"]:
                     pass
                 else:
-                    exit_info = self._check_exit(
-                        open_position, bar_high, bar_low, bar_close, current_ts,
-                    )
-                    if exit_info is not None:
-                        trade = self._close_position(
-                            open_position, exit_info, current_ts, i,
+                    if self.trade_management == "partials_be":
+                        closed_trades = self._process_partials_be(
+                            open_position, bar_high, bar_low, bar_close, current_ts, i,
                         )
+                    elif self.trade_management == "trailing":
+                        self._update_trailing_stop(open_position)
+                        closed_trades = self._process_fixed(
+                            open_position, bar_high, bar_low, bar_close, current_ts, i,
+                        )
+                    else:
+                        closed_trades = self._process_fixed(
+                            open_position, bar_high, bar_low, bar_close, current_ts, i,
+                        )
+
+                    for trade in closed_trades:
                         self.trades.append(trade)
                         self.risk.record_trade(trade.pnl)
                         if hasattr(self.risk, 'record_trading_day'):
@@ -269,6 +291,8 @@ class Backtester:
                         daily_pnl[current_date] = (
                             daily_pnl.get(current_date, 0.0) + trade.pnl
                         )
+
+                    if open_position.get("closed"):
                         open_position = None
 
             if open_position is not None:
@@ -347,6 +371,7 @@ class Backtester:
                 "strategy": signal.strategy,
                 "symbol": signal.symbol,
                 "direction": signal.direction,
+                "kill_zone": signal.kill_zone,
                 "entry_time": current_ts,
                 "entry_price": float(signal.entry_price),
                 "stop_price": sig_stop,
@@ -368,7 +393,12 @@ class Backtester:
     # Exit / P&L                                                            #
     # ------------------------------------------------------------------ #
 
-    def _check_exit(
+    def _calc_pnl(self, direction: str, entry: float, exit_px: float, contracts: int) -> float:
+        if direction == "long":
+            return (exit_px - entry) * contracts * MNQ_POINT_VALUE
+        return (entry - exit_px) * contracts * MNQ_POINT_VALUE
+
+    def _check_raw_exit(
         self,
         pos: dict,
         bar_high: float,
@@ -376,68 +406,180 @@ class Backtester:
         bar_close: float,
         current_ts: pd.Timestamp,
     ) -> Optional[dict]:
-        """
-        Return a dict {'exit_price', 'reason'} if the 1-min bar triggers any
-        exit (stop / target / hard close). None otherwise.
-
-        If stop AND target both fall inside the bar range, STOP wins.
-        """
-        # Hard close takes priority — flatten immediately
+        """Return {'exit_price', 'reason'} or None. Stop wins over target."""
         if self.risk.check_hard_close(current_ts):
             return {"exit_price": bar_close, "reason": "hard_close"}
-
         direction = pos["direction"]
         stop = pos["stop_price"]
-        target = pos["target_price"]
-
+        target = pos.get("target_price")
         if direction == "long":
             if bar_low <= stop:
                 return {"exit_price": stop, "reason": "stop"}
-            if bar_high >= target:
+            if target is not None and bar_high >= target:
                 return {"exit_price": target, "reason": "target"}
-        else:  # short
+        else:
             if bar_high >= stop:
                 return {"exit_price": stop, "reason": "stop"}
-            if bar_low <= target:
+            if target is not None and bar_low <= target:
                 return {"exit_price": target, "reason": "target"}
-
         return None
 
-    def _close_position(
-        self,
-        pos: dict,
-        exit_info: dict,
-        current_ts: pd.Timestamp,
-        current_bar_idx: int,
-    ) -> Trade:
-        """Build and return a Trade record for a closing position."""
-        entry_price = pos["entry_price"]
-        exit_price = exit_info["exit_price"]
-        contracts = pos["contracts"]
-
-        if pos["direction"] == "long":
-            pnl = (exit_price - entry_price) * contracts * MNQ_POINT_VALUE
-        else:
-            pnl = (entry_price - exit_price) * contracts * MNQ_POINT_VALUE
-
-        duration = current_bar_idx - pos["entry_bar_idx"]
-
+    def _make_trade(self, pos: dict, exit_px: float, reason: str,
+                    current_ts: pd.Timestamp, current_bar_idx: int,
+                    contracts: Optional[int] = None) -> Trade:
+        contracts = contracts if contracts is not None else pos["contracts"]
+        pnl = self._calc_pnl(pos["direction"], pos["entry_price"], exit_px, contracts)
         return Trade(
             strategy=pos["strategy"],
             symbol=pos["symbol"],
             direction=pos["direction"],
             entry_time=pos["entry_time"],
             exit_time=current_ts,
-            entry_price=entry_price,
+            entry_price=pos["entry_price"],
             stop_price=pos["stop_price"],
-            target_price=pos["target_price"],
-            exit_price=exit_price,
+            target_price=pos.get("target_price", pos["entry_price"]),
+            exit_price=exit_px,
             contracts=contracts,
             pnl=pnl,
-            reason=exit_info["reason"],
+            reason=reason,
             confluence_score=pos["confluence_score"],
-            duration_bars=duration,
+            duration_bars=current_bar_idx - pos["entry_bar_idx"],
+            kill_zone=pos.get("kill_zone", ""),
         )
+
+    def _process_fixed(
+        self,
+        pos: dict,
+        bar_high: float,
+        bar_low: float,
+        bar_close: float,
+        current_ts: pd.Timestamp,
+        current_bar_idx: int,
+    ) -> list:
+        """Standard fixed stop/target. Returns list[Trade] (0 or 1)."""
+        exit_info = self._check_raw_exit(pos, bar_high, bar_low, bar_close, current_ts)
+        if exit_info is None:
+            return []
+        trade = self._make_trade(pos, exit_info["exit_price"], exit_info["reason"],
+                                 current_ts, current_bar_idx)
+        pos["closed"] = True
+        return [trade]
+
+    def _process_partials_be(
+        self,
+        pos: dict,
+        bar_high: float,
+        bar_low: float,
+        bar_close: float,
+        current_ts: pd.Timestamp,
+        current_bar_idx: int,
+    ) -> list:
+        """
+        Partials + break-even management:
+          1. At 1R (entry + stop_distance): close floor(contracts/2), move stop → entry (BE)
+          2. Remaining half runs to original target.
+          3. If BE hit after partial: remaining closes at entry → $0 on remainder.
+        Returns list[Trade] with 0, 1, or 2 trades.
+        """
+        trades_out: list = []
+        direction = pos["direction"]
+        entry = pos["entry_price"]
+        stop = pos["stop_price"]
+        stop_dist = abs(entry - stop)
+
+        # ── Phase A: partial not yet taken ─────────────────────────────
+        if not pos.get("partial_done"):
+            # 1R level
+            if direction == "long":
+                one_r = entry + stop_dist
+                partial_hit = bar_high >= one_r
+            else:
+                one_r = entry - stop_dist
+                partial_hit = bar_low <= one_r
+
+            # Check stop before partial (stop always wins)
+            if self.risk.check_hard_close(current_ts):
+                trade = self._make_trade(pos, bar_close, "hard_close", current_ts, current_bar_idx)
+                pos["closed"] = True
+                return [trade]
+
+            if direction == "long" and bar_low <= stop:
+                trade = self._make_trade(pos, stop, "stop", current_ts, current_bar_idx)
+                pos["closed"] = True
+                return [trade]
+            if direction == "short" and bar_high >= stop:
+                trade = self._make_trade(pos, stop, "stop", current_ts, current_bar_idx)
+                pos["closed"] = True
+                return [trade]
+
+            if partial_hit:
+                # Close 50% contracts (floor division)
+                total = pos["contracts"]
+                partial_contracts = total // 2
+                remaining = total - partial_contracts
+                partial_pnl_px = one_r
+
+                partial_trade = self._make_trade(
+                    pos, partial_pnl_px, "partial",
+                    current_ts, current_bar_idx, contracts=partial_contracts,
+                )
+                trades_out.append(partial_trade)
+
+                # Update position: move stop to entry (BE), reduce contracts
+                pos["stop_price"] = entry
+                pos["contracts"] = remaining
+                pos["partial_done"] = True
+                pos["partial_contracts_closed"] = partial_contracts
+
+                # Same bar: check if full target also hit (spike through both 1R and target)
+                target = pos.get("target_price")
+                if target is not None:
+                    if direction == "long" and bar_high >= target:
+                        rem_trade = self._make_trade(
+                            pos, target, "target", current_ts, current_bar_idx,
+                            contracts=remaining,
+                        )
+                        trades_out.append(rem_trade)
+                        pos["closed"] = True
+                    elif direction == "short" and bar_low <= target:
+                        rem_trade = self._make_trade(
+                            pos, target, "target", current_ts, current_bar_idx,
+                            contracts=remaining,
+                        )
+                        trades_out.append(rem_trade)
+                        pos["closed"] = True
+                return trades_out
+
+            return []  # nothing triggered this bar
+
+        # ── Phase B: partial already taken, BE stop + target ───────────
+        exit_info = self._check_raw_exit(pos, bar_high, bar_low, bar_close, current_ts)
+        if exit_info is None:
+            return []
+        trade = self._make_trade(pos, exit_info["exit_price"], exit_info["reason"],
+                                 current_ts, current_bar_idx)
+        pos["closed"] = True
+        return [trade]
+
+    def _update_trailing_stop(self, pos: dict) -> None:
+        """
+        Advance the trailing stop to the most recent swing low (long) or
+        swing high (short) detected by swing_entry, if it improves the stop.
+        Only tightens — never widens.
+        """
+        swing = self.detectors.get("swing_entry")
+        if swing is None:
+            return
+        direction = pos["direction"]
+        current_stop = pos["stop_price"]
+        if direction == "long":
+            sp = swing.get_latest_swing_low()
+            if sp is not None and sp.price > current_stop:
+                pos["stop_price"] = sp.price
+        else:
+            sp = swing.get_latest_swing_high()
+            if sp is not None and sp.price < current_stop:
+                pos["stop_price"] = sp.price
 
     # ------------------------------------------------------------------ #
     # Detectors / sweeps                                                    #

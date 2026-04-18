@@ -20,7 +20,7 @@ import pytest
 import pytz
 
 from backtest.backtester import (
-    Backtester, BacktestResult, Trade, SignalLog, MNQ_POINT_VALUE,
+    Backtester, BacktestResult, Trade, SignalLog, MNQ_POINT_VALUE, VALID_TRADE_MGMT,
 )
 from strategies.ny_am_reversal import Signal  # same shape as SB.Signal
 from risk.risk_manager import RiskManager
@@ -689,3 +689,256 @@ class TestHelpers:
             pd.Timedelta(minutes=5),
         )
         assert result == 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Tests — kill_zone in Trade
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestKillZoneTracking:
+
+    def test_kill_zone_propagated_to_trade(self):
+        """kill_zone from Signal flows through to the closed Trade record."""
+        df = _build_day(datetime.date(2025, 3, 3))
+        mock = MockStrategy(
+            fire_on_calls=[2],
+            direction="long",
+            entry_price=100.0, stop_price=99.0, target_price=101.0,
+            contracts=2,
+        )
+        spike_ts = pd.Timestamp("2025-03-03 09:30", tz="US/Central")
+        _patch_bar(df, spike_ts, high=102.0)
+
+        bt = _make_backtester(strategy=mock)
+        result = bt.run(df)
+
+        assert result.total_trades == 1
+        assert result.trades[0].kill_zone == "test"
+
+    def test_kill_zone_empty_string_by_default(self):
+        """Trade.kill_zone defaults to empty string when signal has no KZ."""
+        from strategies.ny_am_reversal import Signal as NySignal
+
+        class KzlessMock(MockStrategy):
+            def evaluate(self, df_entry, df_context):
+                self.eval_count += 1
+                if df_entry.empty:
+                    return None
+                self.last_eval_ts = df_entry.index[-1]
+                if self.eval_count in self.fire_on_calls:
+                    return NySignal(
+                        strategy="mock", symbol="MNQ", direction="long",
+                        entry_price=100.0, stop_price=99.0, target_price=101.0,
+                        contracts=2, confluence_score=8,
+                        timestamp=self.last_eval_ts, kill_zone="",
+                    )
+                return None
+
+        mock = KzlessMock(fire_on_calls=[2])
+        df = _build_day(datetime.date(2025, 3, 3))
+        _patch_bar(df, pd.Timestamp("2025-03-03 09:30", tz="US/Central"), high=102.0)
+        bt = _make_backtester(strategy=mock)
+        result = bt.run(df)
+        assert result.total_trades == 1
+        assert result.trades[0].kill_zone == ""
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Tests — trade_management validation
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _make_bt_mgmt(mode: str):
+    risk = RiskManager()
+    tf = TimeframeManager()
+    session = SessionManager()
+    return Backtester(
+        strategy=MockStrategy(), detectors={},
+        risk_manager=risk, tf_manager=tf, session_manager=session,
+        trade_management=mode,
+    )
+
+
+class TestTradeManagementValidation:
+
+    def test_valid_modes_accepted(self):
+        for mode in VALID_TRADE_MGMT:
+            bt = _make_bt_mgmt(mode)
+            assert bt.trade_management == mode
+
+    def test_invalid_mode_raises(self):
+        with pytest.raises(ValueError, match="trade_management"):
+            _make_bt_mgmt("yolo")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Tests — partials_be trade management
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestPartialsBE:
+    """
+    entry=100, stop=99, target=103  →  stop_dist=1  →  1R at 101.
+    10 contracts  →  partial=5 at 101, remaining=5 to 103.
+    """
+
+    def _make_bt(self, direction="long", entry=100.0, stop=99.0, target=103.0, contracts=10):
+        mock = MockStrategy(
+            fire_on_calls=[2], direction=direction,
+            entry_price=entry, stop_price=stop, target_price=target, contracts=contracts,
+        )
+        risk = RiskManager()
+        tf = TimeframeManager()
+        session = SessionManager()
+        bt = Backtester(
+            strategy=mock, detectors={}, risk_manager=risk,
+            tf_manager=tf, session_manager=session, trade_management="partials_be",
+        )
+        return bt
+
+    def test_partial_fires_at_1r_long(self):
+        df = _build_day(datetime.date(2025, 3, 3))
+        bt = self._make_bt()
+        ts = pd.Timestamp("2025-03-03 09:30", tz="US/Central")
+        _patch_bar(df, ts, high=101.5, low=100.5)  # hits 1R=101, not target=103
+        result = bt.run(df)
+        partials = [t for t in result.trades if t.reason == "partial"]
+        assert len(partials) == 1
+        assert partials[0].contracts == 5
+        assert partials[0].exit_price == pytest.approx(101.0)
+
+    def test_partial_pnl_correct_long(self):
+        df = _build_day(datetime.date(2025, 3, 3))
+        bt = self._make_bt()
+        ts = pd.Timestamp("2025-03-03 09:30", tz="US/Central")
+        _patch_bar(df, ts, high=101.5, low=100.5)
+        result = bt.run(df)
+        partials = [t for t in result.trades if t.reason == "partial"]
+        # (101-100)*5*2 = $10
+        assert partials[0].pnl == pytest.approx(10.0)
+
+    def test_be_stop_closes_remaining_at_zero(self):
+        """After partial, price returns to entry → BE stop → remaining $0 P&L."""
+        df = _build_day(datetime.date(2025, 3, 3))
+        bt = self._make_bt()
+        _patch_bar(df, pd.Timestamp("2025-03-03 09:30", tz="US/Central"), high=101.5, low=100.5)
+        _patch_bar(df, pd.Timestamp("2025-03-03 09:35", tz="US/Central"), low=99.5)
+        result = bt.run(df)
+        be_trades = [t for t in result.trades if t.reason == "stop"]
+        assert len(be_trades) == 1
+        assert be_trades[0].exit_price == pytest.approx(100.0)
+        assert be_trades[0].pnl == pytest.approx(0.0)
+        assert be_trades[0].contracts == 5
+
+    def test_target_hit_after_partial(self):
+        """Remaining 5 contracts hit target=103 → $30 P&L.
+        Day built at price=100.5 so default lows (100.4) stay above BE stop (100)."""
+        df = _build_day(datetime.date(2025, 3, 3), price=100.5)
+        bt = self._make_bt()
+        _patch_bar(df, pd.Timestamp("2025-03-03 09:30", tz="US/Central"), high=101.5, low=100.4)
+        _patch_bar(df, pd.Timestamp("2025-03-03 09:40", tz="US/Central"), high=104.0, low=100.4)
+        result = bt.run(df)
+        targets = [t for t in result.trades if t.reason == "target"]
+        assert len(targets) == 1
+        assert targets[0].contracts == 5
+        assert targets[0].pnl == pytest.approx(30.0)
+
+    def test_total_pnl_partial_plus_target(self):
+        """$10 partial + $30 target = $40 total."""
+        df = _build_day(datetime.date(2025, 3, 3), price=100.5)
+        bt = self._make_bt()
+        _patch_bar(df, pd.Timestamp("2025-03-03 09:30", tz="US/Central"), high=101.5, low=100.4)
+        _patch_bar(df, pd.Timestamp("2025-03-03 09:40", tz="US/Central"), high=104.0, low=100.4)
+        result = bt.run(df)
+        assert result.total_pnl == pytest.approx(40.0)
+
+    def test_stop_before_partial_no_partial_emitted(self):
+        """Stop hit before 1R → full stop-out, no partial."""
+        df = _build_day(datetime.date(2025, 3, 3))
+        bt = self._make_bt()
+        _patch_bar(df, pd.Timestamp("2025-03-03 09:30", tz="US/Central"), low=98.5)
+        result = bt.run(df)
+        assert result.total_trades == 1
+        assert result.trades[0].reason == "stop"
+        assert result.trades[0].contracts == 10
+        # (99-100)*10*2 = -$20
+        assert result.trades[0].pnl == pytest.approx(-20.0)
+
+    def test_short_partial_at_1r(self):
+        """Short: 1R = entry-1 = 99. Partial at 99; (100-99)*5*2 = $10."""
+        df = _build_day(datetime.date(2025, 3, 3))
+        bt = self._make_bt(direction="short", entry=100.0, stop=101.0, target=97.0)
+        _patch_bar(df, pd.Timestamp("2025-03-03 09:30", tz="US/Central"), low=98.5, high=100.5)
+        result = bt.run(df)
+        partials = [t for t in result.trades if t.reason == "partial"]
+        assert len(partials) == 1
+        assert partials[0].pnl == pytest.approx(10.0)
+
+    def test_odd_contracts_floor_division(self):
+        """7 contracts → partial=3 (floor(7/2)), remaining=4."""
+        df = _build_day(datetime.date(2025, 3, 3))
+        bt = self._make_bt(contracts=7)
+        _patch_bar(df, pd.Timestamp("2025-03-03 09:30", tz="US/Central"), high=101.5, low=100.5)
+        result = bt.run(df)
+        partials = [t for t in result.trades if t.reason == "partial"]
+        assert partials[0].contracts == 3
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Tests — trailing stop trade management
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestTrailingStop:
+
+    def _make_bt_trailing(self, direction="long", entry=100.0, stop=98.0, target=105.0):
+        from detectors.swing_points import SwingPointDetector
+        mock = MockStrategy(
+            fire_on_calls=[2], direction=direction,
+            entry_price=entry, stop_price=stop, target_price=target, contracts=5,
+        )
+        swing = SwingPointDetector()
+        risk = RiskManager()
+        tf = TimeframeManager()
+        session = SessionManager()
+        bt = Backtester(
+            strategy=mock, detectors={"swing_entry": swing},
+            risk_manager=risk, tf_manager=tf, session_manager=session,
+            trade_management="trailing",
+        )
+        return bt, swing
+
+    def test_stop_not_updated_when_swing_worse(self):
+        """Swing low at 97 < current stop 98 → stop stays at 98."""
+        from detectors.swing_points import SwingPoint
+        df = _build_day(datetime.date(2025, 3, 3))
+        bt, swing = self._make_bt_trailing(entry=100.0, stop=98.0)
+        swing.swing_points.append(SwingPoint(
+            timestamp=pd.Timestamp("2025-03-03 09:00", tz="US/Central"),
+            price=97.0, type="low", timeframe="5min",
+        ))
+        _patch_bar(df, pd.Timestamp("2025-03-03 09:30", tz="US/Central"), high=106.0)
+        result = bt.run(df)
+        assert result.total_trades == 1
+        assert result.trades[0].stop_price == pytest.approx(98.0)
+
+    def test_trailing_stop_advances_and_fires(self):
+        """Swing low at 99.5 > current stop 98 → stop advances, then bar hits 99.4."""
+        from detectors.swing_points import SwingPoint
+        df = _build_day(datetime.date(2025, 3, 3))
+        bt, swing = self._make_bt_trailing(entry=100.0, stop=98.0)
+        swing.swing_points.append(SwingPoint(
+            timestamp=pd.Timestamp("2025-03-03 09:00", tz="US/Central"),
+            price=99.5, type="low", timeframe="5min",
+        ))
+        _patch_bar(df, pd.Timestamp("2025-03-03 09:30", tz="US/Central"), low=99.3)
+        result = bt.run(df)
+        assert result.total_trades == 1
+        assert result.trades[0].reason == "stop"
+        assert result.trades[0].stop_price == pytest.approx(99.5)
+
+    def test_trailing_target_still_fires(self):
+        """Fixed target works in trailing mode too."""
+        df = _build_day(datetime.date(2025, 3, 3))
+        bt, _ = self._make_bt_trailing(entry=100.0, stop=98.0, target=105.0)
+        _patch_bar(df, pd.Timestamp("2025-03-03 09:30", tz="US/Central"), high=106.0)
+        result = bt.run(df)
+        assert result.total_trades == 1
+        assert result.trades[0].reason == "target"

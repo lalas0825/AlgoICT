@@ -302,6 +302,8 @@ def build_backtester(
     mll_stop_pct: float = 0.95,
     ny_am_only: bool = False,
     ifvg_enabled: bool = True,
+    trade_management: str = "fixed",
+    kill_zones_override: Optional[tuple] = None,
 ) -> tuple[Backtester, dict]:
     """
     Wire up every collaborator the backtester needs. Returns a ready-to-run
@@ -417,7 +419,11 @@ def build_backtester(
         )
 
     # Ablation overrides
-    if ny_am_only and strategy_name_lc == "ny_am_reversal":
+    if kill_zones_override is not None:
+        strategy.KILL_ZONES = kill_zones_override
+        strategy._trades_by_zone = {z: 0 for z in kill_zones_override}
+        print(f"  KZ OVERRIDE: KILL_ZONES = {kill_zones_override}")
+    elif ny_am_only and strategy_name_lc == "ny_am_reversal":
         strategy.KILL_ZONES = ("ny_am",)
         strategy._trades_by_zone = {"ny_am": 0}
         print("  ABLATION: KILL_ZONES restricted to ('ny_am',)")
@@ -446,7 +452,12 @@ def build_backtester(
             )
             bias_label = "dynamic (HTFBiasDetector W+D)"
 
-    backtester = Backtester(strategy, detectors, risk_mgr, tf_mgr, session_mgr)
+    backtester = Backtester(
+        strategy, detectors, risk_mgr, tf_mgr, session_mgr,
+        trade_management=trade_management,
+    )
+    if trade_management != "fixed":
+        print(f"  Trade management: {trade_management}")
 
     config = {
         "strategy": strategy_name_lc,
@@ -454,6 +465,7 @@ def build_backtester(
         "context_tf": getattr(strategy, "CONTEXT_TF", "15min"),
         "htf_bias": bias_label,
         "topstep_mode": topstep_mode,
+        "trade_management": trade_management,
         "min_confluence": 7,
         "risk_per_trade": 250,
         "kill_switch_losses": 3,
@@ -600,6 +612,9 @@ def main() -> int:
 
     # Step 2: backtester + collaborators (seeds tracked_levels from df)
     try:
+        kz_override = None
+        if args.kill_zones:
+            kz_override = tuple(z.strip() for z in args.kill_zones.split(",") if z.strip())
         backtester, config = build_backtester(
             args.strategy,
             df_1min=df,
@@ -610,6 +625,8 @@ def main() -> int:
             mll_stop_pct=args.mll_stop_pct,
             ny_am_only=args.ny_am_only,
             ifvg_enabled=not args.no_ifvg,
+            trade_management=args.trade_management,
+            kill_zones_override=kz_override,
         )
     except Exception as e:
         print(f"✗ Build failed: {e}")
@@ -847,6 +864,26 @@ def _parse_args() -> argparse.Namespace:
         "--no-ifvg",
         action="store_true",
         help="Disable IFVG fallback in NY AM Reversal (ablation)",
+    )
+    p.add_argument(
+        "--trade-management",
+        default="fixed",
+        choices=("fixed", "partials_be", "trailing"),
+        help=(
+            "Exit mode: "
+            "fixed=standard SL/TP; "
+            "partials_be=close 50%% at 1R + move stop to BE; "
+            "trailing=no fixed target, trail last 5min swing. "
+            "Default: fixed"
+        ),
+    )
+    p.add_argument(
+        "--kill-zones",
+        default=None,
+        help=(
+            "Comma-separated kill zone override, e.g. 'london,ny_am'. "
+            "Overrides the strategy's default KILL_ZONES for this run."
+        ),
     )
     return p.parse_args()
 
