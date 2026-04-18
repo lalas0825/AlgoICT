@@ -351,8 +351,7 @@ def run_combine_attempts(
                 "calendar_days": cal_days, "total_pnl": res["total_pnl"],
             })
             remaining = [t for t in remaining if t.entry_time.date() > pass_date]
-            p(f"    Attempt {num:2d}: PASS  cal_days={cal_days}  pnl=${res['total_pnl']:+,.0f}",
-              flush=True)
+            p(f"    Attempt {num:2d}: PASS  cal_days={cal_days}  pnl=${res['total_pnl']:+,.0f}")
         else:
             # Find the date of failure
             bal = acct.starting_balance
@@ -382,7 +381,7 @@ def run_combine_attempts(
                 "calendar_days": cal_days, "total_pnl": res["total_pnl"],
             })
             remaining = [t for t in remaining if t.entry_time.date() > fail_date]
-            p(f"    Attempt {num:2d}: FAIL  {reason}", flush=True)
+            p(f"    Attempt {num:2d}: FAIL  {reason}")
 
     return attempts
 
