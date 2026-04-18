@@ -57,7 +57,7 @@ class PositionResult:
 def calculate_position(
     stop_points: float,
     risk: float = config.RISK_PER_TRADE,
-    point_value: float = 2.0,       # MNQ: $2/point/contract
+    point_value: float = config.MNQ_POINT_VALUE,
     max_contracts: int = config.MAX_CONTRACTS,
 ) -> PositionResult:
     """

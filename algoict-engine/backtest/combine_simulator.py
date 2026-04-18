@@ -39,7 +39,7 @@ import config
 
 logger = logging.getLogger(__name__)
 
-MNQ_POINT_VALUE = 2.0
+MNQ_POINT_VALUE = config.MNQ_POINT_VALUE
 
 
 # ---------------------------------------------------------------------------

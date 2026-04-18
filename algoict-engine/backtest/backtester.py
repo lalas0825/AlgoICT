@@ -59,8 +59,8 @@ logger = logging.getLogger(__name__)
 DETECTOR_LOOKBACK_ENTRY = 150
 DETECTOR_LOOKBACK_CONTEXT = 150
 
-# MNQ dollar value per point
-MNQ_POINT_VALUE = 2.0
+# MNQ dollar value per point — single source of truth is config.MNQ_POINT_VALUE
+from config import MNQ_POINT_VALUE  # noqa: E402  (re-exported for test imports)
 
 
 @dataclass

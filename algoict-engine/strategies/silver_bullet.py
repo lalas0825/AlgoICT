@@ -302,7 +302,7 @@ class SilverBulletStrategy:
         pos = calculate_position(
             stop_points=stop_points,
             risk=config.RISK_PER_TRADE,
-            point_value=2.0,                          # MNQ
+            point_value=config.MNQ_POINT_VALUE,
             max_contracts=config.MAX_CONTRACTS,
         )
 

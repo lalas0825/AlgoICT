@@ -35,7 +35,7 @@ import config
 
 logger = logging.getLogger(__name__)
 
-MNQ_POINT_VALUE = 2.0
+MNQ_POINT_VALUE = config.MNQ_POINT_VALUE
 _RISK_FREE_DAILY = 0.0          # assume 0% risk-free for Sharpe
 
 

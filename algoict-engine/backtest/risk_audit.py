@@ -32,7 +32,7 @@ import config
 
 logger = logging.getLogger(__name__)
 
-MNQ_POINT_VALUE = 2.0
+MNQ_POINT_VALUE = config.MNQ_POINT_VALUE
 _HARD_CLOSE_TIME = datetime.time(config.HARD_CLOSE_HOUR, config.HARD_CLOSE_MINUTE)
 
 
