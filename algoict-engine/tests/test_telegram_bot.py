@@ -301,7 +301,8 @@ class TestSendDailyMood:
         assert "SWC DAILY MOOD" in text
         assert "2026-04-13" in text
         assert "Choppy" in text
-        assert "7/20" in text
+        from config import MAX_CONFLUENCE
+        assert f"7/{MAX_CONFLUENCE}" in text
         assert "100%" in text
         assert "Mixed signals" in text
         # Crucially, should NOT look like an emergency alert

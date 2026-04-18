@@ -9,7 +9,7 @@ Setup
 2. HTF bias:       Daily/Weekly aligned (not neutral)
 3. 5min context:   recent MSS or BOS in HTF direction
 4. 1min entry:     liquidity grab + FVG + Order Block + displacement
-5. Confluence:     >= MIN_CONFLUENCE (7/20) — uses ConfluenceScorer
+5. Confluence:     >= MIN_CONFLUENCE (7 of max 19) — uses ConfluenceScorer
 6. Cancel:         if timestamp >= 10:50 AM CT, skip (late in window)
 7. Risk:           1:2 RR, $250 risk, max 1 trade per session
 
@@ -334,8 +334,9 @@ class SilverBulletStrategy:
         min_required = self.risk.effective_min_confluence
         if conf.total_score < min_required:
             logger.info(
-                "EVAL silver_bullet [%s]: confluence=%d/20, signal=reject, reason=conf_below_min (%d<%d)",
-                _ts_hm(ts), conf.total_score, conf.total_score, min_required,
+                "EVAL silver_bullet [%s]: confluence=%d/%d, signal=reject, reason=conf_below_min (%d<%d)",
+                _ts_hm(ts), conf.total_score, config.MAX_CONFLUENCE,
+                conf.total_score, min_required,
             )
             return None
 
@@ -359,10 +360,16 @@ class SilverBulletStrategy:
         self._last_evaluated_bar_ts = ts
 
         logger.info(
-            "EVAL silver_bullet [%s]: confluence=%d/20, signal=fire, reason=fired | %s",
-            _ts_hm(ts), signal.confluence_score, signal,
+            "EVAL silver_bullet [%s]: confluence=%d/%d, signal=fire, reason=fired | %s",
+            _ts_hm(ts), signal.confluence_score, config.MAX_CONFLUENCE, signal,
         )
         return signal
+
+    def rollback_last_evaluated_bar(self, ts) -> None:
+        """Clear ``_last_evaluated_bar_ts`` if it matches ``ts``. See
+        strategies/ny_am_reversal.py for the full rationale."""
+        if self._last_evaluated_bar_ts == ts:
+            self._last_evaluated_bar_ts = None
 
     def notify_trade_executed(self, signal) -> None:
         """Advance counters only after broker-confirmed entry.

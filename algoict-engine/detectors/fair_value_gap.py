@@ -275,7 +275,16 @@ class FairValueGapDetector:
         -------
         list[FVG] sorted by timestamp ascending
         """
-        active = [fvg for fvg in self.fvgs if not fvg.mitigated]
+        # Exclude IFVGs — this method returns REGULAR FVGs only. IFVGs are
+        # inverted-direction products of a mitigated parent FVG; they live
+        # in the same self.fvgs list but are semantically distinct and
+        # callers fetch them via get_active_ifvgs(). Prior to 2026-04-17
+        # the is_ifvg flag was NOT filtered here — a bullish IFVG would
+        # leak into get_active(direction="bullish") and the strategy's
+        # `used_ifvg` flag (which depends on the FVG fallback never
+        # matching) stayed False, misreporting the setup in logs as a
+        # regular FVG.
+        active = [fvg for fvg in self.fvgs if not fvg.mitigated and not fvg.is_ifvg]
         if timeframe is not None:
             active = [fvg for fvg in active if fvg.timeframe == timeframe]
         if direction is not None:

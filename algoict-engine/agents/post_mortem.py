@@ -52,7 +52,7 @@ try:
 except ImportError:
     ANTHROPIC_AVAILABLE = False
 
-from config import ANTHROPIC_API_KEY, AI_MODEL_POST_MORTEM
+from config import ANTHROPIC_API_KEY, AI_MODEL_POST_MORTEM, MAX_CONFLUENCE
 
 logger = logging.getLogger(__name__)
 
@@ -278,7 +278,7 @@ LOSING TRADE DATA:
 - Loss: ${abs(float(trade.get("pnl", 0))):.2f}
 - Contracts: {trade.get("contracts", 1)}
 - Stop size: {trade.get("stop_points", "N/A")} points
-- Confluence score: {trade.get("confluence_score", "N/A")}/20
+- Confluence score: {trade.get("confluence_score", "N/A")}/{MAX_CONFLUENCE}
 - ICT concepts used: {ict_str}
 - Kill Zone: {trade.get("kill_zone", "N/A")}
 

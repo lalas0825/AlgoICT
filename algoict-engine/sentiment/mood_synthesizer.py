@@ -39,7 +39,7 @@ except ImportError:
     ANTHROPIC_AVAILABLE = False
 
 from config import ANTHROPIC_API_KEY
-from sentiment.confluence_adjuster import get_adjustments
+from sentiment.confluence_adjuster import get_adjustments, combine_adjustments
 
 logger = logging.getLogger(__name__)
 
@@ -188,9 +188,6 @@ class MoodSynthesizer:
         DailyMoodReport
         """
         try:
-            # Get baseline adjustments from confluence_adjuster
-            adj = get_adjustments(event_risk)
-
             # Build blackout windows for high-impact events
             blackout_windows = self._build_blackout_windows(events)
 
@@ -204,15 +201,23 @@ class MoodSynthesizer:
                 headlines=headlines or [],
             )
 
+            mood = MarketMood(ai_result.get("market_mood", "choppy"))
+            # Combine event_risk with mood so the mood label actually gates
+            # risk in production. Prior to 2026-04-17 this Claude path only
+            # used get_adjustments(event_risk) — the mood was informational
+            # and a "choppy" day without a scheduled event got no penalty.
+            # The heuristic fallback was fixed but this main path wasn't.
+            combined = combine_adjustments(event_risk, mood.value)
+
             return DailyMoodReport(
-                market_mood=MarketMood(ai_result.get("market_mood", "choppy")),
+                market_mood=mood,
                 confidence=ai_result.get("confidence", "low"),
                 one_line_summary=ai_result.get("one_line_summary", ""),
                 key_risk=ai_result.get("key_risk", ""),
                 opportunity=ai_result.get("opportunity", ""),
                 event_risk=event_risk,
-                min_confluence_override=adj["min_confluence"],
-                position_size_multiplier=adj["position_multiplier"],
+                min_confluence_override=combined.min_confluence,
+                position_size_multiplier=combined.position_multiplier,
                 news_blackout_windows=blackout_windows,
                 news_sentiment=news_sentiment,
                 fedwatch_shift=fedwatch_shift,
@@ -237,18 +242,21 @@ class MoodSynthesizer:
         Useful for testing without a live API call.
         """
         try:
-            adj = get_adjustments(event_risk)
             ai_result = self._parse_ai_response(ai_response)
+            mood = MarketMood(ai_result.get("market_mood", "choppy"))
+            # Same combine_adjustments wiring as generate() — mood drives
+            # risk overrides, not just event_risk.
+            combined = combine_adjustments(event_risk, mood.value)
 
             return DailyMoodReport(
-                market_mood=MarketMood(ai_result.get("market_mood", "choppy")),
+                market_mood=mood,
                 confidence=ai_result.get("confidence", "low"),
                 one_line_summary=ai_result.get("one_line_summary", ""),
                 key_risk=ai_result.get("key_risk", ""),
                 opportunity=ai_result.get("opportunity", ""),
                 event_risk=event_risk,
-                min_confluence_override=adj["min_confluence"],
-                position_size_multiplier=adj["position_multiplier"],
+                min_confluence_override=combined.min_confluence,
+                position_size_multiplier=combined.position_multiplier,
                 news_blackout_windows=blackout_windows or [],
                 news_sentiment=news_sentiment,
                 fedwatch_shift=fedwatch_shift,
@@ -416,11 +424,6 @@ market_mood rules:
         """Return a conservative fallback report when AI is unavailable."""
         logger.warning("MoodSynthesizer using fallback: %s", error)
 
-        try:
-            adj = get_adjustments(event_risk)
-        except Exception:
-            adj = {"min_confluence": 7, "position_multiplier": 1.0}
-
         # Simple heuristic mood determination
         if event_risk in ("high", "extreme"):
             mood = MarketMood.EVENT_DRIVEN
@@ -431,6 +434,13 @@ market_mood rules:
         else:
             mood = MarketMood.CHOPPY
 
+        try:
+            combined = combine_adjustments(event_risk, mood.value)
+            min_conf_out = combined.min_confluence
+            pos_mult_out = combined.position_multiplier
+        except Exception:
+            min_conf_out, pos_mult_out = 7, 1.0
+
         return DailyMoodReport(
             market_mood=mood,
             confidence="low",
@@ -438,8 +448,8 @@ market_mood rules:
             key_risk="AI synthesis unavailable",
             opportunity="Standard ICT setups only",
             event_risk=event_risk,
-            min_confluence_override=adj["min_confluence"],
-            position_size_multiplier=adj["position_multiplier"],
+            min_confluence_override=min_conf_out,
+            position_size_multiplier=pos_mult_out,
             news_blackout_windows=[],
             news_sentiment=news_sentiment,
             fedwatch_shift=fedwatch_shift,

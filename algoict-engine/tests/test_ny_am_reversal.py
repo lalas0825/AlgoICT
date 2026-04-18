@@ -392,16 +392,18 @@ class TestEvalLogging:
         import logging
         with caplog.at_level(logging.INFO, logger="strategies.ny_am_reversal"):
             result = strat.evaluate(c5, c15)
+        import config
         assert result is None
         eval_lines = [r.message for r in caplog.records if "EVAL ny_am" in r.message]
         assert len(eval_lines) == 1
         line = eval_lines[0]
         assert "signal=reject" in line
         assert "conf_below_min" in line
-        assert "/20" in line            # score present
+        assert f"/{config.MAX_CONFLUENCE}" in line   # score denominator present
 
     def test_eval_fire(self, caplog):
         """Full valid setup → fire EVAL line with score and signal details."""
+        import config
         strat, c5, c15 = _build_full_setup()
         import logging
         with caplog.at_level(logging.INFO, logger="strategies.ny_am_reversal"):
@@ -411,7 +413,7 @@ class TestEvalLogging:
         assert len(eval_lines) == 1
         line = eval_lines[0]
         assert "signal=fire" in line
-        assert "/20" in line
+        assert f"/{config.MAX_CONFLUENCE}" in line
         assert "Signal(" in line        # full signal repr appended
 
 

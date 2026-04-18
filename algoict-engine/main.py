@@ -241,6 +241,11 @@ class EngineState:
     # and signals fire on stub/neutral detector state.
     warmup_complete: bool = False
 
+    # True while a reconcile task is in flight. Prevents duplicate
+    # spawns when multiple 1-min bars arrive within the same ts.minute%5
+    # window (burst / replay after a WS hiccup).
+    reconcile_inflight: bool = False
+
     def __post_init__(self):
         if self.bars_1min is None:
             self.bars_1min = pd.DataFrame(
@@ -1115,6 +1120,15 @@ async def _execute_signal(
     # Treat anything that isn't an active fill as a hard failure: abort the
     # signal, do NOT submit stop/target, do NOT advance counters. The
     # executed_signals guard above already blocks a retry on the same bar.
+    # Resolve strategy instance up front — needed for both the reject-path
+    # rollback and the happy-path notify_trade_executed below.
+    strat_name = getattr(signal, "strategy", "")
+    strat = None
+    if strat_name == "ny_am_reversal":
+        strat = getattr(components, "ny_am_strategy", None)
+    elif strat_name == "silver_bullet":
+        strat = getattr(components, "silver_bullet_strategy", None)
+
     entry_status = (entry_order.status or "").lower() if entry_order else ""
     fill_confirmed = entry_status in ("filled", "submitted", "working")
     if not entry_order or not fill_confirmed:
@@ -1124,9 +1138,17 @@ async def _execute_signal(
             entry_status or "<none>", getattr(entry_order, "message", ""),
         )
         # Release the executed_signals slot so a later bar with the same
-        # signal_id can retry cleanly (otherwise a reject would permanently
-        # block that exact signal for the rest of the session).
+        # signal_id can retry cleanly. Also clear the strategy's
+        # _last_evaluated_bar_ts so evaluate() doesn't short-circuit on
+        # the next delivery of THIS same bar (meta-audit: without this,
+        # executed_signals rollback was a no-op because Layer-1 dedup in
+        # strategy.evaluate() still blocked the bar).
         state.executed_signals.discard(signal_id)
+        if strat is not None and hasattr(strat, "rollback_last_evaluated_bar"):
+            try:
+                strat.rollback_last_evaluated_bar(signal.timestamp)
+            except Exception as exc:
+                logger.debug("rollback_last_evaluated_bar failed: %s", exc)
         return
 
     # Entry is either already filled or working (market order pending fill).
@@ -1136,12 +1158,6 @@ async def _execute_signal(
     # block the bar-tick path. If the market order somehow rejects AFTER
     # submission (rare), the position-reconciliation pass should surface
     # the discrepancy. (Follow-up: wire a fill-confirmation callback.)
-    strat_name = getattr(signal, "strategy", "")
-    strat = None
-    if strat_name == "ny_am_reversal":
-        strat = getattr(components, "ny_am_strategy", None)
-    elif strat_name == "silver_bullet":
-        strat = getattr(components, "silver_bullet_strategy", None)
     if strat is not None and hasattr(strat, "notify_trade_executed"):
         try:
             strat.notify_trade_executed(signal)
@@ -1580,11 +1596,22 @@ async def _on_new_bar(
         # orphaned tracking (we think open, broker says flat). Either
         # indicates a prior bug path or network partition. Logged at
         # WARNING so Telegram surfaces via the alert hook.
-        if ts.minute % 5 == 0:
-            try:
-                await _reconcile_positions(components, state)
-            except Exception as exc:
-                logger.debug("Reconcile failed (non-fatal): %s", exc)
+        #
+        # Fire-and-forget: the broker HTTP call can take hundreds of ms
+        # and must NOT block the bar loop (which still has to process
+        # hard-close, VPIN halts, and strategy eval). Dedup across a
+        # single 1-min window via state.reconcile_inflight — multiple
+        # bars arriving in the same minute won't spawn duplicate tasks.
+        if ts.minute % 5 == 0 and not getattr(state, "reconcile_inflight", False):
+            state.reconcile_inflight = True
+            async def _reconcile_wrapped():
+                try:
+                    await _reconcile_positions(components, state)
+                except Exception as exc:
+                    logger.debug("Reconcile failed (non-fatal): %s", exc)
+                finally:
+                    state.reconcile_inflight = False
+            asyncio.create_task(_reconcile_wrapped())
 
         # ── 4. Hard close ─────────────────────────────────────────────
         if (not state.hard_close_done
@@ -1604,8 +1631,17 @@ async def _on_new_bar(
             return  # warm-up
 
         try:
-            df_5min = components.tf_manager.aggregate(bars, "5min")
-            df_15min = components.tf_manager.aggregate(bars, "15min")
+            # Aggregate first (also updates tf_manager._last_1min_ts). Then
+            # fetch the COMPLETED subset — drops any tail bar whose window
+            # hasn't elapsed yet based on the latest 1-min timestamp. Without
+            # this guard, strategies previously saw a forming 5-min or 15-min
+            # bar as if it were closed (look-ahead risk).
+            components.tf_manager.aggregate(bars, "5min")
+            components.tf_manager.aggregate(bars, "15min")
+            df_5min = components.tf_manager.get_completed_bars("5min")
+            df_15min = components.tf_manager.get_completed_bars("15min")
+            if df_5min is None or df_15min is None:
+                return
         except Exception as exc:
             logger.debug("TF aggregation failed in strategy eval: %s", exc)
             return
@@ -2315,6 +2351,22 @@ def _acquire_engine_lock() -> bool:
 
 def main() -> int:
     args = _parse_args()
+
+    # Validate MLL threshold ordering — zones must be monotonically
+    # increasing: warning < caution < stop. Otherwise the zone
+    # classifier would produce nonsensical transitions (e.g. a DD
+    # that's both "caution" and "warning"). Fail fast at argparse
+    # time rather than deep inside RiskManager. Meta-audit 2026-04-17.
+    if not (0 <= args.mll_warning_pct < args.mll_caution_pct < args.mll_stop_pct <= 1):
+        print(
+            f"[FATAL] Invalid MLL thresholds: "
+            f"warning={args.mll_warning_pct}, "
+            f"caution={args.mll_caution_pct}, "
+            f"stop={args.mll_stop_pct}. "
+            f"Required: 0 <= warning < caution < stop <= 1",
+            file=sys.stderr,
+        )
+        return 2
 
     if not _acquire_engine_lock():
         return 1

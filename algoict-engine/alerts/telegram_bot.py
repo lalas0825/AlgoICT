@@ -38,7 +38,7 @@ try:
 except ImportError:
     TELEGRAM_AVAILABLE = False
 
-from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, MAX_CONFLUENCE
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +131,7 @@ class TelegramBot:
                 f"Strategy: {signal.strategy}",
                 f"Kill Zone: {signal.kill_zone}",
                 f"Direction: {direction}",
-                f"Confluence: {signal.confluence_score}/20",
+                f"Confluence: {signal.confluence_score}/{MAX_CONFLUENCE}",
                 "",
                 f"Entry:    ${signal.entry_price:,.2f}",
                 f"Stop:     ${signal.stop_price:,.2f} ({stop_sign}{stop_pts:.2f} pts)",
@@ -256,7 +256,7 @@ class TelegramBot:
                 pnl_emoji = "📈" if pnl > 0 else "📉"
                 msg += f"P&L: {pnl_emoji} ${pnl:+,.2f}\n"
             if confluence_score is not None:
-                msg += f"Confluence: {confluence_score}/20\n"
+                msg += f"Confluence: {confluence_score}/{MAX_CONFLUENCE}\n"
 
             await self._bot.send_message(chat_id=self._chat_id, text=msg)
             logger.info("Trade alert sent: %s %s %s", symbol, side_upper, status)
@@ -473,7 +473,7 @@ Value: {vpin:.3f}
         ----------
         date_str : str — 'YYYY-MM-DD'
         mood : str — e.g. 'Choppy', 'Risk On', 'Risk Off'
-        min_confluence : int — required confluence points (out of 20)
+        min_confluence : int — required confluence points (max is MAX_CONFLUENCE)
         position_size_pct : float — 0.0–1.0, rendered as percentage
         summary : str — one-line mood summary from SWC
         """
@@ -481,7 +481,7 @@ Value: {vpin:.3f}
             msg = (
                 f"📊 SWC DAILY MOOD — {date_str}\n"
                 f"Mood: {mood}\n"
-                f"Min confluence: {min_confluence}/20\n"
+                f"Min confluence: {min_confluence}/{MAX_CONFLUENCE}\n"
                 f"Position size: {position_size_pct:.0%}\n"
                 f"{summary}"
             )

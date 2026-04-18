@@ -73,8 +73,9 @@ class ConfluenceResult:
 
     def __repr__(self) -> str:
         return (
-            f"ConfluenceResult(score={self.total_score}/20, tier={self.tier}, "
-            f"allowed={self.trade_allowed}, factors={list(self.breakdown.keys())})"
+            f"ConfluenceResult(score={self.total_score}/{config.MAX_CONFLUENCE}, "
+            f"tier={self.tier}, allowed={self.trade_allowed}, "
+            f"factors={list(self.breakdown.keys())})"
         )
 
 

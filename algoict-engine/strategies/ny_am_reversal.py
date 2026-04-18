@@ -10,7 +10,7 @@ Setup
 2. HTF bias:       Daily/Weekly aligned (not neutral)
 3. 15min context:  recent MSS or BOS in HTF direction
 4. 5min entry:     liquidity grab + FVG + Order Block + displacement
-5. Confluence:     >= MIN_CONFLUENCE (7/20) — uses ConfluenceScorer
+5. Confluence:     >= MIN_CONFLUENCE (7 of max 19) — uses ConfluenceScorer
 6. Risk:           1:3 RR, $250 risk, max 2 trades per kill zone
                    (up to 6 trades/day: 2 london + 2 ny_am + 2 ny_pm)
 
@@ -334,8 +334,9 @@ class NYAMReversalStrategy:
         min_required = self.risk.effective_min_confluence
         if conf.total_score < min_required:
             logger.info(
-                "EVAL ny_am [%s]: confluence=%d/20, signal=reject, reason=conf_below_min (%d<%d)",
-                _ts_hm(ts), conf.total_score, conf.total_score, min_required,
+                "EVAL ny_am [%s]: confluence=%d/%d, signal=reject, reason=conf_below_min (%d<%d)",
+                _ts_hm(ts), conf.total_score, config.MAX_CONFLUENCE,
+                conf.total_score, min_required,
             )
             return None
 
@@ -361,10 +362,24 @@ class NYAMReversalStrategy:
 
         ifvg_tag = " (IFVG)" if used_ifvg else ""
         logger.info(
-            "EVAL ny_am [%s]: confluence=%d/20, signal=fire%s | %s",
-            _ts_hm(ts), signal.confluence_score, ifvg_tag, signal,
+            "EVAL ny_am [%s]: confluence=%d/%d, signal=fire%s | %s",
+            _ts_hm(ts), signal.confluence_score, config.MAX_CONFLUENCE,
+            ifvg_tag, signal,
         )
         return signal
+
+    def rollback_last_evaluated_bar(self, ts) -> None:
+        """Clear ``_last_evaluated_bar_ts`` if it matches ``ts``.
+
+        Called by main.py on the broker-rejection path. Without this, a
+        rejected signal leaves the Layer-1 dedup stamped, and the next
+        delivery of the same bar short-circuits at the timestamp check —
+        the Layer-2 rollback in ``state.executed_signals.discard(...)``
+        becomes a no-op because ``evaluate()`` never runs again for that
+        bar. Audit meta-finding 2026-04-17.
+        """
+        if self._last_evaluated_bar_ts == ts:
+            self._last_evaluated_bar_ts = None
 
     def notify_trade_executed(self, signal) -> None:
         """Called by the main loop AFTER the broker confirms entry fill.

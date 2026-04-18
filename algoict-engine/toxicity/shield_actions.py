@@ -36,8 +36,16 @@ logger = logging.getLogger(__name__)
 # flatten calls. The 0.15-wide dead band matches the gap between the
 # "extreme" (0.70+) and "high" (0.55-0.70) toxicity classifier levels.
 # Audit finding 2026-04-17.
+# Activate path uses ToxicityClassifier's "extreme" level (>= 0.70) via
+# ``level.is_extreme`` — this constant is a readability anchor for the
+# same boundary and is referenced only for documentation + the threshold
+# invariant assertion below.
 _FLATTEN_THRESHOLD = 0.70       # activate: VPIN >= 0.70 → halt + flatten
 _DEACTIVATE_THRESHOLD = 0.55    # resume: VPIN <= 0.55 → clear halt
+assert _DEACTIVATE_THRESHOLD < _FLATTEN_THRESHOLD, (
+    f"VPIN hysteresis inverted: deactivate={_DEACTIVATE_THRESHOLD} "
+    f"must be strictly below activate={_FLATTEN_THRESHOLD}"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -194,8 +202,10 @@ class ShieldManager:
         """
         Check if the halt should be deactivated based on current VPIN.
 
-        When VPIN drops to or below the deactivation threshold (0.70), clears
-        the internal halt flag and tells the RiskManager to resume trading.
+        Hysteresis: VPIN must drop to or below _DEACTIVATE_THRESHOLD
+        (0.55, below the activate level of 0.70) to resume. The 0.15-wide
+        dead band prevents flapping when VPIN oscillates near the
+        extreme boundary.
 
         True → False transition: logs a CRITICAL-level "NORMALIZED" message so
         the operator can see trading has resumed. A Telegram alert for the

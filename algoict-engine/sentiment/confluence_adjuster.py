@@ -144,9 +144,24 @@ _MOOD_ADJUSTMENTS: dict[str, Adjustments] = {
 
 
 def get_mood_adjustments(mood: str) -> Adjustments:
-    """Return Adjustments for a mood label; defaults to 'normal' if unknown."""
+    """Return Adjustments for a mood label.
+
+    Fail-closed: unknown / empty / corrupted labels default to ``choppy``
+    (min_conf=9, pos_mult=0.75) — NOT ``normal``. A typo or unexpected
+    label from an upstream source must not silently disable the mood
+    gate; meta-audit 2026-04-17 flagged the prior fail-open default as
+    permissive. Choppy is the conservative assumption when we don't
+    know what market regime we're in.
+    """
     key = (mood or "").lower().strip().replace("-", "_").replace(" ", "_")
-    return _MOOD_ADJUSTMENTS.get(key, _MOOD_ADJUSTMENTS["normal"])
+    adj = _MOOD_ADJUSTMENTS.get(key)
+    if adj is not None:
+        return adj
+    logger.warning(
+        "Unknown mood label %r — falling back to 'choppy' (conservative)",
+        mood,
+    )
+    return _MOOD_ADJUSTMENTS["choppy"]
 
 
 def combine_adjustments(

@@ -54,7 +54,7 @@ class SwingPointDetector:
     -----
     detector = SwingPointDetector()
     swing_points = detector.detect(df_5min, '5min')
-    detector.update_broken(current_price)
+    detector.update_broken(bar_close=last_5min_close)   # CLOSE, not wick
     active = detector.get_active()
     """
 

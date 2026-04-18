@@ -43,12 +43,12 @@ class RiskManager:
       * ``peak_balance_eod``  — highest end-of-day balance ever reached
       * ``current_drawdown``  — peak_balance_eod - current_balance (intraday)
 
-    Drawdown zones:
-      * < 80% of MLL ($1,600) — normal trading
-      * 80-95% of MLL ($1,600-$1,899) — CAUTION: position size halved,
-        min confluence +2
-      * >= 95% of MLL ($1,900) — STOP: no new trades until next session
-      * target reached ($53k) — PROTECTIVE: max 1 trade/day, size halved
+    Drawdown zones (defaults locked 2026-04-17, Combine pass 19/20 = 95%):
+      * <  40% of MLL ($800)   — NORMAL: full size
+      * >= 40% of MLL ($800)   — WARNING: -25% size, min confluence +1
+      * >= 60% of MLL ($1,200) — CAUTION: -50% size, min confluence +2
+      * >= 85% of MLL ($1,700) — STOP: no new trades until next session
+      * target reached ($53k)  — PROTECTIVE: max 1 trade/day, size halved
         (only applies with ``protective_after_target=True``, off by default
         for combine sims — the combine ends when target is reached)
 
