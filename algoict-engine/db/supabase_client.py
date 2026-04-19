@@ -40,6 +40,23 @@ _WSAEWOULDBLOCK = 10035
 _BOT_STATE_RETRY_DELAYS = (0.10, 0.25, 0.50)   # seconds
 
 
+def _parse_pgrst204_column(exc: Exception) -> Optional[str]:
+    """Extract the missing column name from a PostgREST PGRST204 error.
+
+    PostgREST returns messages like:
+        "Could not find the 'bot_status' column of 'bot_state' in the schema cache"
+    We parse the first quoted identifier between `the ` and ` column`. Tolerates
+    both smart quotes and ASCII quotes. Returns None if the message doesn't
+    match the PGRST204 shape.
+    """
+    import re
+    msg = str(exc)
+    if "PGRST204" not in msg and "schema cache" not in msg.lower():
+        return None
+    m = re.search(r"the ['\"\u2018\u2019]([A-Za-z_][A-Za-z0-9_]*)['\"\u2018\u2019] column", msg)
+    return m.group(1) if m else None
+
+
 class SupabaseClient:
     """
     Async-friendly Supabase client wrapper.
@@ -160,16 +177,35 @@ class SupabaseClient:
     # Bot State
     # ------------------------------------------------------------------ #
 
+    # Cache of bot_state columns that came back PGRST204 "not found in
+    # schema cache" — e.g., because migration 0003 hasn't been applied
+    # yet. Populated lazily on first failure so subsequent writes strip
+    # those keys silently and the heartbeat + P&L path keeps flowing.
+    # Restart the bot after applying the migration to reset this set.
+    _missing_bot_state_cols: set = set()
+
     def update_bot_state(self, state: dict) -> bool:
         """
         Update bot state (heartbeat, status, etc.).
 
         Expected keys (any subset):
             last_heartbeat, status, current_position, daily_pnl, trades_today
+            plus migration 0003 overlay columns (fvg_top3, ifvg_top3, ...)
 
-        Returns True on success.  WinError 10035 (WSAEWOULDBLOCK) is retried
-        automatically with exponential back-off before giving up.
+        On PGRST204 ("column X not found"), the offending column is cached
+        and future writes strip it silently. This keeps heartbeats flowing
+        while a pending migration is queued.
+
+        WinError 10035 (WSAEWOULDBLOCK) is retried with exponential back-off.
+        Returns True on success.
         """
+        # Strip known-missing columns up front — avoids round-trips that
+        # would fail every single call with PGRST204.
+        if self._missing_bot_state_cols:
+            state = {
+                k: v for k, v in state.items()
+                if k not in self._missing_bot_state_cols
+            }
         payload = {"id": "bot_1", **state}
         last_exc: Optional[Exception] = None
         for attempt, delay in enumerate([None, *_BOT_STATE_RETRY_DELAYS]):
@@ -192,6 +228,33 @@ class SupabaseClient:
                 logger.error("Failed to update bot state: %s", exc)
                 return False
             except Exception as exc:
+                # PGRST204 path: parse the offending column, cache it, and
+                # retry once with the stripped payload. Keeps the bot
+                # heartbeating even when migration 0003 is still pending.
+                missing = _parse_pgrst204_column(exc)
+                if missing and missing in payload and missing not in self._missing_bot_state_cols:
+                    self._missing_bot_state_cols.add(missing)
+                    logger.warning(
+                        "bot_state column %r missing in DB schema — stripping "
+                        "from future writes. Apply migration 0003 + restart to "
+                        "restore full overlay coverage.",
+                        missing,
+                    )
+                    payload.pop(missing, None)
+                    try:
+                        self._client.table("bot_state").upsert(
+                            payload, on_conflict="id"
+                        ).execute()
+                        return True
+                    except Exception as exc2:
+                        missing2 = _parse_pgrst204_column(exc2)
+                        if missing2 and missing2 not in self._missing_bot_state_cols:
+                            self._missing_bot_state_cols.add(missing2)
+                            logger.warning(
+                                "bot_state column %r also missing — stripped.",
+                                missing2,
+                            )
+                        return False
                 logger.error("Failed to update bot state: %s", exc)
                 return False
         # All retries exhausted

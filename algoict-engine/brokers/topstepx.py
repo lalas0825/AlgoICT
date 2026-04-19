@@ -817,11 +817,22 @@ class TopstepXClient:
             )
             conn.send("SubscribeAccounts", [self._account_id])
 
+        # Capture whether the disconnect came from an error or a clean
+        # close — the outer retry loop needs this to decide whether to
+        # reset the exponential backoff (clean exit) or escalate
+        # (error-disconnect). Without this, the listener returned
+        # normally on error and the outer loop reset backoff to the base
+        # every iteration → retry storm every ~1s on weekends when the
+        # user hub is closed. 2026-04-19 boot verification caught it.
+        had_error = False
+
         def _on_close() -> None:
             logger.warning("User hub: disconnected")
             loop.call_soon_threadsafe(disconnected.set)
 
         def _on_error(err: Exception) -> None:
+            nonlocal had_error
+            had_error = True
             logger.error("User hub: error — %s", err)
             loop.call_soon_threadsafe(disconnected.set)
 
@@ -841,6 +852,14 @@ class TopstepXClient:
             except Exception:
                 pass
             logger.info("User hub: connection stopped")
+
+        # Re-raise the error-disconnect to the outer retry loop so its
+        # exponential backoff actually grows on repeated failures. Clean
+        # disconnects (user initiated / _ws_running=False) fall through.
+        if had_error and self._ws_running:
+            raise TopstepXConnectionError(
+                "User hub: disconnected with error (see previous log lines)"
+            )
 
     # ------------------------------------------------------------------ #
     # Real-time streaming — SignalR market hub → 1-min bar aggregation   #
