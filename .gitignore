@@ -69,3 +69,8 @@ node_modules/
 # Backtest output logs (catchall)
 algoict-engine/*_output.log
 algoict-engine/*_output.txt
+
+# Broader engine log catchall (combine runs, suite outputs, ad-hoc)
+algoict-engine/combine_*.log
+algoict-engine/*_suite*.log
+algoict-engine/*_rerun.log
