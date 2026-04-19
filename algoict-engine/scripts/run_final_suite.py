@@ -895,7 +895,7 @@ def run_parte5_ifvg(df_2024: pd.DataFrame) -> list[dict]:
     if len(results) == 2:
         dpf_s = f"{delta_pf:+.2f}" if delta_pf == delta_pf else "  n/a"
         p(f"  {'DELTA (ON-OFF)':<20} {delta_trades:>+5} {delta_wr:>+5.0%} "
-          f"{dpf_s:>+6} ${delta_pnl:>+9,.0f}")
+          f"{dpf_s:>6} ${delta_pnl:>+9,.0f}")
 
     return results
 

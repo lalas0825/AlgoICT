@@ -218,6 +218,28 @@ def simulate_combine(
             date=date, pnl=daily_pnl, balance_eod=balance, trades=len(day_trades),
         ))
 
+        # Profit target check (EOD): declare PASS as soon as all conditions met
+        current_pnl = balance - starting_balance
+        if (current_pnl >= config.TOPSTEP_PROFIT_TARGET
+                and len(day_records) >= 5
+                and best_day_pnl < 0.5 * current_pnl):
+            logger.info(
+                "Combine PASSED (EOD): pnl=$%.2f in %d trading days",
+                current_pnl, len(day_records),
+            )
+            return _build_result(
+                passed=True,
+                failure_reason=None,
+                starting_balance=starting_balance,
+                balance=balance,
+                peak_balance=peak_eod_balance,
+                day_records=day_records,
+                sorted_trades=sorted_trades,
+                best_day_pnl=best_day_pnl,
+                best_day_date=best_day_date,
+                consistency_ok=True,
+            )
+
     # ── Final checks ──────────────────────────────────────────────────────
     total_pnl = balance - starting_balance
 
