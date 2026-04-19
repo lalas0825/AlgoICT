@@ -1,10 +1,15 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { UTCTimestamp, CandlestickData } from 'lightweight-charts';
+import type { UTCTimestamp, CandlestickData, HistogramData } from 'lightweight-charts';
 
-import { LiveCandlestickChart } from '@/features/charts/components/LiveCandlestickChart';
+import {
+  LiveCandlestickChart,
+  type OverlayToggles,
+} from '@/features/charts/components/LiveCandlestickChart';
 import { useChartAnnotations } from '@/features/charts/hooks/useChartAnnotations';
+import { useBotStateOverlay } from '@/features/charts/hooks/useBotStateOverlay';
+import { useSignalsLive } from '@/features/charts/hooks/useSignalsLive';
 import type { Timeframe } from '@/features/charts/types';
 import { supabase } from '@/shared/lib/supabase';
 
@@ -52,10 +57,19 @@ export default function ChartPage() {
   const symbol = 'MNQ';
   const [timeframe, setTimeframe] = useState<Timeframe>('1m');
   const [bars, setBars] = useState<CandlestickData<UTCTimestamp>[]>([]);
+  const [volumes, setVolumes] = useState<HistogramData<UTCTimestamp>[]>([]);
   const [loadingBars, setLoadingBars] = useState(true);
   const [barsError, setBarsError] = useState<string | null>(null);
   const [botState, setBotState] = useState<BotStateLite>(DEFAULT_STATE);
   const [lastBar, setLastBar] = useState<CandlestickData<UTCTimestamp> | null>(null);
+  const [overlays, setOverlays] = useState<OverlayToggles>({
+    volume: true,
+    killZones: true,
+    fvgZones: true,
+    obZones: true,
+    levels: true,
+    trades: true,
+  });
 
   // ── Fetch historical bars whenever timeframe changes ──────────────
   useEffect(() => {
@@ -76,7 +90,17 @@ export default function ChartPage() {
           low: b.low,
           close: b.close,
         }));
+        const vol: HistogramData<UTCTimestamp>[] = data.bars
+          .filter((b) => b.volume > 0)
+          .map((b) => ({
+            time: b.time as UTCTimestamp,
+            value: b.volume,
+            color: b.close >= b.open
+              ? 'rgba(16, 185, 129, 0.55)'
+              : 'rgba(239, 68, 68, 0.55)',
+          }));
         setBars(mapped);
+        setVolumes(vol);
       })
       .catch((e: unknown) => {
         if (cancelled) return;
@@ -102,7 +126,30 @@ export default function ChartPage() {
     };
   }, [bars]);
 
-  const { annotations } = useChartAnnotations(symbol, timeframe, windowStart, windowEnd);
+  const { annotations: marketAnnotations } = useChartAnnotations(
+    symbol, timeframe, windowStart, windowEnd,
+  );
+  const overlay = useBotStateOverlay();
+  const signals = useSignalsLive(symbol);
+
+  // Compose market_levels (FVGs / OBs / GEX / trades) with the live
+  // bot_state overlay (IFVGs / tracked_levels / structure events /
+  // displacement) plus the signals stream from the signals table.
+  // Memoized so the chart effect doesn't re-fire on every other setState.
+  const annotations = useMemo(() => ({
+    ...marketAnnotations,
+    // Phase 2 additions from bot_state:
+    ifvgZones: overlay.ifvgTop3,
+    trackedLevels: overlay.trackedLevels,
+    structureEvents: overlay.structureEvents,
+    displacement: overlay.displacement,
+    // Phase 3: signal fires live-streamed from the signals table.
+    signals,
+    // bot_state always has fresher top-3 FVGs than a detached market_levels
+    // table — prefer it when populated, fall back to market_levels queries.
+    fvgZones: overlay.fvgTop3.length > 0 ? overlay.fvgTop3 : marketAnnotations.fvgZones,
+    obZones:  overlay.obTop3.length  > 0 ? overlay.obTop3  : marketAnnotations.obZones,
+  }), [marketAnnotations, overlay, signals]);
 
   // ── Live bot_state subscription for sidebar ───────────────────────
   useEffect(() => {
@@ -242,16 +289,34 @@ export default function ChartPage() {
             </div>
           )}
           {!barsError && bars.length > 0 && (
-            <LiveCandlestickChart
-              candles={bars}
-              annotations={annotations}
-              lastBar={lastBar}
-            />
+            <>
+              <OverlayToggleBar overlays={overlays} setOverlays={setOverlays} />
+              <LiveCandlestickChart
+                candles={bars}
+                volumes={volumes}
+                annotations={annotations}
+                lastBar={lastBar}
+                overlays={overlays}
+              />
+            </>
           )}
         </div>
 
         {/* Sidebar: 1/5 columns */}
         <aside className="col-span-1 flex flex-col gap-3">
+          {/* Phase 4: Live bot info panel — reads bot_state overlay fields */}
+          <BotInfoPanel
+            overlay={overlay}
+            pnlToday={/* pnl_today is on the bigger bot_state row */
+              (botState as unknown as { pnl_today?: number }).pnl_today ?? null}
+            tradesToday={(botState as unknown as { trades_today?: number }).trades_today ?? null}
+            winsToday={(botState as unknown as { wins_today?: number }).wins_today ?? null}
+            lossesToday={(botState as unknown as { losses_today?: number }).losses_today ?? null}
+            swcMood={(botState as unknown as { swc_mood?: string }).swc_mood ?? null}
+            vpin={botState.vpin}
+            toxicity={botState.toxicity_level}
+          />
+
           <SidebarCard title="Price">
             <div className="text-2xl font-mono font-bold text-zinc-50 leading-none">
               {lastClose != null ? `$${lastClose.toFixed(2)}` : '—'}
@@ -385,6 +450,204 @@ function VPINGaugeMini({
           style={{ width: `${pct}%` }}
         />
       </div>
+    </div>
+  );
+}
+
+function BotInfoPanel({
+  overlay,
+  pnlToday,
+  tradesToday,
+  winsToday,
+  lossesToday,
+  swcMood,
+  vpin,
+  toxicity,
+}: {
+  overlay: ReturnType<typeof useBotStateOverlay>;
+  pnlToday: number | null;
+  tradesToday: number | null;
+  winsToday: number | null;
+  lossesToday: number | null;
+  swcMood: string | null;
+  vpin: number | null;
+  toxicity: string | null;
+}) {
+  const m = overlay.meta;
+  const pnlColor =
+    pnlToday == null ? 'text-zinc-400' :
+    pnlToday > 0 ? 'text-emerald-400' :
+    pnlToday < 0 ? 'text-red-400' : 'text-zinc-300';
+  const mllColor =
+    m.mllZone === 'stop' ? 'bg-red-500/20 text-red-300 border-red-500/40' :
+    m.mllZone === 'caution' ? 'bg-orange-500/15 text-orange-300 border-orange-500/30' :
+    m.mllZone === 'warning' ? 'bg-yellow-500/15 text-yellow-300 border-yellow-500/30' :
+    'bg-emerald-500/15 text-emerald-300 border-emerald-500/30';
+  const statusColor =
+    m.botStatus === 'running' ? 'text-emerald-400' :
+    m.botStatus === 'halted' ? 'text-orange-400' :
+    m.botStatus === 'error' ? 'text-red-400' :
+    'text-zinc-400';
+  const vpinColor =
+    vpin == null ? 'text-zinc-400' :
+    vpin >= 0.70 ? 'text-red-400' :
+    vpin >= 0.55 ? 'text-orange-400' :
+    vpin >= 0.45 ? 'text-yellow-400' :
+    'text-emerald-400';
+
+  const kzLabel = m.activeKz ? m.activeKz.replace(/_/g, ' ') : 'none';
+  const kzColor =
+    m.activeKz === 'london' ? 'text-blue-300' :
+    m.activeKz === 'ny_am' ? 'text-emerald-300' :
+    m.activeKz === 'silver_bullet' || m.activeKz === 'london_silver_bullet' ? 'text-amber-300' :
+    m.activeKz === 'ny_pm' ? 'text-orange-300' :
+    'text-zinc-500';
+
+  return (
+    <SidebarCard title="Live Bot">
+      <div className="space-y-2 text-xs font-mono">
+        <div className="flex items-baseline justify-between">
+          <span className="text-zinc-500">Status</span>
+          <span className={`uppercase tracking-wider font-semibold ${statusColor}`}>
+            {m.botStatus}
+          </span>
+        </div>
+
+        <div className="flex items-baseline justify-between">
+          <span className="text-zinc-500">Active KZ</span>
+          <span className={kzColor}>{kzLabel}</span>
+        </div>
+
+        <hr className="border-zinc-800 my-1.5" />
+
+        <div className="flex items-baseline justify-between">
+          <span className="text-zinc-500">Bias</span>
+          <span className={
+            m.biasDirection === 'bullish' ? 'text-emerald-400' :
+            m.biasDirection === 'bearish' ? 'text-red-400' :
+            'text-zinc-400'
+          }>
+            {m.biasDirection}
+            {m.biasZone ? <span className="text-zinc-500"> ({m.biasZone})</span> : null}
+          </span>
+        </div>
+        <div className="flex items-baseline justify-between text-[10px] text-zinc-500">
+          <span>d={m.dailyBias}</span>
+          <span>w={m.weeklyBias}</span>
+        </div>
+
+        <hr className="border-zinc-800 my-1.5" />
+
+        <div className="flex items-baseline justify-between">
+          <span className="text-zinc-500">VPIN</span>
+          <span className={vpinColor}>
+            {vpin != null ? vpin.toFixed(3) : '—'}
+            {toxicity ? <span className="text-zinc-500 text-[10px] ml-1">({toxicity})</span> : null}
+          </span>
+        </div>
+
+        <div className="flex items-baseline justify-between">
+          <span className="text-zinc-500">SWC mood</span>
+          <span className="text-zinc-300">{swcMood ?? '—'}</span>
+        </div>
+
+        <hr className="border-zinc-800 my-1.5" />
+
+        <div className="flex items-baseline justify-between">
+          <span className="text-zinc-500">MLL zone</span>
+          <span className={`px-1.5 py-0.5 text-[10px] uppercase tracking-wider border rounded ${mllColor}`}>
+            {m.mllZone}
+          </span>
+        </div>
+
+        <div className="flex items-baseline justify-between">
+          <span className="text-zinc-500">Min conf</span>
+          <span className="text-zinc-300">{m.minConfluence}/19</span>
+        </div>
+
+        <hr className="border-zinc-800 my-1.5" />
+
+        <div className="flex items-baseline justify-between">
+          <span className="text-zinc-500">P&amp;L today</span>
+          <span className={`${pnlColor} font-bold`}>
+            {pnlToday != null ?
+              `${pnlToday >= 0 ? '+' : ''}$${pnlToday.toFixed(0)}` :
+              '—'}
+          </span>
+        </div>
+
+        <div className="flex items-baseline justify-between">
+          <span className="text-zinc-500">Trades</span>
+          <span className="text-zinc-300">
+            {tradesToday ?? 0}
+            {winsToday != null && lossesToday != null && (
+              <span className="text-zinc-500 ml-1">
+                ({winsToday}W {lossesToday}L)
+              </span>
+            )}
+          </span>
+        </div>
+
+        {overlay.displacement && (
+          <>
+            <hr className="border-zinc-800 my-1.5" />
+            <div className="flex items-baseline justify-between">
+              <span className="text-zinc-500">Last disp</span>
+              <span className={
+                overlay.displacement.direction === 'bullish' ? 'text-emerald-400' : 'text-red-400'
+              }>
+                {overlay.displacement.direction === 'bullish' ? '↑' : '↓'}
+                {' '}
+                {overlay.displacement.points.toFixed(1)} pts
+              </span>
+            </div>
+          </>
+        )}
+      </div>
+    </SidebarCard>
+  );
+}
+
+function OverlayToggleBar({
+  overlays,
+  setOverlays,
+}: {
+  overlays: OverlayToggles;
+  setOverlays: React.Dispatch<React.SetStateAction<OverlayToggles>>;
+}) {
+  const items: Array<{ key: keyof OverlayToggles; label: string }> = [
+    { key: 'volume',    label: 'Volume' },
+    { key: 'killZones', label: 'Kill Zones' },
+    { key: 'fvgZones',  label: 'FVG' },
+    { key: 'obZones',   label: 'OB' },
+    { key: 'levels',    label: 'Levels' },
+    { key: 'trades',    label: 'Trades' },
+  ];
+  const toggle = (k: keyof OverlayToggles) =>
+    setOverlays((o) => ({ ...o, [k]: !o[k] }));
+  return (
+    <div className="mb-2 flex flex-wrap items-center gap-1 bg-zinc-900 border border-zinc-800 rounded-lg p-1">
+      <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium px-2">
+        Overlays
+      </span>
+      {items.map((it) => {
+        const on = overlays[it.key] ?? true;
+        return (
+          <button
+            key={it.key}
+            onClick={() => toggle(it.key)}
+            className={`px-2.5 py-1 text-xs font-mono rounded transition ${
+              on
+                ? 'bg-zinc-700 text-zinc-50'
+                : 'text-zinc-500 hover:text-zinc-200'
+            }`}
+            title={`Toggle ${it.label}`}
+          >
+            {on ? '● ' : '○ '}
+            {it.label}
+          </button>
+        );
+      })}
     </div>
   );
 }

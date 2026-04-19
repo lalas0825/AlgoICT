@@ -1,0 +1,338 @@
+=== AlgoICT Combine Suite ===
+Log: C:\Users\lalas\OneDrive\Desktop\Developer\AI\Projects\AlgoICT\algoict-engine\combine_suite.log
+Loading modules...
+OK
+
+Loading data from C:\Users\lalas\OneDrive\Desktop\Developer\AI\Projects\AlgoICT\data\nq_1minute.csv...
+Loaded 2,559,241 rows  2019-01-01 → 2026-04-06  (11s)
+  2023: 353,405 rows  2024: 355,024 rows  2025: 352,568 rows
+
+██████████████████████████████████████████████████████████████████████
+  JOB 1 — $50K COMBINE  (MLL=$2,000  Target=$3,000  DLL=$1,000)
+██████████████████████████████████████████████████████████████████████
+
+──────────────────────────────────────────────────────────────────────
+  RUN: A  $50K | MLL active | fixed   | 2024
+       trade_management=fixed  topstep_mode=True
+       account=$50K  period=all→end
+──────────────────────────────────────────────────────────────────────
+  Backtest: 743 trades  WR=44.7%  PF=2.52  P&L=$+71,254  (803s)
+  Running combine sim (30 attempts)...
+    Attempt  1: PASS  cal_days=5  pnl=$+71,254
+    Attempt  2: PASS  cal_days=3  pnl=$+67,503
+    Attempt  3: PASS  cal_days=28  pnl=$+64,237
+    Attempt  4: PASS  cal_days=15  pnl=$+60,529
+    Attempt  5: PASS  cal_days=24  pnl=$+57,266
+    Attempt  6: PASS  cal_days=27  pnl=$+53,691
+    Attempt  7: PASS  cal_days=20  pnl=$+50,665
+    Attempt  8: PASS  cal_days=8  pnl=$+47,316
+    Attempt  9: PASS  cal_days=17  pnl=$+43,813
+    Attempt 10: PASS  cal_days=12  pnl=$+40,167
+    Attempt 11: PASS  cal_days=5  pnl=$+37,063
+    Attempt 12: PASS  cal_days=12  pnl=$+33,966
+    Attempt 13: PASS  cal_days=25  pnl=$+30,390
+    Attempt 14: PASS  cal_days=12  pnl=$+27,079
+    Attempt 15: PASS  cal_days=14  pnl=$+23,600
+    Attempt 16: PASS  cal_days=16  pnl=$+20,693
+    Attempt 17: PASS  cal_days=32  pnl=$+17,548
+    Attempt 18: PASS  cal_days=35  pnl=$+13,694
+    Attempt 19: PASS  cal_days=7  pnl=$+10,217
+    Attempt 20: PASS  cal_days=18  pnl=$+7,185
+    Attempt 21: PASS  cal_days=16  pnl=$+3,132
+  RESULT: 21/21 pass  rate=100.0%  avg_days_to_pass=16.7
+  Bottleneck: {}
+  (0s)
+
+──────────────────────────────────────────────────────────────────────
+  RUN: B  $50K | MLL active | trailing| 2024
+       trade_management=trailing  topstep_mode=True
+       account=$50K  period=all→end
+──────────────────────────────────────────────────────────────────────
+  Backtest: 746 trades  WR=49.9%  PF=3.77  P&L=$+110,609  (817s)
+  Running combine sim (30 attempts)...
+    Attempt  1: PASS  cal_days=2  pnl=$+110,609
+    Attempt  2: PASS  cal_days=4  pnl=$+106,720
+    Attempt  3: PASS  cal_days=4  pnl=$+103,627
+    Attempt  4: PASS  cal_days=9  pnl=$+100,526
+    Attempt  5: PASS  cal_days=19  pnl=$+96,442
+    Attempt  6: PASS  cal_days=17  pnl=$+92,786
+    Attempt  7: PASS  cal_days=20  pnl=$+89,662
+    Attempt  8: PASS  cal_days=12  pnl=$+86,163
+    Attempt  9: PASS  cal_days=18  pnl=$+83,055
+    Attempt 10: PASS  cal_days=1  pnl=$+76,573
+    Attempt 11: PASS  cal_days=15  pnl=$+69,580
+    Attempt 12: PASS  cal_days=7  pnl=$+66,547
+    Attempt 13: PASS  cal_days=14  pnl=$+62,932
+    Attempt 14: PASS  cal_days=9  pnl=$+59,837
+    Attempt 15: PASS  cal_days=13  pnl=$+56,592
+    Attempt 16: PASS  cal_days=13  pnl=$+53,435
+    Attempt 17: PASS  cal_days=3  pnl=$+50,099
+    Attempt 18: PASS  cal_days=2  pnl=$+46,369
+    Attempt 19: PASS  cal_days=6  pnl=$+42,773
+    Attempt 20: PASS  cal_days=17  pnl=$+39,718
+    Attempt 21: PASS  cal_days=12  pnl=$+36,249
+    Attempt 22: PASS  cal_days=16  pnl=$+32,733
+    Attempt 23: PASS  cal_days=13  pnl=$+29,697
+    Attempt 24: PASS  cal_days=33  pnl=$+26,175
+    Attempt 25: PASS  cal_days=7  pnl=$+22,658
+    Attempt 26: PASS  cal_days=29  pnl=$+19,547
+    Attempt 27: PASS  cal_days=15  pnl=$+16,103
+    Attempt 28: PASS  cal_days=9  pnl=$+12,894
+    Attempt 29: PASS  cal_days=5  pnl=$+9,287
+    Attempt 30: FAIL  target_not_reached: $1962<$3000
+  RESULT: 29/30 pass  rate=96.7%  avg_days_to_pass=11.9
+  Bottleneck: {'target_not_reached': 1}
+  (0s)
+
+──────────────────────────────────────────────────────────────────────
+  RUN: C  $50K | MLL off    | fixed   | 2024
+       trade_management=fixed  topstep_mode=False
+       account=$50K  period=all→end
+──────────────────────────────────────────────────────────────────────
+  Backtest: 694 trades  WR=43.7%  PF=2.45  P&L=$+131,558  (800s)
+  Running combine sim (30 attempts)...
+    Attempt  1: FAIL  mll_breach on 2024-01-18: dd=$2152
+    Attempt  2: FAIL  mll_breach on 2024-02-01: dd=$2139
+    Attempt  3: FAIL  mll_breach on 2024-02-22: dd=$2154
+    Attempt  4: FAIL  mll_breach on 2024-04-04: dd=$2161
+    Attempt  5: FAIL  mll_breach on 2024-04-25: dd=$2136
+    Attempt  6: FAIL  mll_breach on 2024-09-04: dd=$2072
+    Attempt  7: FAIL  mll_breach on 2024-10-29: dd=$2174
+    Attempt  8: FAIL  mll_breach on 2024-12-03: dd=$2206
+    Attempt  9: PASS  cal_days=6  pnl=$+14,284
+    Attempt 10: PASS  cal_days=4  pnl=$+10,734
+    Attempt 11: PASS  cal_days=5  pnl=$+6,396
+    Attempt 12: FAIL  target_not_reached: $2364<$3000
+  RESULT: 3/12 pass  rate=25.0%  avg_days_to_pass=5.0
+  Bottleneck: {'mll_breach': 8, 'target_not_reached': 1}
+  (0s)
+
+──────────────────────────────────────────────────────────────────────
+  RUN: D  $50K | MLL off    | trailing| 2024
+       trade_management=trailing  topstep_mode=False
+       account=$50K  period=all→end
+──────────────────────────────────────────────────────────────────────
+  Backtest: 694 trades  WR=49.6%  PF=3.60  P&L=$+199,321  (816s)
+  Running combine sim (30 attempts)...
+    Attempt  1: FAIL  mll_breach on 2024-01-18: dd=$2152
+    Attempt  2: FAIL  mll_breach on 2024-02-05: dd=$2071
+    Attempt  3: FAIL  mll_breach on 2024-10-30: dd=$2210
+    Attempt  4: FAIL  mll_breach on 2024-11-06: dd=$2012
+    Attempt  5: FAIL  mll_breach on 2024-12-03: dd=$2184
+    Attempt  6: PASS  cal_days=6  pnl=$+18,101
+    Attempt  7: PASS  cal_days=4  pnl=$+14,001
+    Attempt  8: PASS  cal_days=4  pnl=$+9,984
+    Attempt  9: PASS  cal_days=7  pnl=$+6,087
+    Attempt 10: FAIL  insufficient_days: 3<5
+  RESULT: 4/10 pass  rate=40.0%  avg_days_to_pass=5.2
+  Bottleneck: {'mll_breach': 5, 'insufficient_days': 1}
+  (0s)
+
+──────────────────────────────────────────────────────────────────────
+  RUN: B2 $50K | MLL active | trailing| 2023
+       trade_management=trailing  topstep_mode=True
+       account=$50K  period=all→end
+──────────────────────────────────────────────────────────────────────
+  Backtest: 741 trades  WR=54.9%  PF=3.87  P&L=$+112,090  (815s)
+  Running combine sim (30 attempts)...
+    Attempt  1: PASS  cal_days=9  pnl=$+112,090
+    Attempt  2: PASS  cal_days=12  pnl=$+108,656
+    Attempt  3: PASS  cal_days=16  pnl=$+105,230
+    Attempt  4: PASS  cal_days=13  pnl=$+101,995
+    Attempt  5: PASS  cal_days=13  pnl=$+98,101
+    Attempt  6: PASS  cal_days=28  pnl=$+94,451
+    Attempt  7: PASS  cal_days=14  pnl=$+91,323
+    Attempt  8: PASS  cal_days=4  pnl=$+88,281
+    Attempt  9: PASS  cal_days=17  pnl=$+84,480
+    Attempt 10: PASS  cal_days=8  pnl=$+80,817
+    Attempt 11: PASS  cal_days=11  pnl=$+76,923
+    Attempt 12: PASS  cal_days=7  pnl=$+73,536
+    Attempt 13: PASS  cal_days=3  pnl=$+70,432
+    Attempt 14: PASS  cal_days=8  pnl=$+67,330
+    Attempt 15: PASS  cal_days=22  pnl=$+64,236
+    Attempt 16: PASS  cal_days=16  pnl=$+61,134
+    Attempt 17: PASS  cal_days=5  pnl=$+57,647
+    Attempt 18: PASS  cal_days=8  pnl=$+54,101
+    Attempt 19: PASS  cal_days=2  pnl=$+50,467
+    Attempt 20: PASS  cal_days=11  pnl=$+45,485
+    Attempt 21: PASS  cal_days=3  pnl=$+42,048
+    Attempt 22: PASS  cal_days=11  pnl=$+38,526
+    Attempt 23: PASS  cal_days=16  pnl=$+34,543
+    Attempt 24: PASS  cal_days=12  pnl=$+30,813
+    Attempt 25: PASS  cal_days=8  pnl=$+27,115
+    Attempt 26: PASS  cal_days=22  pnl=$+23,617
+    Attempt 27: PASS  cal_days=12  pnl=$+20,256
+    Attempt 28: PASS  cal_days=8  pnl=$+16,937
+    Attempt 29: PASS  cal_days=7  pnl=$+13,136
+    Attempt 30: PASS  cal_days=9  pnl=$+10,009
+  RESULT: 30/30 pass  rate=100.0%  avg_days_to_pass=11.2
+  Bottleneck: {}
+  (0s)
+
+──────────────────────────────────────────────────────────────────────
+  RUN: B3 $50K | MLL active | trailing| 2025
+       trade_management=trailing  topstep_mode=True
+       account=$50K  period=all→end
+──────────────────────────────────────────────────────────────────────
+  Backtest: 169 trades  WR=50.9%  PF=3.29  P&L=$+22,989  (839s)
+  Running combine sim (30 attempts)...
+    Attempt  1: PASS  cal_days=6  pnl=$+22,989
+    Attempt  2: PASS  cal_days=13  pnl=$+19,250
+    Attempt  3: PASS  cal_days=3  pnl=$+16,103
+    Attempt  4: PASS  cal_days=19  pnl=$+9,853
+    Attempt  5: PASS  cal_days=14  pnl=$+6,162
+    Attempt  6: FAIL  target_not_reached: $2724<$3000
+  RESULT: 5/6 pass  rate=83.3%  avg_days_to_pass=11.0
+  Bottleneck: {'target_not_reached': 1}
+  (0s)
+
+══════════════════════════════════════════════════════════════════════
+  SUMMARY — JOB 1 — $50K COMBINE
+══════════════════════════════════════════════════════════════════════
+  Run                                  Trades     WR     PF   Pass    Rate  AvgDays Bottleneck
+  ----------------------------------- ------- ------ ------ ------ ------- -------- --------------------
+  A  $50K | MLL active | fixed   | 2024     743 44.7%   2.52  21/21  100.0%     16.7  
+  B  $50K | MLL active | trailing| 2024     746 49.9%   3.77  29/30   96.7%     11.9  target_not_reached=1
+  C  $50K | MLL off    | fixed   | 2024     694 43.7%   2.45   3/12   25.0%      5.0  mll_breach=8, target_not_reach
+  D  $50K | MLL off    | trailing| 2024     694 49.6%   3.60   4/10   40.0%      5.2  mll_breach=5, insufficient_day
+  B2 $50K | MLL active | trailing| 2023     741 54.9%   3.87  30/30  100.0%     11.2  
+  B3 $50K | MLL active | trailing| 2025     169 50.9%   3.29    5/6   83.3%     11.0  target_not_reached=1
+
+>>> JOB 1 COMPLETE — elapsed 81.7 min <<<
+
+██████████████████████████████████████████████████████████████████████
+  JOB 2 — $150K COMBINE  (MLL=$4,500  Target=$9,000  DLL=$1,500)
+██████████████████████████████████████████████████████████████████████
+
+──────────────────────────────────────────────────────────────────────
+  RUN: E  $150K| MLL active | trailing| 2024
+       trade_management=trailing  topstep_mode=True
+       account=$150K  period=all→end
+──────────────────────────────────────────────────────────────────────
+  Backtest: 756 trades  WR=49.9%  PF=3.83  P&L=$+115,069  (1028s)
+  Running combine sim (30 attempts)...
+    Attempt  1: PASS  cal_days=9  pnl=$+115,069
+    Attempt  2: PASS  cal_days=31  pnl=$+103,171
+    Attempt  3: PASS  cal_days=51  pnl=$+93,515
+    Attempt  4: PASS  cal_days=15  pnl=$+84,283
+    Attempt  5: PASS  cal_days=36  pnl=$+71,065
+    Attempt  6: PASS  cal_days=35  pnl=$+61,321
+    Attempt  7: PASS  cal_days=8  pnl=$+51,583
+    Attempt  8: PASS  cal_days=44  pnl=$+41,487
+    Attempt  9: PASS  cal_days=32  pnl=$+32,473
+    Attempt 10: PASS  cal_days=55  pnl=$+23,473
+    Attempt 11: PASS  cal_days=30  pnl=$+13,981
+    Attempt 12: FAIL  target_not_reached: $1962<$9000
+  RESULT: 11/12 pass  rate=91.7%  avg_days_to_pass=31.5
+  Bottleneck: {'target_not_reached': 1}
+  (0s)
+
+──────────────────────────────────────────────────────────────────────
+  RUN: F  $150K| MLL active | fixed   | 2024
+       trade_management=fixed  topstep_mode=True
+       account=$150K  period=all→end
+──────────────────────────────────────────────────────────────────────
+  Backtest: 760 trades  WR=43.9%  PF=2.50  P&L=$+73,013  (1077s)
+  Running combine sim (30 attempts)...
+    Attempt  1: PASS  cal_days=9  pnl=$+73,013
+    Attempt  2: PASS  cal_days=66  pnl=$+63,030
+    Attempt  3: PASS  cal_days=55  pnl=$+53,910
+    Attempt  4: PASS  cal_days=37  pnl=$+44,360
+    Attempt  5: PASS  cal_days=49  pnl=$+35,119
+    Attempt  6: PASS  cal_days=48  pnl=$+25,592
+    Attempt  7: PASS  cal_days=58  pnl=$+16,277
+    Attempt  8: FAIL  target_not_reached: $7216<$9000
+  RESULT: 7/8 pass  rate=87.5%  avg_days_to_pass=46.0
+  Bottleneck: {'target_not_reached': 1}
+  (0s)
+
+──────────────────────────────────────────────────────────────────────
+  RUN: E2 $150K| MLL active | trailing| 2023
+       trade_management=trailing  topstep_mode=True
+       account=$150K  period=all→end
+──────────────────────────────────────────────────────────────────────
+  Backtest: 747 trades  WR=54.4%  PF=3.83  P&L=$+116,285  (900s)
+  Running combine sim (30 attempts)...
+    Attempt  1: PASS  cal_days=21  pnl=$+116,285
+    Attempt  2: PASS  cal_days=36  pnl=$+106,078
+    Attempt  3: PASS  cal_days=51  pnl=$+96,390
+    Attempt  4: PASS  cal_days=28  pnl=$+86,708
+    Attempt  5: PASS  cal_days=21  pnl=$+77,047
+    Attempt  6: PASS  cal_days=48  pnl=$+67,454
+    Attempt  7: PASS  cal_days=15  pnl=$+57,771
+    Attempt  8: PASS  cal_days=22  pnl=$+45,609
+    Attempt  9: PASS  cal_days=30  pnl=$+35,792
+    Attempt 10: PASS  cal_days=41  pnl=$+26,582
+    Attempt 11: PASS  cal_days=23  pnl=$+16,937
+    Attempt 12: FAIL  target_not_reached: $7184<$9000
+  RESULT: 11/12 pass  rate=91.7%  avg_days_to_pass=30.5
+  Bottleneck: {'target_not_reached': 1}
+  (0s)
+
+──────────────────────────────────────────────────────────────────────
+  RUN: E3 $150K| MLL active | trailing| 2025
+       trade_management=trailing  topstep_mode=True
+       account=$150K  period=all→end
+──────────────────────────────────────────────────────────────────────
+  Backtest: 735 trades  WR=49.8%  PF=3.78  P&L=$+127,581  (852s)
+  Running combine sim (30 attempts)...
+    Attempt  1: PASS  cal_days=20  pnl=$+127,581
+    Attempt  2: PASS  cal_days=22  pnl=$+117,175
+    Attempt  3: PASS  cal_days=57  pnl=$+108,167
+    Attempt  4: PASS  cal_days=12  pnl=$+98,211
+    Attempt  5: PASS  cal_days=22  pnl=$+88,947
+    Attempt  6: PASS  cal_days=55  pnl=$+79,566
+    Attempt  7: PASS  cal_days=30  pnl=$+70,497
+    Attempt  8: PASS  cal_days=6  pnl=$+61,446
+    Attempt  9: PASS  cal_days=19  pnl=$+51,594
+    Attempt 10: PASS  cal_days=11  pnl=$+42,069
+    Attempt 11: PASS  cal_days=39  pnl=$+32,023
+    Attempt 12: PASS  cal_days=35  pnl=$+22,805
+    Attempt 13: PASS  cal_days=21  pnl=$+13,067
+    Attempt 14: FAIL  target_not_reached: $3919<$9000
+  RESULT: 13/14 pass  rate=92.9%  avg_days_to_pass=26.8
+  Bottleneck: {'target_not_reached': 1}
+  (0s)
+
+══════════════════════════════════════════════════════════════════════
+  SUMMARY — JOB 2 — $150K COMBINE
+══════════════════════════════════════════════════════════════════════
+  Run                                  Trades     WR     PF   Pass    Rate  AvgDays Bottleneck
+  ----------------------------------- ------- ------ ------ ------ ------- -------- --------------------
+  E  $150K| MLL active | trailing| 2024     756 49.9%   3.83  11/12   91.7%     31.5  target_not_reached=1
+  F  $150K| MLL active | fixed   | 2024     760 43.9%   2.50    7/8   87.5%     46.0  target_not_reached=1
+  E2 $150K| MLL active | trailing| 2023     747 54.4%   3.83  11/12   91.7%     30.5  target_not_reached=1
+  E3 $150K| MLL active | trailing| 2025     735 49.8%   3.78  13/14   92.9%     26.8  target_not_reached=1
+
+══════════════════════════════════════════════════════════════════════
+  FINAL TABLE — ALL RUNS
+══════════════════════════════════════════════════════════════════════
+  Account  MLL      Mgmt       Year   Run      Pass    Rate  AvgDays Bottleneck
+  -------- -------- ---------- ------ ---- -------- ------- -------- -------------------------
+  $50K     active   fixed      2024   A       21/21  100.0%     16.7  
+  $50K     active   trailing   2024   B       29/30   96.7%     11.9  target_not_reached=1
+  $50K     off      fixed      2024   C        3/12   25.0%      5.0  mll_breach=8, target_not_rea
+  $50K     off      trailing   2024   D        4/10   40.0%      5.2  mll_breach=5, insufficient_d
+  $50K     active   trailing   2023   B2      30/30  100.0%     11.2  
+  $50K     active   trailing   2025   B3        5/6   83.3%     11.0  target_not_reached=1
+  $150K    active   trailing   2024   E       11/12   91.7%     31.5  target_not_reached=1
+  $150K    active   fixed      2024   F         7/8   87.5%     46.0  target_not_reached=1
+  $150K    active   trailing   2023   E2      11/12   91.7%     30.5  target_not_reached=1
+  $150K    active   trailing   2025   E3      13/14   92.9%     26.8  target_not_reached=1
+
+──────────────────────────────────────────────────────────────────────
+
+  RECOMMENDATION
+  ──────────────────────────────────────────────────
+  $50K  trailing: best B2  100.0%
+  $50K  fixed:    best A  100.0%
+  $150K trailing: best E3  92.9%
+  $150K fixed:    best F  87.5%
+
+  Recommended account:        $50K
+  Recommended trade mgmt:     trailing
+  Ready for Combine attempt:  YES — pass rate > 20%
+
+  Total wall time: 146.0 min
+  Log saved to:    C:\Users\lalas\OneDrive\Desktop\Developer\AI\Projects\AlgoICT\algoict-engine\combine_suite.log
+══════════════════════════════════════════════════════════════════════

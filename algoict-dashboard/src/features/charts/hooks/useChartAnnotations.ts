@@ -43,10 +43,15 @@ interface TradeRow {
 
 const EMPTY: ChartAnnotations = {
   fvgZones: [],
+  ifvgZones: [],
   obZones: [],
   liquidity: [],
   gexLevels: [],
   trades: [],
+  trackedLevels: [],
+  structureEvents: [],
+  signals: [],
+  displacement: null,
 };
 
 export function useChartAnnotations(
@@ -175,7 +180,23 @@ export function useChartAnnotations(
           }
         }
 
-        setAnnotations({ fvgZones, obZones, liquidity, gexLevels, trades });
+        // NOTE: ifvgZones / trackedLevels / structureEvents / signals /
+        // displacement are sourced separately from the `bot_state` JSONB
+        // columns (migration 0003) via `useBotStateOverlay`. Page-level
+        // composition merges the two. This hook stays focused on the
+        // market_levels + trades tables.
+        setAnnotations({
+          fvgZones,
+          ifvgZones: [],
+          obZones,
+          liquidity,
+          gexLevels,
+          trades,
+          trackedLevels: [],
+          structureEvents: [],
+          signals: [],
+          displacement: null,
+        });
         setError(null);
       } catch (e) {
         if (!cancelled) {

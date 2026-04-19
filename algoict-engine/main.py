@@ -2231,7 +2231,183 @@ def _make_state_snapshot(components: "Components", state: "EngineState") -> dict
             f"Bars loaded: {len(state.bars_1min)}"
         )
 
+    # ── Detector overlay (Phase 2 of chart integration, migration 0003) ──
+    # Everything below lands in JSONB / scalar columns for the dashboard
+    # chart page. Computed best-effort: any sub-block that raises is
+    # logged at debug and skipped so the simpler scalar payload still
+    # ships. Keep this block cheap — it runs every 5s.
+    try:
+        _populate_detector_overlay(snap, components, state)
+    except Exception as exc:
+        logger.debug("detector overlay snapshot failed: %s", exc)
+
     return snap
+
+
+def _populate_detector_overlay(
+    snap: dict,
+    components: "Components",
+    state: "EngineState",
+) -> None:
+    """Populate the bot_state overlay columns added in migration 0003."""
+    det = components.detectors or {}
+    risk = components.risk
+
+    if state.bars_1min.empty:
+        last_close = None
+        last_ts = None
+    else:
+        last_close = float(state.bars_1min["close"].iloc[-1])
+        last_ts = state.bars_1min.index[-1]
+
+    # ── FVG / IFVG / OB top-3 nearest (by midpoint distance to close) ──
+    def _zone_row(z, *, is_ifvg: bool) -> dict:
+        return {
+            "price_low":  float(z.bottom),
+            "price_high": float(z.top),
+            "direction":  z.direction,
+            "tf":         z.timeframe,
+            "is_ifvg":    bool(is_ifvg or getattr(z, "is_ifvg", False)),
+            "midpoint":   float(z.midpoint),
+            "ts":         str(getattr(z, "timestamp", "")),
+        }
+
+    fvg_det = det.get("fvg")
+    if fvg_det is not None and last_close is not None:
+        try:
+            fvgs = fvg_det.get_active(timeframe="5min")
+            fvgs_sorted = sorted(
+                fvgs, key=lambda f: abs(f.midpoint - last_close),
+            )[:3]
+            snap["fvg_top3"] = [_zone_row(f, is_ifvg=False) for f in fvgs_sorted]
+
+            ifvgs = fvg_det.get_active_ifvgs(timeframe="5min")
+            ifvgs_sorted = sorted(
+                ifvgs, key=lambda f: abs(f.midpoint - last_close),
+            )[:3]
+            snap["ifvg_top3"] = [_zone_row(f, is_ifvg=True) for f in ifvgs_sorted]
+        except Exception as exc:
+            logger.debug("fvg/ifvg snapshot: %s", exc)
+
+    ob_det = det.get("ob")
+    if ob_det is not None and last_close is not None:
+        try:
+            obs = ob_det.get_active(timeframe="5min")
+            obs_sorted = sorted(
+                obs,
+                key=lambda o: abs(((o.high + o.low) / 2.0) - last_close),
+            )[:3]
+            snap["ob_top3"] = [
+                {
+                    "price_low":  float(o.low),
+                    "price_high": float(o.high),
+                    "direction":  o.direction,
+                    "tf":         o.timeframe,
+                    "ts":         str(getattr(o, "timestamp", "")),
+                }
+                for o in obs_sorted
+            ]
+        except Exception as exc:
+            logger.debug("ob snapshot: %s", exc)
+
+    # ── Tracked levels (PDH/PDL/PWH/PWL/BSL/SSL/EQH/EQL) ──
+    try:
+        tracked = det.get("tracked_levels") or []
+        snap["tracked_levels"] = [
+            {
+                "price":  float(getattr(lvl, "price", 0.0)),
+                "type":   str(getattr(lvl, "type", "")),
+                "swept":  bool(getattr(lvl, "swept", False)),
+                "ts":     str(getattr(lvl, "timestamp", "")),
+            }
+            for lvl in tracked[:16]   # cap payload size — dashboard shows top 8-12
+        ]
+    except Exception as exc:
+        logger.debug("tracked_levels snapshot: %s", exc)
+
+    # ── Structure events (last 3 on 15-min TF) ──
+    struct_det = det.get("structure")
+    if struct_det is not None:
+        try:
+            events = struct_det.get_events(timeframe="15min") or []
+            snap["struct_last3"] = [
+                {
+                    "type":      str(getattr(ev, "event_type", "")),
+                    "direction": str(getattr(ev, "direction", "")),
+                    "price":     float(getattr(ev, "price", 0.0)),
+                    "ts":        str(getattr(ev, "timestamp", "")),
+                }
+                for ev in events[-3:][::-1]     # most recent first
+            ]
+        except Exception as exc:
+            logger.debug("struct snapshot: %s", exc)
+
+    # ── Last displacement on entry TF ──
+    disp_det = det.get("displacement")
+    if disp_det is not None:
+        try:
+            recent = disp_det.get_recent(n=1, timeframe="5min")
+            if recent:
+                d = recent[0]
+                snap["last_displacement"] = {
+                    "direction": str(getattr(d, "direction", "")),
+                    "points":    float(getattr(d, "magnitude", 0.0)),
+                    "ts":        str(getattr(d, "timestamp", "")),
+                }
+        except Exception as exc:
+            logger.debug("displacement snapshot: %s", exc)
+
+    # ── HTF bias + premium/discount ──
+    try:
+        # The bias closure is stored on the strategies (identical for both);
+        # reuse it so we don't re-implement the lookahead-safe cutoff logic.
+        bias_fn = None
+        strat = getattr(components, "ny_am_strategy", None) or \
+                getattr(components, "silver_bullet_strategy", None)
+        if strat is not None:
+            bias_fn = getattr(strat, "htf_bias_fn", None)
+        bias = bias_fn(last_close) if (bias_fn and last_close is not None) else None
+        if bias is not None:
+            snap["bias_direction"] = getattr(bias, "direction", "neutral") or "neutral"
+            snap["bias_zone"] = getattr(bias, "premium_discount", "") or ""
+            snap["daily_bias"] = getattr(bias, "daily_bias", "neutral") or "neutral"
+            snap["weekly_bias"] = getattr(bias, "weekly_bias", "neutral") or "neutral"
+    except Exception as exc:
+        logger.debug("bias snapshot: %s", exc)
+
+    # ── Active kill zone ──
+    try:
+        session = components.session
+        if session is not None and last_ts is not None:
+            for kz in ("london", "london_silver_bullet", "silver_bullet", "ny_am", "ny_pm"):
+                if session.is_kill_zone(last_ts, kz):
+                    snap["active_kz"] = kz
+                    break
+            else:
+                snap["active_kz"] = ""
+    except Exception as exc:
+        logger.debug("active_kz snapshot: %s", exc)
+
+    # ── MLL zone + min confluence ──
+    try:
+        snap["mll_zone"] = getattr(risk, "_mll_zone", "normal") or "normal"
+    except Exception:
+        pass
+    try:
+        snap["min_confluence"] = int(risk.effective_min_confluence)
+    except Exception:
+        pass
+
+    # ── Bot status ──
+    # `halted` if VPIN halt active; `error` is reserved for future
+    # exception-recovery paths; default running while the process is up.
+    try:
+        if getattr(risk, "vpin_halted", False):
+            snap["bot_status"] = "halted"
+        else:
+            snap["bot_status"] = "running"
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------

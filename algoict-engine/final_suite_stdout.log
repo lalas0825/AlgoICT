@@ -1,0 +1,1887 @@
+======================================================================
+  AlgoICT SUITE FINAL DEFINITIVO
+  Log: C:\Users\lalas\OneDrive\Desktop\Developer\AI\Projects\AlgoICT\algoict-engine\final_suite_output.log
+======================================================================
+Loading modules...
+OK
+
+Data: nq_1minute.csv  (396 MB)
+
+Loading Databento NQ 1-min (2019-2025)... 2,467,615 bars  (2019-01-01 → 2025-12-31)  (12.0s)
+2024 slice: 355,024 bars
+
+======================================================================
+  PARTE 1 — KZ MATRIX 2024
+======================================================================
+
+  [A. NYAM London only] building...WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-966.00)
+ 487 trades  WR=45.6%  P&L=$+102,511  PF=2.66  (904s)
+
+  [B. NYAM NY AM only] building...WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-966.00)
+ 498 trades  WR=40.6%  P&L=$+78,425  PF=2.13  (919s)
+
+  [C. NYAM NY PM only] building... 455 trades  WR=49.0%  P&L=$+91,896  PF=2.82  (908s)
+
+  [D. NYAM ALL KZ] building...WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-714.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-714.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-717.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-703.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-722.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-718.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-600.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-624.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-510.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-664.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-708.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-719.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-696.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-440.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-728.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-525.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-716.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-697.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-680.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-713.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-718.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-721.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-685.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-744.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-692.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-709.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-643.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-489.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-666.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-648.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-616.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-665.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-656.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-652.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-607.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-732.50)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-966.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-686.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-666.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-734.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-736.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-740.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-688.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-624.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-721.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-712.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-744.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-699.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-630.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-580.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-693.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-715.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-714.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-516.00)
+ 694 trades  WR=43.7%  P&L=$+131,558  PF=2.45  (881s)
+
+  [E. SB London SB only] building... 257 trades  WR=51.0%  P&L=$+39,739  PF=2.54  (4702s)
+
+  [F. SB NY SB only] building... 257 trades  WR=44.7%  P&L=$+24,918  PF=1.76  (4864s)
+
+  [G. SB ALL SB] building... 514 trades  WR=47.9%  P&L=$+64,657  PF=2.11  (4799s)
+
+  [H. Portfolio (D+G)] 1208 trades  WR=45.4%  P&L=$+196,215  PF=2.32
+
+  ==========================================================================================
+  TABLE 1 — KZ MATRIX 2024
+  ==========================================================================================
+  Label                            Trd     WR     PF        P&L    MaxDD    AvgW    AvgL
+  ────────────────────────────────────────────────────────────────────────────────────────
+  A. NYAM London only              487   46%   2.66 $ +102,511 $  3,367 $   740 $  -233
+  B. NYAM NY AM only               498   41%   2.13 $  +78,425 $  3,554 $   732 $  -234
+  C. NYAM NY PM only               455   49%   2.82 $  +91,896 $  3,111 $   639 $  -218
+  D. NYAM ALL KZ                   694   44%   2.45 $ +131,558 $  3,156 $   734 $  -232
+  E. SB London SB only             257   51%   2.54 $  +39,739 $  1,875 $   500 $  -204
+  F. SB NY SB only                 257   45%   1.76 $  +24,918 $  2,055 $   500 $  -229
+  G. SB ALL SB                     514   48%   2.11 $  +64,657 $  2,542 $   500 $  -218
+  H. Portfolio (D+G)              1208   45%   2.32 $ +196,215 $  4,611 $   629 $  -226
+  ────────────────────────────────────────────────────────────────────────────────────────
+
+======================================================================
+  PARTE 2 — TRADE MANAGEMENT 2024  kz=('london', 'ny_am')
+======================================================================
+
+  [TM-fixed] building...WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-714.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-714.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-717.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-703.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-722.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-718.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-600.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-624.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-510.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-664.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-708.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-719.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-696.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-440.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-728.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-525.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-716.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-697.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-680.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-713.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-718.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-721.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-685.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-744.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-692.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-709.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-643.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-489.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-648.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-616.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-665.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-656.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-652.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-607.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-732.50)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-966.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-686.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-666.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-734.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-736.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-740.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-688.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-624.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-721.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-712.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-744.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-699.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-630.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-580.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-693.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-715.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-714.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-516.00)
+ 687 trades  WR=43.5%  P&L=$+130,848  PF=2.45  (991s)
+
+  [TM-trailing] building...WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-714.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-714.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-717.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-703.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-718.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-600.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-624.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-664.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-719.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-440.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-576.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-525.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-716.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-697.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-713.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-721.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-692.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-709.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-420.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-643.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-489.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-560.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-616.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-665.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-468.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-732.50)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-941.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-686.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-399.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-734.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-740.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-688.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-624.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-721.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-259.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-712.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-744.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-699.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-630.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-558.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-693.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-715.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-391.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-206.50)
+ 690 trades  WR=49.3%  P&L=$+197,283  PF=3.57  (868s)
+
+  ===========================================================================
+  TABLE 2 — TRADE MANAGEMENT 2024
+  ===========================================================================
+  Mode                   Trd     WR     PF        P&L    MaxDD    AvgW    AvgL
+  ─────────────────────────────────────────────────────────────────────────
+  TM-fixed               687   44%   2.45 $ +130,848 $  3,249 $   739 $  -232
+  TM-trailing            690   49%   3.57 $ +197,283 $  3,582 $   806 $  -219
+  ─────────────────────────────────────────────────────────────────────────
+
+======================================================================
+  PARTE 3 — MULTI-YEAR  kz=('london', 'ny_am')  tm=trailing
+======================================================================
+
+  Walk-Forward 2019-2022 (24 bimonthly windows)
+
+  WF 2019: 349,886 bars...WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-560.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-375.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-694.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-736.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-723.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-704.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-431.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-604.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-630.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-542.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-535.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-450.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-519.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-526.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-731.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-600.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-730.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-744.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-743.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-733.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-654.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-284.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-619.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-375.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-725.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-337.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-450.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-600.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-450.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-727.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-708.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-297.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-748.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-714.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-675.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-675.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-450.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-450.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-700.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-562.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-675.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-525.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-491.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-718.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-450.00)
+ 686 trades  WR=43.3%  P&L=$+157,385  (804s)
+    W01 [2019-01-01→2019-02-28]  trd=110  wr= 37%  pnl=$  +19801  pf= 2.28  +
+    W02 [2019-03-01→2019-04-30]  trd=113  wr= 47%  pnl=$  +29310  pf= 3.44  +
+    W03 [2019-05-01→2019-06-30]  trd=122  wr= 39%  pnl=$  +14501  pf= 1.94  +
+    W04 [2019-07-01→2019-08-31]  trd=114  wr= 61%  pnl=$  +44119  pf= 5.59  +
+    W05 [2019-09-01→2019-10-31]  trd=118  wr= 37%  pnl=$  +22173  pf= 2.35  +
+    W06 [2019-11-01→2019-12-31]  trd=109  wr= 38%  pnl=$  +27480  pf= 3.03  +
+
+  WF 2020: 349,174 bars...WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-597.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-625.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-727.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-661.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-656.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-603.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-744.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-736.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-333.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-703.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-733.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-722.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-693.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-703.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-707.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-441.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-567.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-680.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-596.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-696.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-734.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-721.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-714.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-619.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-687.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-697.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-693.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-747.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-647.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-675.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-714.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-711.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-715.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-744.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-615.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-715.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-663.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-575.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-525.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-501.00)
+ 650 trades  WR=51.5%  P&L=$+201,805  (812s)
+    W07 [2020-01-01→2020-02-29]  trd=101  wr= 61%  pnl=$  +41739  pf= 5.92  +
+    W08 [2020-03-01→2020-04-30]  trd=110  wr= 43%  pnl=$  +25848  pf= 2.88  +
+    W09 [2020-05-01→2020-06-30]  trd=111  wr= 51%  pnl=$  +37493  pf= 4.03  +
+    W10 [2020-07-01→2020-08-31]  trd=110  wr= 57%  pnl=$  +45471  pf= 5.20  +
+    W11 [2020-09-01→2020-10-31]  trd=113  wr= 50%  pnl=$  +26102  pf= 3.10  +
+    W12 [2020-11-01→2020-12-31]  trd=105  wr= 48%  pnl=$  +25154  pf= 3.06  +
+
+  WF 2021: 353,442 bars...WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-672.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-723.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-732.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-652.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-689.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-424.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-637.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-509.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-736.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-694.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-657.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-604.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-727.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-594.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-715.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-662.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-727.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-744.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-744.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-733.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-635.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-688.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-612.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-551.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-671.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-452.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-675.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-744.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-690.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-459.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-714.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-688.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-706.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-690.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-654.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-532.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-535.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-716.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-731.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-598.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-606.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-732.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-518.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-357.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-672.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-551.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-672.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-726.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-698.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-726.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-706.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-541.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-498.00)
+ 685 trades  WR=48.5%  P&L=$+187,573  (823s)
+    W13 [2021-01-01→2021-02-28]  trd=107  wr= 37%  pnl=$  +25039  pf= 2.74  +
+    W14 [2021-03-01→2021-04-30]  trd=120  wr= 52%  pnl=$  +30458  pf= 3.30  +
+    W15 [2021-05-01→2021-06-30]  trd=112  wr= 51%  pnl=$  +28324  pf= 3.20  +
+    W16 [2021-07-01→2021-08-31]  trd=116  wr= 55%  pnl=$  +37519  pf= 4.17  +
+    W17 [2021-09-01→2021-10-31]  trd=110  wr= 49%  pnl=$  +34886  pf= 3.81  +
+    W18 [2021-11-01→2021-12-31]  trd=120  wr= 45%  pnl=$  +31346  pf= 3.22  +
+
+  WF 2022: 354,116 bars...WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-609.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-495.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-715.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-739.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-570.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-510.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-467.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-417.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-417.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-714.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-744.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-693.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-621.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-554.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-737.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-679.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-717.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-654.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-606.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-722.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-290.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-696.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-607.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-703.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-704.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-739.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-390.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-716.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-744.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-481.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-490.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-590.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-721.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-684.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-364.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-493.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-672.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-726.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-609.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-668.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-715.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-709.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-733.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-645.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-522.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-708.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-723.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-586.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-709.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-728.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-736.50)
+ 671 trades  WR=48.6%  P&L=$+180,409  (825s)
+    W19 [2022-01-01→2022-02-28]  trd=106  wr= 44%  pnl=$  +20973  pf= 2.76  +
+    W20 [2022-03-01→2022-04-30]  trd=116  wr= 42%  pnl=$  +17020  pf= 2.14  +
+    W21 [2022-05-01→2022-06-30]  trd=112  wr= 58%  pnl=$  +35928  pf= 4.79  +
+    W22 [2022-07-01→2022-08-31]  trd=113  wr= 48%  pnl=$  +40159  pf= 4.18  +
+    W23 [2022-09-01→2022-10-31]  trd=113  wr= 51%  pnl=$  +30937  pf= 3.63  +
+    W24 [2022-11-01→2022-12-31]  trd=111  wr= 48%  pnl=$  +35392  pf= 3.62  +
+
+  ─────────────────────────────────────────────────────────────────
+  WF Summary: 24/24 (100.0%) positive  Gate>=70%: PASS ✓
+  Total trades: 2692  Agg WR: 47.9%  Agg P&L: $+727,173  PF: 3.38
+
+──────────────────────────────────────────────────────────────────────
+  Full-Year Backtests 2019-2025
+
+  [2019] building...WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-560.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-375.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-694.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-736.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-723.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-704.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-431.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-604.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-630.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-542.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-535.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-450.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-519.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-526.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-731.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-600.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-730.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-744.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-743.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-733.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-654.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-284.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-619.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-375.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-725.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-337.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-450.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-600.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-450.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-727.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-708.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-297.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-748.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-714.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-675.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-675.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-450.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-450.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-700.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-562.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-675.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-525.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-491.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-718.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-450.00)
+ 686 trades  WR=43.3%  P&L=$+157,385  PF=2.91  (807s)
+
+  [2020] building...WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-597.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-625.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-727.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-661.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-656.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-603.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-744.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-736.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-333.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-703.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-733.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-722.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-693.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-703.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-707.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-441.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-567.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-680.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-596.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-696.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-734.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-721.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-714.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-619.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-687.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-697.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-693.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-747.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-647.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-675.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-714.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-711.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-715.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-744.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-615.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-715.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-663.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-575.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-525.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-501.00)
+ 650 trades  WR=51.5%  P&L=$+201,805  PF=3.88  (812s)
+
+  [2021] building...WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-672.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-723.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-732.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-652.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-689.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-424.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-637.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-509.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-736.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-694.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-657.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-604.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-727.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-594.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-715.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-662.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-727.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-744.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-744.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-733.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-635.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-688.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-612.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-551.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-671.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-452.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-675.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-744.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-690.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-459.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-714.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-688.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-706.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-690.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-654.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-532.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-535.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-716.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-731.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-598.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-606.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-732.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-518.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-357.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-672.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-551.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-672.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-726.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-698.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-726.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-706.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-541.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-498.00)
+ 685 trades  WR=48.5%  P&L=$+187,573  PF=3.38  (822s)
+
+  [2022] building...WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-609.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-495.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-715.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-739.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-570.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-510.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-467.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-417.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-417.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-714.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-744.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-693.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-621.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-554.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-737.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-679.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-717.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-654.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-606.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-722.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-290.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-696.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-607.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-703.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-704.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-739.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-390.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-716.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-744.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-481.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-490.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-590.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-721.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-684.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-364.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-493.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-672.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-726.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-609.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-668.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-715.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-709.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-733.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-645.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-522.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-708.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-723.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-586.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-709.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-728.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-736.50)
+ 671 trades  WR=48.6%  P&L=$+180,409  PF=3.43  (825s)
+
+  [2023] building...WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-575.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-706.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-736.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-645.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-708.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-747.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-690.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-682.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-699.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-573.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-637.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-708.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-725.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-747.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-657.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-739.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-732.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-699.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-696.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-733.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-689.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-714.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-739.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-690.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-560.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-739.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-733.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-726.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-687.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-711.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-666.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-805.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-739.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-536.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-739.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-734.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-525.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-625.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-734.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-869.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-737.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-727.00)
+ 675 trades  WR=53.3%  P&L=$+197,561  PF=3.71  (823s)
+
+  [2024] building...WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-714.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-714.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-717.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-703.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-718.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-600.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-624.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-664.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-719.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-440.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-576.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-525.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-716.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-697.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-713.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-721.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-692.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-709.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-420.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-643.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-489.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-560.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-616.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-665.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-468.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-732.50)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-941.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-686.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-399.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-734.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-740.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-688.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-624.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-721.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-259.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-712.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-744.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-699.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-630.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-558.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-693.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-715.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-391.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-206.50)
+ 690 trades  WR=49.3%  P&L=$+197,283  PF=3.57  (822s)
+
+  [2025 YTD] building...WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-732.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-703.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-675.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-642.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-726.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-711.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-696.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-292.50)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-799.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-849.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-664.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-535.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-554.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-390.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-390.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-664.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-553.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-426.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-723.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-723.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-672.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-708.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-688.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-714.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-714.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-173.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-684.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-741.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-693.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-718.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-693.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-460.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-648.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-253.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-371.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-725.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-676.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-648.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-728.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-412.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-744.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-620.50)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-935.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-956.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-690.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-687.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-676.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-696.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-715.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-583.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-497.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-744.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-558.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-509.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-730.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-1071.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-642.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+ 663 trades  WR=49.6%  P&L=$+218,234  PF=3.96  (816s)
+
+  ================================================================================
+  TABLE 3 — MULTI-YEAR VALIDATION
+  ================================================================================
+
+  Walk-Forward 2019-2022  (24 bimonthly windows):
+  Positive: 24/24 (100.0%)  Gate: PASS ✓
+  Agg trades: 2692  WR: 47.9%  P&L: $+727,173  PF: 3.38
+
+  Year           Trd     WR     PF        P&L    MaxDD    AvgW    AvgL
+  ──────────────────────────────────────────────────────────────────────
+  2019           686   43%   2.91 $ +157,385 $  3,621 $   808 $  -212
+  2020           650   52%   3.88 $ +201,805 $  2,870 $   812 $  -222
+  2021           685   48%   3.38 $ +187,573 $  2,453 $   803 $  -224
+  2022           671   49%   3.43 $ +180,409 $  2,321 $   781 $  -215
+  2023           675   53%   3.71 $ +197,561 $  4,110 $   752 $  -232
+  2024           690   49%   3.57 $ +197,283 $  3,582 $   806 $  -219
+  2025 YTD       663   50%   3.96 $ +218,234 $  2,851 $   887 $  -221
+  ──────────────────────────────────────────────────────────────────────
+
+======================================================================
+  PARTE 4 — COMBINE SIMULATOR  topstep_mode=True
+  kz=('london', 'ny_am')  tm=trailing
+======================================================================
+
+  Running 2023 with topstep_mode=True...
+
+  [2023-topstep] building...WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$990.00, peak=$51223.00, bal=$50233.00)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> caution (dd=$1317.00, peak=$51223.00, bal=$49906.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-447.00)
+WARNING risk.risk_manager: Topstep MLL zone: caution -> warning (dd=$1074.10, peak=$51223.00, bal=$50148.90)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$517.65, peak=$51223.00, bal=$50705.35)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-353.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-368.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-258.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-333.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-373.50)
+WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$826.50, peak=$58983.86, bal=$58157.36)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-360.00)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$504.50, peak=$58983.86, bal=$58479.36)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-345.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-273.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-290.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-275.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-255.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-364.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-336.00)
+WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$820.50, peak=$67711.46, bal=$66890.96)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$460.50, peak=$67711.46, bal=$67250.96)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-614.00)
+WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$807.50, peak=$67711.46, bal=$66903.96)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$448.80, peak=$67711.46, bal=$67262.66)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-241.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-362.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-240.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-240.00)
+WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$842.50, peak=$69108.81, bal=$68266.31)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$521.07, peak=$69108.81, bal=$68587.74)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-357.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-342.00)
+WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$913.50, peak=$72342.92, bal=$71429.42)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$538.50, peak=$72342.92, bal=$71804.42)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-366.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-314.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-348.00)
+WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$902.00, peak=$77983.99, bal=$77081.99)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$538.36, peak=$77983.99, bal=$77445.63)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-355.00)
+WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$888.73, peak=$77983.99, bal=$77095.27)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$526.66, peak=$77983.99, bal=$77457.34)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-313.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-306.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-348.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-345.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-264.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-348.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-370.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-351.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-363.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-364.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-360.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-343.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-346.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-237.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-369.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-222.00)
+WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$829.00, peak=$126767.99, bal=$125938.99)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> caution (dd=$1231.50, peak=$126767.99, bal=$125536.49)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-805.00)
+WARNING risk.risk_manager: Topstep MLL zone: caution -> warning (dd=$884.00, peak=$126767.99, bal=$125883.99)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$509.00, peak=$126767.99, bal=$126258.99)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-357.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-360.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-268.00)
+WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$875.00, peak=$131663.75, bal=$130788.75)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-370.50)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$0.00, peak=$131663.75, bal=$133745.25)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-322.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-357.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-350.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-257.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-208.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-375.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-367.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-360.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-869.00)
+WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$869.00, peak=$154496.22, bal=$153627.22)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$494.00, peak=$154496.22, bal=$154002.22)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-349.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-363.50)
+ 731 trades  WR=54.6%  P&L=$+109,757  PF=3.83  (818s)
+
+  ────────────────────────────────────────────────────────────
+  $50K Combine 2023  (731 trades, 30 attempts)
+  Account=$50K  Target=$3K  MLL=$2K  DLL=$1K
+  Attempt  1: PASS  days=10
+  Attempt  2: PASS  days=13
+  Attempt  3: PASS  days=15
+  Attempt  4: PASS  days=15
+  Attempt  5: PASS  days=9
+  Attempt  6: PASS  days=28
+  Attempt  7: PASS  days=15
+  Attempt  8: PASS  days=14
+  Attempt  9: PASS  days=8
+  Attempt 10: PASS  days=4
+  Attempt 11: PASS  days=11
+  Attempt 12: PASS  days=7
+  Attempt 13: PASS  days=3
+  Attempt 14: PASS  days=8
+  Attempt 15: PASS  days=22
+  Attempt 16: PASS  days=16
+  Attempt 17: PASS  days=5
+  Attempt 18: PASS  days=8
+  Attempt 19: PASS  days=2
+  Attempt 20: PASS  days=11
+  Attempt 21: PASS  days=3
+  Attempt 22: PASS  days=11
+  Attempt 23: PASS  days=16
+  Attempt 24: PASS  days=12
+  Attempt 25: PASS  days=8
+  Attempt 26: PASS  days=22
+  Attempt 27: PASS  days=12
+  Attempt 28: PASS  days=8
+  Attempt 29: PASS  days=7
+  Attempt 30: PASS  days=9
+
+  RESULT: 30/30 PASS  (100.0%)  avg_days=11.1
+    #  Result                    Period   Trd        P&L  TradeDays  CalDays
+  ────────────────────────────────────────────────────────────────────
+    1    PASS   2023-01-03 → 2023-01-12   731  $ +109757        254       10
+    2    PASS   2023-01-13 → 2023-01-25   713  $ +105843        246       13
+    3    PASS   2023-01-26 → 2023-02-09   688  $ +102729        237       15
+    4    PASS   2023-02-10 → 2023-02-24   655  $  +99082        226       15
+    5    PASS   2023-02-27 → 2023-03-07   622  $  +95349        215        9
+    6    PASS   2023-03-08 → 2023-04-04   601  $  +92046        208       28
+    7    PASS   2023-04-06 → 2023-04-20   547  $  +88016        189       15
+    8    PASS   2023-04-21 → 2023-05-04   515  $  +84616        178       14
+    9    PASS   2023-05-05 → 2023-05-12   487  $  +81563        168        8
+   10    PASS   2023-05-15 → 2023-05-18   469  $  +78530        162        4
+   11    PASS   2023-05-19 → 2023-05-29   457  $  +75456        158       11
+   12    PASS   2023-05-30 → 2023-06-05   438  $  +72069        151        7
+   13    PASS   2023-06-06 → 2023-06-08   423  $  +68965        146        3
+   14    PASS   2023-06-09 → 2023-06-16   414  $  +65863        143        8
+   15    PASS   2023-06-19 → 2023-07-10   396  $  +62769        137       22
+   16    PASS   2023-07-11 → 2023-07-26   348  $  +59667        121       16
+   17    PASS   2023-07-27 → 2023-07-31   312  $  +56180        109        5
+   18    PASS   2023-08-01 → 2023-08-08   303  $  +52634        106        8
+   19    PASS   2023-08-09 → 2023-08-10   285  $  +49000        100        2
+   20    PASS   2023-08-11 → 2023-08-21   281  $  +44018         98       11
+   21    PASS   2023-08-22 → 2023-08-24   260  $  +40581         91        3
+   22    PASS   2023-08-25 → 2023-09-04   253  $  +37059         88       11
+   23    PASS   2023-09-05 → 2023-09-20   233  $  +33076         81       16
+   24    PASS   2023-09-21 → 2023-10-02   202  $  +29710         70       12
+   25    PASS   2023-10-03 → 2023-10-10   180  $  +26012         62        8
+   26    PASS   2023-10-11 → 2023-11-01   164  $  +22515         56       22
+   27    PASS   2023-11-02 → 2023-11-13   119  $  +19153         41       12
+   28    PASS   2023-11-14 → 2023-11-21    95  $  +15834         33        8
+   29    PASS   2023-11-22 → 2023-11-28    77  $  +12033         27        7
+   30    PASS   2023-11-29 → 2023-12-07    62  $   +8906         22        9
+
+  ────────────────────────────────────────────────────────────
+  $150K Combine 2023  (731 trades, 30 attempts)
+  Account=$150K  Target=$9K  MLL=$4.5K  DLL=$2.25K
+  Attempt  1: PASS  days=37
+  Attempt  2: PASS  days=41
+  Attempt  3: PASS  days=35
+  Attempt  4: PASS  days=34
+  Attempt  5: PASS  days=18
+  Attempt  6: PASS  days=43
+  Attempt  7: PASS  days=11
+  Attempt  8: PASS  days=19
+  Attempt  9: PASS  days=32
+  Attempt 10: PASS  days=40
+  Attempt 11: PASS  days=22
+  Attempt 12: FAIL  profit_target_not_reached: pnl=$6080.84 < target=$
+
+  RESULT: 11/12 PASS  (91.7%)  avg_days=30.2
+    #  Result                    Period   Trd        P&L  TradeDays  CalDays
+  ────────────────────────────────────────────────────────────────────
+    1    PASS   2023-01-03 → 2023-02-08   731  $ +109757        254       37
+    2    PASS   2023-02-09 → 2023-03-21   658  $ +100207        227       41
+    3    PASS   2023-03-22 → 2023-04-25   572  $  +91228        198       35
+    4    PASS   2023-04-26 → 2023-05-29   506  $  +81773        175       34
+    5    PASS   2023-05-30 → 2023-06-16   438  $  +72069        151       18
+    6    PASS   2023-06-19 → 2023-07-31   396  $  +62769        137       43
+    7    PASS   2023-08-01 → 2023-08-11   303  $  +52634        106       11
+    8    PASS   2023-08-14 → 2023-09-01   278  $  +43468         97       19
+    9    PASS   2023-09-04 → 2023-10-05   236  $  +34201         82       32
+   10    PASS   2023-10-06 → 2023-11-14   171  $  +24287         59       40
+   11    PASS   2023-11-15 → 2023-12-06    92  $  +15204         32       22
+   12    FAIL   2023-12-07 → 2023-12-29    44  $   +6081         16       23
+
+  Running 2024 with topstep_mode=True...
+
+  [2024-topstep] building...WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-357.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-357.00)
+WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$817.50, peak=$60083.16, bal=$59265.66)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-311.00)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> caution (dd=$1244.50, peak=$60083.16, bal=$58838.66)
+WARNING risk.risk_manager: Topstep MLL zone: caution -> warning (dd=$1004.80, peak=$60083.16, bal=$59078.36)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$646.11, peak=$60083.16, bal=$59437.05)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-301.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-364.50)
+WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$914.00, peak=$64889.05, bal=$63975.05)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$558.74, peak=$64889.05, bal=$64330.32)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-319.50)
+WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$871.24, peak=$64889.05, bal=$64017.82)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$509.17, peak=$64889.05, bal=$64379.89)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-369.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-300.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-312.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-332.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-341.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-160.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-375.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-192.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-360.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-262.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-348.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-358.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-342.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-304.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-322.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-360.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-360.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-360.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-360.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-335.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-349.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-210.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-312.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-364.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-214.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-363.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-360.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-348.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-280.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-354.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-401.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-367.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-324.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-369.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-234.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-315.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-326.50)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-941.00)
+WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$941.00, peak=$135117.89, bal=$134176.89)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-330.00)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> caution (dd=$1271.00, peak=$135117.89, bal=$133846.89)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-360.00)
+WARNING risk.risk_manager: Topstep MLL zone: caution -> warning (dd=$881.00, peak=$135117.89, bal=$134236.89)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$506.00, peak=$135117.89, bal=$134611.89)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-364.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-343.00)
+WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$827.50, peak=$135490.39, bal=$134662.89)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$530.50, peak=$135490.39, bal=$134959.89)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-369.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-199.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-367.00)
+WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$883.50, peak=$137180.89, bal=$136297.39)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$524.80, peak=$137180.89, bal=$136656.08)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-357.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-306.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-346.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-312.00)
+WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$913.00, peak=$141505.86, bal=$140592.86)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$613.00, peak=$141505.86, bal=$140892.86)
+WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$824.00, peak=$141505.86, bal=$140681.86)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$551.00, peak=$141505.86, bal=$140954.86)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-317.50)
+WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$868.50, peak=$141505.86, bal=$140637.36)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$493.50, peak=$141505.86, bal=$141012.36)
+WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$823.50, peak=$141505.86, bal=$140682.36)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$448.50, peak=$141505.86, bal=$141057.36)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-360.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-372.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-327.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-252.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-186.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-315.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-345.00)
+WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$813.86, peak=$147262.40, bal=$146448.54)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$438.86, peak=$147262.40, bal=$146823.54)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-184.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-206.50)
+ 740 trades  WR=49.9%  P&L=$+109,229  PF=3.75  (821s)
+
+  ────────────────────────────────────────────────────────────
+  $50K Combine 2024  (740 trades, 30 attempts)
+  Account=$50K  Target=$3K  MLL=$2K  DLL=$1K
+  Attempt  1: PASS  days=2
+  Attempt  2: PASS  days=4
+  Attempt  3: PASS  days=4
+  Attempt  4: PASS  days=9
+  Attempt  5: PASS  days=19
+  Attempt  6: PASS  days=17
+  Attempt  7: PASS  days=20
+  Attempt  8: PASS  days=12
+  Attempt  9: PASS  days=18
+  Attempt 10: PASS  days=1
+  Attempt 11: PASS  days=15
+  Attempt 12: PASS  days=7
+  Attempt 13: PASS  days=14
+  Attempt 14: PASS  days=9
+  Attempt 15: PASS  days=13
+  Attempt 16: PASS  days=13
+  Attempt 17: PASS  days=3
+  Attempt 18: PASS  days=2
+  Attempt 19: PASS  days=6
+  Attempt 20: PASS  days=17
+  Attempt 21: PASS  days=12
+  Attempt 22: PASS  days=16
+  Attempt 23: PASS  days=13
+  Attempt 24: PASS  days=33
+  Attempt 25: PASS  days=7
+  Attempt 26: PASS  days=29
+  Attempt 27: PASS  days=15
+  Attempt 28: PASS  days=9
+  Attempt 29: FAIL  consistency_rule_violated: best_day=$4628.00 >= 50
+
+  RESULT: 28/29 PASS  (96.6%)  avg_days=12.1
+    #  Result                    Period   Trd        P&L  TradeDays  CalDays
+  ────────────────────────────────────────────────────────────────────
+    1    PASS   2024-01-04 → 2024-01-05   740  $ +109229        254        2
+    2    PASS   2024-01-08 → 2024-01-11   735  $ +105340        252        4
+    3    PASS   2024-01-12 → 2024-01-15   723  $ +102248        248        4
+    4    PASS   2024-01-16 → 2024-01-24   718  $  +99146        246        9
+    5    PASS   2024-01-25 → 2024-02-12   700  $  +95062        239       19
+    6    PASS   2024-02-13 → 2024-02-29   662  $  +91287        226       17
+    7    PASS   2024-03-01 → 2024-03-20   623  $  +88162        213       20
+    8    PASS   2024-03-21 → 2024-04-01   581  $  +84664        199       12
+    9    PASS   2024-04-02 → 2024-04-19   560  $  +81556        192       18
+   10    PASS   2024-04-22 → 2024-04-22   519  $  +75074        178        1
+   11    PASS   2024-04-23 → 2024-05-07   518  $  +68081        177       15
+   12    PASS   2024-05-08 → 2024-05-14   485  $  +65048        166        7
+   13    PASS   2024-05-15 → 2024-05-28   470  $  +61432        161       14
+   14    PASS   2024-05-29 → 2024-06-06   440  $  +58337        151        9
+   15    PASS   2024-06-07 → 2024-06-19   419  $  +55092        144       13
+   16    PASS   2024-06-20 → 2024-07-02   394  $  +52003        135       13
+   17    PASS   2024-07-03 → 2024-07-05   367  $  +48667        126        3
+   18    PASS   2024-07-08 → 2024-07-09   358  $  +44937        123        2
+   19    PASS   2024-07-10 → 2024-07-15   354  $  +41341        121        6
+   20    PASS   2024-07-16 → 2024-08-01   342  $  +38287        117       17
+   21    PASS   2024-08-02 → 2024-08-13   304  $  +34948        104       12
+   22    PASS   2024-08-14 → 2024-08-29   280  $  +31431         96       16
+   23    PASS   2024-08-30 → 2024-09-11   244  $  +28395         84       13
+   24    PASS   2024-09-12 → 2024-10-14   218  $  +24874         75       33
+   25    PASS   2024-10-15 → 2024-10-21   160  $  +21233         55        7
+   26    PASS   2024-10-22 → 2024-11-19   145  $  +18121         50       29
+   27    PASS   2024-11-20 → 2024-12-04    85  $  +14639         29       15
+   28    PASS   2024-12-05 → 2024-12-13    52  $  +11431         18        9
+   29    FAIL   2024-12-16 → 2024-12-31    31  $   +7824         11       16
+
+  ────────────────────────────────────────────────────────────
+  $150K Combine 2024  (740 trades, 30 attempts)
+  Account=$150K  Target=$9K  MLL=$4.5K  DLL=$2.25K
+  Attempt  1: PASS  days=9
+  Attempt  2: PASS  days=31
+  Attempt  3: PASS  days=51
+  Attempt  4: PASS  days=15
+  Attempt  5: PASS  days=36
+  Attempt  6: PASS  days=35
+  Attempt  7: PASS  days=8
+  Attempt  8: PASS  days=48
+  Attempt  9: PASS  days=50
+  Attempt 10: PASS  days=50
+  Attempt 11: PASS  days=15
+  Attempt 12: FAIL  profit_target_not_reached: pnl=$1962.00 < target=$
+
+  RESULT: 11/12 PASS  (91.7%)  avg_days=31.6
+    #  Result                    Period   Trd        P&L  TradeDays  CalDays
+  ────────────────────────────────────────────────────────────────────
+    1    PASS   2024-01-04 → 2024-01-12   740  $ +109229        254        9
+    2    PASS   2024-01-15 → 2024-02-14   721  $  +99668        247       31
+    3    PASS   2024-02-15 → 2024-04-05   656  $  +90531        224       51
+    4    PASS   2024-04-08 → 2024-04-22   548  $  +81299        188       15
+    5    PASS   2024-04-23 → 2024-05-28   518  $  +68081        177       36
+    6    PASS   2024-05-29 → 2024-07-02   440  $  +58337        151       35
+    7    PASS   2024-07-03 → 2024-07-10   367  $  +48667        126        8
+    8    PASS   2024-07-11 → 2024-08-27   351  $  +38571        120       48
+    9    PASS   2024-08-28 → 2024-10-16   250  $  +29230         86       50
+   10    PASS   2024-10-17 → 2024-12-05   154  $  +20058         53       50
+   11    PASS   2024-12-06 → 2024-12-20    49  $  +11032         17       15
+   12    FAIL   2024-12-23 → 2024-12-31    18  $   +1962          6        9
+
+  Running 2025 with topstep_mode=True...
+
+  [2025-topstep] building...WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$980.00, peak=$50000.00, bal=$49020.00)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$496.00, peak=$50000.00, bal=$49504.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-329.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-337.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-382.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-363.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-355.50)
+WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$841.50, peak=$68947.07, bal=$68105.57)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$742.50, peak=$68947.07, bal=$68204.57)
+WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$859.50, peak=$68947.07, bal=$68087.57)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$484.50, peak=$68947.07, bal=$68462.57)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-348.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-117.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-799.00)
+WARNING risk.risk_manager: Topstep MLL zone: normal -> caution (dd=$1223.50, peak=$74641.47, bal=$73417.97)
+WARNING risk.risk_manager: Topstep MLL zone: caution -> warning (dd=$998.00, peak=$74641.47, bal=$73643.47)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$658.50, peak=$74641.47, bal=$73982.97)
+WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$849.50, peak=$74641.47, bal=$73791.97)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$675.50, peak=$74641.47, bal=$73965.97)
+WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$986.50, peak=$74641.47, bal=$73654.97)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-553.50)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> caution (dd=$1311.50, peak=$74641.47, bal=$73329.97)
+WARNING risk.risk_manager: Topstep MLL zone: caution -> warning (dd=$1008.50, peak=$74641.47, bal=$73632.97)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$568.50, peak=$74641.47, bal=$74072.97)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-361.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-361.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-336.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-343.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-346.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-354.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-229.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-367.50)
+WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$829.00, peak=$94772.36, bal=$93943.36)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$476.06, peak=$94772.36, bal=$94296.30)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-336.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-173.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-342.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-342.00)
+WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$882.00, peak=$97935.62, bal=$97053.62)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$507.00, peak=$97935.62, bal=$97428.62)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-359.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-303.00)
+WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$908.00, peak=$99183.62, bal=$98275.62)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$533.00, peak=$99183.62, bal=$98650.62)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-230.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-324.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-126.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-371.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-350.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-360.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-360.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-322.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-372.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-364.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-163.00)
+WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$899.50, peak=$110576.49, bal=$109676.99)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$578.07, peak=$110576.49, bal=$109998.42)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-360.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-356.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-360.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-365.50)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-935.00)
+WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$935.00, peak=$138066.77, bal=$137131.77)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$577.86, peak=$138066.77, bal=$137488.91)
+WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$807.86, peak=$138066.77, bal=$137258.91)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$457.86, peak=$138066.77, bal=$137608.91)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-312.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-317.00)
+WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$863.00, peak=$139588.91, bal=$138725.91)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-338.00)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$592.00, peak=$139588.91, bal=$138996.91)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-360.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-348.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-341.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-310.50)
+WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$859.00, peak=$151617.33, bal=$150758.33)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$484.00, peak=$151617.33, bal=$151133.33)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-275.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-248.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-353.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-558.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-242.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-344.00)
+WARNING risk.risk_manager: Topstep MLL zone: normal -> warning (dd=$879.50, peak=$164815.94, bal=$163936.44)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-1071.00)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> caution (dd=$1415.00, peak=$164815.94, bal=$163400.94)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-207.50)
+WARNING risk.risk_manager: Topstep MLL zone: caution -> warning (dd=$916.62, peak=$164815.94, bal=$163899.32)
+WARNING risk.risk_manager: Topstep MLL zone: warning -> normal (dd=$0.00, peak=$164815.94, bal=$167801.32)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-336.00)
+ 690 trades  WR=51.9%  P&L=$+121,720  PF=4.15  (820s)
+
+  ────────────────────────────────────────────────────────────
+  $50K Combine 2025  (690 trades, 30 attempts)
+  Account=$50K  Target=$3K  MLL=$2K  DLL=$1K
+WARNING backtest.combine_simulator: Combine FAILED: dll_breach on 2025-12-15: daily_pnl=$-1071.00 < -dll=$1000.0
+  Attempt  1: FAIL  dll_breach on 2025-12-15: daily_pnl=$-1071.00 < -d
+  Attempt  2: PASS  days=3
+  Attempt  3: PASS  days=8
+  Attempt  4: FAIL  insufficient_trading_days: 3 < 5 required
+
+  RESULT: 2/4 PASS  (50.0%)  avg_days=5.5
+    #  Result                    Period   Trd        P&L  TradeDays  CalDays
+  ────────────────────────────────────────────────────────────────────
+    1    FAIL   2025-01-02 → 2025-12-15   690  $ +113401        237      348
+    2    PASS   2025-12-16 → 2025-12-18    30  $   +8319         11        3
+    3    PASS   2025-12-19 → 2025-12-26    24  $   +3919          8        8
+    4    FAIL   2025-12-29 → 2025-12-31     9  $    +294          3        3
+
+  ────────────────────────────────────────────────────────────
+  $150K Combine 2025  (690 trades, 30 attempts)
+  Account=$150K  Target=$9K  MLL=$4.5K  DLL=$2.25K
+  Attempt  1: PASS  days=22
+  Attempt  2: PASS  days=46
+  Attempt  3: PASS  days=43
+  Attempt  4: PASS  days=22
+  Attempt  5: PASS  days=51
+  Attempt  6: PASS  days=33
+  Attempt  7: PASS  days=7
+  Attempt  8: PASS  days=25
+  Attempt  9: PASS  days=25
+  Attempt 10: PASS  days=23
+  Attempt 11: PASS  days=31
+  Attempt 12: PASS  days=23
+  Attempt 13: FAIL  profit_target_not_reached: pnl=$1810.50 < target=$
+
+  RESULT: 12/13 PASS  (92.3%)  avg_days=29.2
+    #  Result                    Period   Trd        P&L  TradeDays  CalDays
+  ────────────────────────────────────────────────────────────────────
+    1    PASS   2025-01-02 → 2025-01-23   690  $ +121720        248       22
+    2    PASS   2025-01-24 → 2025-03-10   646  $ +108881        232       46
+    3    PASS   2025-03-11 → 2025-04-22   552  $  +99526        200       43
+    4    PASS   2025-04-23 → 2025-05-14   503  $  +88009        179       22
+    5    PASS   2025-05-15 → 2025-07-04   456  $  +78627        163       51
+    6    PASS   2025-07-06 → 2025-08-07   350  $  +69426        126       33
+    7    PASS   2025-08-08 → 2025-08-14   279  $  +59954        101        7
+    8    PASS   2025-08-15 → 2025-09-08   271  $  +50229         96       25
+    9    PASS   2025-09-09 → 2025-10-03   222  $  +40894         79       25
+   10    PASS   2025-10-06 → 2025-10-28   177  $  +31737         62       23
+   11    PASS   2025-10-29 → 2025-11-28   127  $  +22213         45       31
+   12    PASS   2025-12-01 → 2025-12-23    62  $  +10940         22       23
+   13    FAIL   2025-12-24 → 2025-12-31    15  $   +1810          5        8
+
+  ================================================================================
+  TABLE 4 — COMBINE SIMULATOR SUMMARY (topstep_mode=True)
+  ================================================================================
+  Config                      Year  Pass/Att   Rate  AvgDays Bottleneck                    
+  ────────────────────────────────────────────────────────────────────────────────
+  $50K (MLL=$2K)              2023  30/30     100.0%     11.1  —
+  $150K (MLL=$4.5K)           2023  11/12     91.7%     30.2  profit_target_not_reached
+  $50K (MLL=$2K)              2024  28/29     96.6%     12.1  consistency_rule_violated
+  $150K (MLL=$4.5K)           2024  11/12     91.7%     31.6  profit_target_not_reached
+  $50K (MLL=$2K)              2025   2/ 4     50.0%      5.5  dll_breach
+  $150K (MLL=$4.5K)           2025  12/13     92.3%     29.2  profit_target_not_reached
+  ────────────────────────────────────────────────────────────────────────────────
+
+======================================================================
+  PARTE 5 — IFVG VALIDATION 2024  kz=('london', 'ny_am', 'ny_pm')  tm=trailing
+======================================================================
+
+  [I. IFVG ON] building...WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-714.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-714.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-717.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-703.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-718.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-600.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-624.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-664.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-719.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-440.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-576.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-525.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-716.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-697.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-713.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-721.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-692.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-709.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-420.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-643.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-489.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-560.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-616.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-665.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-468.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-732.50)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-941.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-686.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-399.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-734.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-740.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-688.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-624.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-721.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-259.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-712.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-744.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-699.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-630.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-558.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-693.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-715.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-391.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-206.50)
+ 694 trades  WR=49.6%  P&L=$+199,321  PF=3.60  (821s)
+
+  [J. IFVG OFF] building...WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-714.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-714.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-717.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-703.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-718.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-600.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-624.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-664.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-719.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-440.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-576.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-525.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-716.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-697.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-713.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-721.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-720.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-692.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-709.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-420.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-643.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-742.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-750.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-489.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-560.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-616.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-665.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-468.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-735.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-732.50)
+WARNING risk.risk_manager: KILL SWITCH: daily loss limit hit (daily_pnl=-941.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-729.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-686.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-399.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-734.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-740.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-688.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-721.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-259.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-712.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-702.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-738.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-744.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-699.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-630.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-558.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-693.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-724.50)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-715.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-391.00)
+WARNING risk.risk_manager: KILL SWITCH: 3 consecutive losses (daily_pnl=-206.50)
+ 694 trades  WR=49.7%  P&L=$+200,690  PF=3.62  (821s)
+
+  ===========================================================================
+  TABLE 5 — IFVG VALIDATION 2024
+  ===========================================================================
+  Config                 Trd     WR     PF        P&L    MaxDD    AvgW    AvgL
+  ─────────────────────────────────────────────────────────────────────────
+  I. IFVG ON             694   50%   3.60 $ +199,321 $  3,582 $   802 $  -219
+  J. IFVG OFF            694   50%   3.62 $ +200,690 $  3,112 $   804 $  -220
+  ─────────────────────────────────────────────────────────────────────────
+Traceback (most recent call last):
+  File "C:\Users\lalas\OneDrive\Desktop\Developer\AI\Projects\AlgoICT\algoict-engine\scripts\run_final_suite.py", line 1089, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "C:\Users\lalas\OneDrive\Desktop\Developer\AI\Projects\AlgoICT\algoict-engine\scripts\run_final_suite.py", line 1056, in main
+    ifvg_results = run_parte5_ifvg(df_2024)
+  File "C:\Users\lalas\OneDrive\Desktop\Developer\AI\Projects\AlgoICT\algoict-engine\scripts\run_final_suite.py", line 898, in run_parte5_ifvg
+    f"{dpf_s:>+6} ${delta_pnl:>+9,.0f}")
+      ^^^^^^^^^^^
+ValueError: Sign not allowed in string format specifier
