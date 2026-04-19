@@ -106,6 +106,18 @@ VPIN_HIGH_SIZE_REDUCTION = 0.25   # Reduce position size by 25% when VPIN high
 VPIN_HIGH_CONFLUENCE_BUMP = 1     # Add +1 to min confluence when VPIN high
 
 # ---------------------------------------------------------------------------
+# Feature flags
+# ---------------------------------------------------------------------------
+# IFVG (Inverted Fair Value Gap) fallback — when a regular FVG is not
+# available in the bias direction, NY AM Reversal used to fall back to the
+# IFVG pool. Backtests (2024 full year, both with and without the fallback)
+# showed ZERO impact on trade count / P&L — the regular FVG pool is always
+# populated enough that the IFVG path never fires in practice. Disabled
+# 2026-04-19 to shrink the active surface area. Set to True to reactivate;
+# the scripts/run_backtest.py `--no-ifvg` flag is the ablation override.
+IFVG_ENABLED = False
+
+# ---------------------------------------------------------------------------
 # Confluence Scoring
 # ---------------------------------------------------------------------------
 # Weights sum to 19, so the ACHIEVABLE max is 19 — MAX_CONFLUENCE used to

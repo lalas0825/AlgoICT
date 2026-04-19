@@ -132,8 +132,13 @@ class NYAMReversalStrategy:
         self.trades_today: int = 0
         self._trades_by_zone: dict[str, int] = {z: 0 for z in self.KILL_ZONES}
         self._last_evaluated_bar_ts = None
-        # Ablation toggles (set via run_backtest CLI flags)
-        self._ifvg_enabled: bool = True
+        # IFVG fallback: off by default (config.IFVG_ENABLED). Backtests
+        # showed zero impact when the regular FVG pool is the primary
+        # source — the fallback path never fires in practice. Kept as a
+        # toggle for ablation runs; scripts/run_backtest.py's --no-ifvg
+        # flag flips this to False explicitly in tests that want to
+        # double-guarantee the fallback is off regardless of config.
+        self._ifvg_enabled: bool = getattr(config, "IFVG_ENABLED", False)
 
     # ------------------------------------------------------------------ #
     # Public API                                                           #
