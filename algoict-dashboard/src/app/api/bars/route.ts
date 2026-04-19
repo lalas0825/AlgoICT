@@ -77,6 +77,48 @@ const TF_SECONDS: Record<Timeframe, number> = {
   D: 24 * 60 * 60,
 };
 
+// ── OHLCV aggregation ─────────────────────────────────────────────────────
+// Engine writes ONLY 1-min bars. For any higher TF the dashboard requests,
+// we aggregate the relevant 1-min slice here so the chart actually shows
+// the higher timeframe (rather than 1-min bars mislabeled as 5m / 15m / …).
+//
+// Bucket rule: bar.time is rounded DOWN to the nearest `stepSec` boundary.
+// This matches TradingView / lightweight-charts convention and keeps the
+// client simple — it just plots the returned bars.
+function aggregateCandles(
+  bars1m: Candle[],
+  targetTf: Timeframe,
+  limit: number,
+): Candle[] {
+  if (targetTf === '1m') return bars1m.slice(-limit);
+  const stepSec = TF_SECONDS[targetTf];
+  if (!stepSec || bars1m.length === 0) return [];
+
+  const buckets = new Map<number, Candle>();
+  for (const b of bars1m) {
+    const bucketTs = Math.floor(b.time / stepSec) * stepSec;
+    const existing = buckets.get(bucketTs);
+    if (existing === undefined) {
+      buckets.set(bucketTs, {
+        time: bucketTs,
+        open: b.open,
+        high: b.high,
+        low: b.low,
+        close: b.close,
+        volume: b.volume,
+      });
+    } else {
+      existing.high = Math.max(existing.high, b.high);
+      existing.low = Math.min(existing.low, b.low);
+      existing.close = b.close;              // last
+      existing.volume = (existing.volume ?? 0) + (b.volume ?? 0);
+    }
+  }
+  // Map preserves insertion order; bars1m is ascending so buckets are too.
+  const out = Array.from(buckets.values());
+  return out.slice(-limit);
+}
+
 function syntheticBars(symbol: string, tf: Timeframe, limit: number): Candle[] {
   const step = TF_SECONDS[tf];
   const now = Math.floor(Date.now() / 1000);
@@ -126,17 +168,31 @@ export async function GET(request: NextRequest) {
   }
   const limit = Math.max(50, Math.min(5000, isFinite(limitRaw) ? limitRaw : 500));
 
-  // Try exact timeframe first
+  // Try exact timeframe first (works only for 1m today — engine writes only 1m).
   const real = await fetchRealBars(symbol, tfRaw, limit);
   if (real && real.length > 0) {
     return Response.json({ symbol, timeframe: tfRaw, count: real.length, source: 'market_data', bars: real });
   }
 
-  // Engine only writes 1m bars — if a higher TF was requested, try 1m
+  // Engine only writes 1m — for every higher TF, fetch enough 1-min bars to
+  // cover `limit * bucketMinutes` and aggregate in memory. Cap the raw
+  // fetch at 10_000 bars (~1 week of RTH) so the REST query stays fast and
+  // Supabase's default limit doesn't silently truncate us.
   if (tfRaw !== '1m') {
-    const real1m = await fetchRealBars(symbol, '1m', limit);
+    const bucketMinutes = TF_SECONDS[tfRaw] / 60;
+    const neededMinutes = Math.min(10_000, limit * bucketMinutes);
+    const real1m = await fetchRealBars(symbol, '1m', neededMinutes);
     if (real1m && real1m.length > 0) {
-      return Response.json({ symbol, timeframe: '1m', count: real1m.length, source: 'market_data_1m', bars: real1m });
+      const aggregated = aggregateCandles(real1m, tfRaw, limit);
+      if (aggregated.length > 0) {
+        return Response.json({
+          symbol,
+          timeframe: tfRaw,
+          count: aggregated.length,
+          source: 'market_data_1m_agg',
+          bars: aggregated,
+        });
+      }
     }
   }
 

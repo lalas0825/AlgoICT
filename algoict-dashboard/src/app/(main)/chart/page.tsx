@@ -182,7 +182,23 @@ export default function ChartPage() {
   }, []);
 
   // ── Realtime: market_data inserts → update last candle ───────────
+  //
+  // The engine writes ONLY 1-min bars. For higher timeframes the chart
+  // needs to aggregate the incoming 1-min tick into the active bucket:
+  //   - If the 1-min bar's bucket timestamp equals the chart's last bar
+  //     → mutate in place (high=max, low=min, close=incoming, keep open)
+  //   - If it's a new bucket (the prior bucket fully closed)
+  //     → append a fresh candle with the 1-min bar's OHLC as seed
+  // 1m mode still passes through directly.
   useEffect(() => {
+    const tfSeconds =
+      timeframe === '1m'  ? 60 :
+      timeframe === '5m'  ? 5 * 60 :
+      timeframe === '15m' ? 15 * 60 :
+      timeframe === '1H'  ? 60 * 60 :
+      timeframe === '4H'  ? 4 * 60 * 60 :
+      /* D */              24 * 60 * 60;
+
     const channel = supabase
       .channel(`chart-market-data-${timeframe}`)
       .on(
@@ -203,16 +219,32 @@ export default function ChartPage() {
             volume: number;
             timeframe: string;
           };
-          // Only update chart if the incoming bar matches the current timeframe
-          if (row.timeframe !== timeframe) return;
-          const bar: CandlestickData<UTCTimestamp> = {
-            time: Math.floor(new Date(row.timestamp).getTime() / 1000) as UTCTimestamp,
-            open: row.open,
-            high: row.high,
-            low: row.low,
-            close: row.close,
-          };
-          setLastBar(bar);
+          // Engine only emits 1m rows — ignore anything else defensively.
+          if (row.timeframe !== '1m') return;
+
+          const rowSec = Math.floor(new Date(row.timestamp).getTime() / 1000);
+          const bucketSec = Math.floor(rowSec / tfSeconds) * tfSeconds;
+
+          setLastBar((prev) => {
+            if (prev && (prev.time as number) === bucketSec) {
+              // Same bucket — aggregate into existing candle
+              return {
+                time: bucketSec as UTCTimestamp,
+                open: prev.open,
+                high: Math.max(prev.high, row.high),
+                low: Math.min(prev.low, row.low),
+                close: row.close,
+              };
+            }
+            // New bucket — seed a fresh candle with this 1-min bar's OHLC
+            return {
+              time: bucketSec as UTCTimestamp,
+              open: row.open,
+              high: row.high,
+              low: row.low,
+              close: row.close,
+            };
+          });
         },
       )
       .subscribe();
