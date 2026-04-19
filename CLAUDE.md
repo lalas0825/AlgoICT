@@ -51,12 +51,17 @@
 
 ---
 
-## Confluence Scoring (max 20 pts, min 7)
+## Confluence Scoring (max **19** pts, min 7)
+
+> Source of truth: `config.CONFLUENCE_WEIGHTS`. `MAX_CONFLUENCE` is derived
+> (`sum(weights.values())`) so logs / telemetry / Telegram alerts always
+> reflect the real ceiling. The advertised "20" of early docs never matched
+> the actual weight table — audit 2026-04-17 closed the drift.
 
 | Factor | Pts | Source |
 |--------|-----|--------|
 | Liquidity grab | +2 | ICT |
-| Fair Value Gap | +2 | ICT |
+| Fair Value Gap (or IFVG fallback) | +2 | ICT |
 | Order Block | +2 | ICT |
 | Market Structure Shift | +2 | ICT |
 | Kill Zone | +1 | Time |
@@ -70,7 +75,7 @@
 | VPIN validated sweep | +1 | VPIN |
 | VPIN quality session | +1 | VPIN |
 
-**12+ = A+ full position | 9-11 = high | 7-8 = standard | <7 = NO TRADE**
+**Sum = 19.** Tiers: **12+ = A+ full position | 9-11 = high | 7-8 = standard | <7 = NO TRADE**
 
 ---
 
@@ -291,12 +296,41 @@ Weekly → Daily → 4H entry. S&P 500 stocks. Hold 2-15 dias. Max 5 positions.
 | Kill switch | 3 losses ($750) → done |
 | Profit cap | $1,500/dia |
 | Hard close | 3:00 PM CT |
-| Min confluence | 7/20 |
-| Max MNQ trades | 3/dia |
+| Min confluence | 7/19 |
+| Max MNQ trades/zona | 2 (ny_am_reversal) / 1 (silver_bullet) |
 | Heartbeat | 5s o flatten |
-| VPIN shield | >0.70 = flatten + halt |
+| VPIN shield | activar ≥0.70 · resume ≤0.55 (histéresis) |
 | Topstep MLL/DLL | $2,000 / $1,000 |
 | Max contracts | 50 MNQ |
+
+### Topstep MLL zones (activadas via `--topstep`, default ON en `main.py`)
+
+| Zona | Drawdown | Acción | Validado |
+|------|----------|--------|----------|
+| normal  | < 40% MLL (<$800)  | tamaño completo | — |
+| warning | ≥ 40% MLL ($800+)  | −25% size, min_conf +1 | M17b |
+| caution | ≥ 60% MLL ($1,200+)| −50% size, min_conf +2 | M17b |
+| stop    | ≥ 85% MLL ($1,700+)| bloquea nuevas entradas | M17b |
+
+**Combine rolling pass rate con defaults 40/60/85:** 19/20 = 95% (NY AM 2024).
+Override via CLI: `--mll-warning-pct / --mll-caution-pct / --mll-stop-pct`
+con validator `warning < caution < stop` en argparse.
+
+### Trade management (`config.TRADE_MANAGEMENT`)
+
+- **trailing** (default, live + backtest) — no fixed target, trails last 5-min swing
+- **partials_be** — backtester: close 50% at 1R + move stop to BE. **NO implementado en live todavía** — live loggea ERROR loud si este modo está activo.
+- **fixed** — standard SL/TP at signal.stop/target
+
+Backtester default lee `config.TRADE_MANAGEMENT` para paridad con live.
+
+### Single-instance lock
+
+`algoict-engine/.engine.lock` (PID file, `**/.claude/worktrees/`-style).
+`main._acquire_engine_lock()` refuses a second `python main.py` con
+mensaje actionable (`taskkill /F /PID <n>`). Stale locks se reclaman
+automáticamente si el PID está muerto. Previene el bug del 2026-04-17
+donde 3 procesos zombie triple-fired la misma señal London.
 
 ---
 
@@ -326,13 +360,38 @@ Weekly → Daily → 4H entry. S&P 500 stocks. Hold 2-15 dias. Max 5 positions.
 | 0.35-0.45 | Normal | Normal |
 | 0.45-0.55 | Elevated | Alert |
 | 0.55-0.70 | High | Tighten stops, -25% size, +1 min confluence |
-| > 0.70 | **EXTREME** | **FLATTEN ALL. HALT TRADING.** |
+| ≥ 0.70 | **EXTREME** | **FLATTEN ALL. HALT TRADING.** |
+
+**Histéresis (M17b post-audit):** activa a ≥0.70 · resume solo a ≤0.55.
+Dead band de 0.15 evita halt/resume flapping cuando VPIN oscila sobre
+el boundary 0.70.
+
+### Flatten paths (VPIN extreme / hard close / signalr exhausted)
+
+Todos llaman `_flatten_all` que:
+1. Captura cada posición abierta + cancela brackets (stop + target)
+2. Llama `broker.flatten_all()`
+3. Sintetiza `_on_trade_closed(trade_dict)` por cada posición usando last
+   1-min close como exit proxy → `risk.record_trade(pnl)` actualiza
+   daily_pnl + MLL, Supabase escribe trade row, Telegram manda exit alert.
+
+Este patrón cerró el bug 2026-04-18 donde flatten paths perdían P&L silently.
 
 ---
 
 ## Database — 7 Tables
 
 `trades` `signals` `daily_performance` `bot_state` `market_levels` `post_mortems` `strategy_candidates`
+
+### Migrations
+
+| # | Archivo | Resumen |
+|---|---------|---------|
+| 0001 | `0001_init.sql` | Schema inicial |
+| 0002 | `0002_market_data.sql` | Tabla `market_data` (1min OHLCV) |
+| 0003 | `0003_bot_state_overlays.sql` | Extiende `bot_state` con JSONB para detector overlays (fvg_top3, ifvg_top3, ob_top3, tracked_levels, struct_last3, last_displacement) + scalars (bias_direction/zone, daily/weekly_bias, active_kz, mll_zone, min_confluence, bot_status). Consumido por el dashboard chart via `useBotStateOverlay`. |
+
+Aplicar con `supabase db push` o ejecutar SQL manual en Supabase dashboard.
 
 ---
 
@@ -380,5 +439,32 @@ MENTHORQ_API_KEY=
 
 ---
 
-*AlgoICT — SaaS Factory V4 | 20 Skills | 6 Intelligence Layers | 20-Point Confluence*
+## Dashboard Chart (M17 / Chart Overlay)
+
+`/chart` page renderea en real-time lo que el bot VE:
+
+| Overlay | Fuente | Render |
+|---------|--------|--------|
+| Candlesticks + volumen | `/api/bars` + Realtime `market_data` | lightweight-charts v5, volume en subpanel bottom 20% |
+| Kill Zone shading | Timezone CT computed client-side (Intl) | Histogram strip bottom 5%, colors: London azul / NY AM emerald / Silver Bullet amber / NY PM orange |
+| FVG / OB zones | `bot_state.fvg_top3` / `ob_top3` (JSONB) | Rectangles (Solid for FVG, heavier for OB) |
+| IFVG | `bot_state.ifvg_top3` | Rectangles with **dashed** outline |
+| Tracked levels | `bot_state.tracked_levels` | Horizontal priceLines: PDH/PDL azul, PWH/PWL morado, EQH/EQL amber. Swept → zinc-500 dashed + ✖ label |
+| Structure events | `bot_state.struct_last3` | Markers: MSS/BOS arrows, CHoCH circles |
+| Signal fires | `signals` table (Realtime) | "FIRE {score}" arrow marker |
+| Trade entry/exit | `market_levels.trades` | arrowUp/Down + P&L text |
+| Info panel | `bot_state` scalars | Status, KZ, bias (d/w), VPIN, SWC mood, MLL zone, min_conf, P&L, last displacement |
+
+**Hooks:**
+- `useChartAnnotations(symbol, tf, window)` — market_levels + trades
+- `useBotStateOverlay()` — bot_state Realtime subscription
+- `useSignalsLive(symbol)` — signals table Realtime subscription
+
+**Toggles:** OverlayToggleBar con 6 checkboxes (Volume / Kill Zones / FVG / OB / Levels / Trades).
+
+Requiere migration `0003_bot_state_overlays.sql` aplicada.
+
+---
+
+*AlgoICT — SaaS Factory V4 | 20 Skills | 6 Intelligence Layers | 19-Point Confluence*
 *"ICT ve velas. SWC ve contexto. GEX ve fuerzas. VPIN ve smart money. Strategy Lab evoluciona. Post-Mortem aprende."*

@@ -638,3 +638,95 @@ M1 Foundation → M2 Detectors → M3 Risk+Strategies → M4 Backtester
 ---
 
 *"Follow the tasks. Trust the process. Build the machine."*
+
+---
+
+## MILESTONE 15-17 + CHART OVERLAY — post-M10 hardening (2026-04-13 → 04-19)
+
+> Finished the live pipeline (SWC re-scans, VPIN halt, HTF bias v2, multi-KZ,
+> trailing stop, _on_trade_closed SignalR wiring), validated 95% Combine pass
+> rate, and shipped the full dashboard chart overlay. 1,442 tests passing.
+> All work visible in `git log --oneline 7306daf..HEAD`.
+
+### M15 — VPIN halt + SWC re-scans + ny_pm KZ
+- VPIN temp halt at ≥0.70 with edge-detected Telegram alerts
+- SWC pre-London + pre-NY AM re-scans (crosses Finnhub event changes)
+- ny_pm kill zone added to ny_am_reversal KILL_ZONES tuple
+- VPIN normalization alert fires once on True→False transition
+
+### M16 — Live pipeline
+- HTF bias v2: swing-structure primary, premium/discount secondary,
+  weekly alignment multiplier, lookahead-free (last-completed bar only)
+- Finnhub + Alpha Vantage wired as SWC data sources
+- Dashboard auth + chart page baseline
+- Supabase batch upsert for market_data
+
+### M17a — FVG mitigation tuning
+- `FVG_MITIGATION_RATIO = 0.75` — FVGs survive longer post-sweep
+- `load_dotenv(override=True)` — .env wins over empty shell env vars
+
+### M17b — MLL zones + signal dedup + audit aftermath (CRITICAL)
+- 4-zone MLL ladder (normal 40% / warning 60% / caution 85% / stop).
+  Validated: Combine rolling pass rate 1/10 → 19/20 on NY AM 2024.
+- Single-instance PID lock (`.engine.lock`) — prevents 3-process zombie
+  fires that cost 6× signal duplication on 2026-04-17
+- `notify_trade_executed` split from `evaluate()` — KZ budget only
+  advances on broker-confirmed fill
+- `submit_limit_order` now validates against ±2% reference price —
+  closes the "Invalid price outside allowed range" rejection path
+- Rejected entries roll back `state.executed_signals` AND
+  `strategy._last_evaluated_bar_ts` → same bar can retry
+- `_flatten_all` (VPIN extreme / hard close / signalr exhausted) now
+  synthesizes `_on_trade_closed` per position: risk.record_trade,
+  MLL update, Supabase write, Telegram exit alert — all preserved.
+  Previously silently lost on every flatten.
+- Reconcile symbol normalization: `CON.F.US.MNQ.M26` vs `MNQ` no
+  longer spams false ghost/orphan alerts
+- `get_completed_bars(tf)` forming-bar guard wired into `_on_new_bar`
+- `MAX_CONFLUENCE` derived from weight table (19, not 20 — source of
+  truth single-sourced). All `/20` hardcoded strings removed.
+- SWC mood gating wired into Claude path (not just heuristic fallback)
+  — choppy day without event now actually penalises (9/0.75)
+- VPIN hysteresis: activate ≥0.70, resume ≤0.55 (dead band prevents
+  flapping)
+- Trade management default reads `config.TRADE_MANAGEMENT` in both
+  live and backtest → paridad
+- IFVG `update_mitigation` now called in backtester (was dead code,
+  caused FVG pool to grow monotonically vs live)
+- Tests: 1353 → 1442 (+89), all green
+
+### M17c — Dashboard chart overlay (4 phases)
+**Migration:** `supabase/migrations/0003_bot_state_overlays.sql` adds
+JSONB columns (fvg_top3, ifvg_top3, ob_top3, tracked_levels,
+struct_last3, last_displacement) + scalars (bias_direction/zone,
+daily/weekly_bias, active_kz, mll_zone, min_confluence, bot_status).
+
+**Engine:** `main._populate_detector_overlay()` populates them every
+5s from existing detectors. Best-effort try/except per sub-block.
+
+**Dashboard `/chart`:**
+- **Phase 1**: volume subpanel + kill-zone background shading
+  (Intl-based CT projection, DST-safe) + 6 toggle checkboxes
+- **Phase 2**: IFVG dashed rectangles + tracked_levels as horizontal
+  priceLines (PDH/PDL blue, PWH/PWL purple, swept → zinc-500 dashed
+  ✖) + MSS/BOS/CHoCH markers + displacement hook
+- **Phase 3**: signal fire markers from `signals` table (FIRE + score)
+- **Phase 4**: live info panel (bias, VPIN, SWC, MLL zone, P&L, KZ,
+  min confluence, last displacement)
+
+**Hooks:** `useChartAnnotations` (market_levels + trades),
+`useBotStateOverlay` (bot_state JSONB Realtime), `useSignalsLive`
+(signals Realtime).
+
+### Status snapshot @ 2026-04-19
+- **Tests:** 1,442 passing (engine), dashboard build ✓
+- **Master HEAD:** `19d89cc`
+- **Combine pass rate:** 95% (NY AM 2024 locked config)
+- **Blockers para live trading:** ninguno técnico. Next step: aplicar
+  migration 0003 a Supabase y arrancar bot con `python main.py --mode paper`.
+- **Futuro (no blocker para Combine):** migrar repo fuera de OneDrive
+  a `C:\dev\AlgoICT` (file-lock issues durante esta sesión).
+
+---
+
+*"Follow the tasks. Trust the process. Build the machine."*
