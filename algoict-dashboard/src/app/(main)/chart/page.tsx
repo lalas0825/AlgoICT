@@ -260,7 +260,11 @@ export default function ChartPage() {
   }, []);
 
   // ── Derived header stats ──────────────────────────────────────────
-  const lastClose = bars.length > 0 ? bars[bars.length - 1].close : null;
+  // Prefer the live `lastBar` (pushed via Supabase Realtime on each 1-min tick)
+  // over the static `bars` array, so the header price updates live instead of
+  // only on timeframe changes.
+  const lastClose =
+    lastBar?.close ?? (bars.length > 0 ? bars[bars.length - 1].close : null);
   const firstClose = bars.length > 0 ? bars[0].close : null;
   const change = lastClose != null && firstClose != null ? lastClose - firstClose : null;
   const changePct = change != null && firstClose ? (change / firstClose) * 100 : null;
