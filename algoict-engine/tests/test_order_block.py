@@ -458,3 +458,106 @@ class TestOrderBlockClear:
         assert len(det.order_blocks) >= 1
         det.clear()
         assert det.order_blocks == []
+
+
+class TestInvalidateByStructure:
+
+    def test_bullish_bos_invalidates_bearish_obs(self):
+        df = _make_bearish_displacement_df()
+        det = OrderBlockDetector()
+        det.detect(df, "5min")
+        bearish_obs = [ob for ob in det.order_blocks if ob.direction == "bearish"]
+        assert len(bearish_obs) >= 1, "need at least one bearish OB for this test"
+        invalidated = det.invalidate_by_structure("bullish")
+        assert len(invalidated) == len(bearish_obs)
+        for ob in bearish_obs:
+            assert ob.mitigated
+
+    def test_bearish_bos_invalidates_bullish_obs(self):
+        df = _make_bullish_displacement_df()
+        det = OrderBlockDetector()
+        det.detect(df, "5min")
+        bullish_obs = [ob for ob in det.order_blocks if ob.direction == "bullish"]
+        assert len(bullish_obs) >= 1
+        invalidated = det.invalidate_by_structure("bearish")
+        assert len(invalidated) == len(bullish_obs)
+        for ob in bullish_obs:
+            assert ob.mitigated
+
+    def test_invalidate_does_not_touch_same_direction(self):
+        df = _make_bullish_displacement_df()
+        det = OrderBlockDetector()
+        det.detect(df, "5min")
+        # bullish BOS should NOT invalidate bullish OBs
+        before_count = len([ob for ob in det.order_blocks if not ob.mitigated and ob.direction == "bullish"])
+        det.invalidate_by_structure("bullish")
+        after_count = len([ob for ob in det.order_blocks if not ob.mitigated and ob.direction == "bullish"])
+        assert after_count == before_count
+
+    def test_invalidate_skips_already_mitigated(self):
+        df = _make_bearish_displacement_df()
+        det = OrderBlockDetector()
+        det.detect(df, "5min")
+        for ob in det.order_blocks:
+            ob.mitigated = True
+        invalidated = det.invalidate_by_structure("bullish")
+        assert invalidated == []
+
+    def test_invalidate_returns_list_of_affected_obs(self):
+        df = _make_bearish_displacement_df()
+        det = OrderBlockDetector()
+        det.detect(df, "5min")
+        result = det.invalidate_by_structure("bullish")
+        assert isinstance(result, list)
+        assert all(isinstance(ob, OrderBlock) for ob in result)
+
+
+class TestExpireOld:
+
+    def _make_ob_at_ts(self, ts: pd.Timestamp, direction: str = "bullish") -> OrderBlock:
+        return OrderBlock(
+            high=102.0, low=99.0, direction=direction,
+            timeframe="5min", candle_index=0, timestamp=ts,
+        )
+
+    def test_ob_within_max_age_not_expired(self):
+        det = OrderBlockDetector()
+        ts_ob = pd.Timestamp("2025-03-03 09:00", tz="US/Central")
+        ts_now = ts_ob + pd.Timedelta(minutes=100)   # 20 bars × 5min — well within 500-bar limit
+        det.order_blocks = [self._make_ob_at_ts(ts_ob)]
+        expired = det.expire_old(ts_now)
+        assert expired == []
+        assert not det.order_blocks[0].mitigated
+
+    def test_ob_beyond_max_age_expires(self):
+        det = OrderBlockDetector()
+        ts_ob = pd.Timestamp("2025-03-03 09:00", tz="US/Central")
+        ts_now = ts_ob + pd.Timedelta(minutes=500 * 5 + 1)   # 1 min beyond 500-bar window
+        det.order_blocks = [self._make_ob_at_ts(ts_ob)]
+        expired = det.expire_old(ts_now)
+        assert len(expired) == 1
+        assert det.order_blocks[0].mitigated
+
+    def test_already_mitigated_ob_not_returned(self):
+        det = OrderBlockDetector()
+        ts_ob = pd.Timestamp("2025-01-01 09:00", tz="US/Central")
+        ts_now = ts_ob + pd.Timedelta(days=30)
+        ob = self._make_ob_at_ts(ts_ob)
+        ob.mitigated = True
+        det.order_blocks = [ob]
+        expired = det.expire_old(ts_now)
+        assert expired == []
+
+    def test_only_old_obs_expire(self):
+        det = OrderBlockDetector()
+        ts_old = pd.Timestamp("2025-03-01 09:00", tz="US/Central")
+        ts_new = pd.Timestamp("2025-03-10 09:00", tz="US/Central")
+        ts_now = ts_new + pd.Timedelta(minutes=5)   # 1 bar after ts_new
+        det.order_blocks = [
+            self._make_ob_at_ts(ts_old, "bullish"),
+            self._make_ob_at_ts(ts_new, "bearish"),
+        ]
+        expired = det.expire_old(ts_now)
+        assert len(expired) == 1
+        assert expired[0].timestamp == ts_old
+        assert not det.order_blocks[1].mitigated

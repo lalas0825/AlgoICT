@@ -29,6 +29,7 @@ Mitigation  : price trades through the full OB (beyond the distal end):
 All DataFrames must have US/Central DatetimeIndex and OHLCV columns.
 """
 
+import datetime
 import logging
 from dataclasses import dataclass
 from typing import Optional
@@ -49,6 +50,7 @@ logger = logging.getLogger(__name__)
 OB_MAX_HISTORY = getattr(config, "OB_MAX_HISTORY", 100)
 OB_ATR_MULTIPLIER = getattr(config, "OB_ATR_MULTIPLIER", 1.5)
 OB_ATR_PERIOD = getattr(config, "OB_ATR_PERIOD", 14)
+OB_MAX_AGE_BARS = getattr(config, "OB_MAX_AGE_BARS", 500)
 # How many bars back to look for a nearby sweep
 OB_SWEEP_LOOKBACK = getattr(config, "OB_SWEEP_LOOKBACK", 5)
 # How many bars forward to look for an FVG after the OB candle
@@ -268,6 +270,65 @@ class OrderBlockDetector:
         if not candidates:
             return None
         return min(candidates, key=lambda ob: abs(ob.proximal - current_price))
+
+    def invalidate_by_structure(self, direction: str) -> list[OrderBlock]:
+        """Invalidate OBs whose direction is OPPOSITE to a new BOS/CHoCH/MSS.
+
+        ICT: a bullish BOS confirms the new uptrend — bearish OBs from the
+        prior trend are now stale and should not be used as entry zones.
+        Called by main.py and backtester.py whenever a new structure event fires.
+
+        Parameters
+        ----------
+        direction : 'bullish' | 'bearish' — direction of the new structure event
+
+        Returns
+        -------
+        list[OrderBlock] — OBs invalidated in this call
+        """
+        opposite = "bearish" if direction == "bullish" else "bullish"
+        invalidated: list[OrderBlock] = []
+        for ob in self.order_blocks:
+            if not ob.mitigated and ob.direction == opposite:
+                ob.mitigated = True
+                invalidated.append(ob)
+                logger.debug(
+                    "OB %s [%.2f-%.2f] invalidated by %s structure event",
+                    ob.direction, ob.low, ob.high, direction,
+                )
+        return invalidated
+
+    def expire_old(self, current_ts: pd.Timestamp) -> list[OrderBlock]:
+        """
+        Mark active OBs as mitigated when they are older than OB_MAX_AGE_BARS
+        5-min bars (≈ OB_MAX_AGE_BARS × 5 minutes).
+
+        Parameters
+        ----------
+        current_ts : pd.Timestamp — timestamp of the latest processed bar
+
+        Returns
+        -------
+        list[OrderBlock] — OBs expired in this call
+        """
+        max_age = datetime.timedelta(minutes=OB_MAX_AGE_BARS * 5)
+        expired: list[OrderBlock] = []
+        for ob in self.order_blocks:
+            if ob.mitigated:
+                continue
+            age = current_ts - ob.timestamp
+            # strip timezone if needed for comparison
+            try:
+                if age > max_age:
+                    ob.mitigated = True
+                    expired.append(ob)
+                    logger.debug(
+                        "OB %s [%.2f-%.2f] expired (age=%s > %s)",
+                        ob.direction, ob.low, ob.high, age, max_age,
+                    )
+            except TypeError:
+                pass  # mixed tz/naive edge case — skip expiry for this OB
+        return expired
 
     def clear(self) -> None:
         """Reset all detected OBs."""

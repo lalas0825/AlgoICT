@@ -248,9 +248,11 @@ class Backtester:
 
         # State
         open_position: Optional[dict] = None
+        pending_entry: Optional[dict] = None   # unfilled limit order
         last_entry_idx: int = -1
         current_session_date: Optional[datetime.date] = None
         daily_pnl: dict = {}
+        _limit_ttl = getattr(config, "LIMIT_ORDER_TTL_BARS", 10)
 
         n = len(df)
         for i in range(n):
@@ -269,6 +271,33 @@ class Backtester:
                 daily_pnl[current_date] = 0.0
                 # Advance last_entry_idx marker so we still evaluate today's first bar
                 # (no-op — intentionally keep it; a new day may or may not advance the idx)
+
+            # ── 0. Pending limit entry: check fill or TTL ────────────
+            if pending_entry is not None and open_position is None:
+                lp = pending_entry["limit_price"]
+                if pending_entry["direction"] == "long" and bar_low <= lp:
+                    open_position = dict(pending_entry)
+                    open_position["entry_price"] = lp
+                    open_position["entry_bar_idx"] = i
+                    open_position.pop("limit_price", None)
+                    open_position.pop("bars_waiting", None)
+                    pending_entry = None
+                elif pending_entry["direction"] == "short" and bar_high >= lp:
+                    open_position = dict(pending_entry)
+                    open_position["entry_price"] = lp
+                    open_position["entry_bar_idx"] = i
+                    open_position.pop("limit_price", None)
+                    open_position.pop("bars_waiting", None)
+                    pending_entry = None
+                else:
+                    pending_entry["bars_waiting"] = pending_entry.get("bars_waiting", 0) + 1
+                    if pending_entry["bars_waiting"] >= _limit_ttl:
+                        logger.debug(
+                            "LIMIT TTL: %s %s limit @ %.2f expired after %d bars",
+                            pending_entry["strategy"], pending_entry["direction"],
+                            pending_entry["limit_price"], _limit_ttl,
+                        )
+                        pending_entry = None
 
             # ── 1. Check open-position exit first ─────────────────────
             if open_position is not None:
@@ -333,7 +362,10 @@ class Backtester:
             # ── 5. Sweep check on current 1-min bar ────────────────────
             self._update_sweeps(bar_high, bar_low, bar_close)
 
-            # ── 6. Strategy evaluation ─────────────────────────────────
+            # ── 6. Strategy evaluation — skip if a limit order is waiting
+            if pending_entry is not None:
+                continue
+
             signal = self.strategy.evaluate(df_entry_slice, df_context_slice)
             if signal is None:
                 continue
@@ -361,7 +393,7 @@ class Backtester:
                 else:
                     sig_target = float(signal.entry_price) - stop_pts
 
-            # ── 7. Log & open position ─────────────────────────────────
+            # ── 7. Log signal & queue as pending limit entry ───────────
             self.signals.append(SignalLog(
                 timestamp=signal.timestamp,
                 strategy=signal.strategy,
@@ -374,23 +406,22 @@ class Backtester:
                 kill_zone=signal.kill_zone,
             ))
 
-            open_position = {
+            pending_entry = {
                 "strategy": signal.strategy,
                 "symbol": signal.symbol,
                 "direction": signal.direction,
                 "kill_zone": signal.kill_zone,
                 "entry_time": current_ts,
-                "entry_price": float(signal.entry_price),
+                "limit_price": float(signal.entry_price),
                 "stop_price": sig_stop,
                 "target_price": sig_target,
                 "contracts": sig_contracts,
                 "confluence_score": int(signal.confluence_score),
-                "entry_bar_idx": i,
+                "bars_waiting": 0,
             }
 
-            # Advance per-zone + daily trade counters. Must happen here
-            # (post-execution), not inside strategy.evaluate(), or a
-            # rejected order would still block the KZ on the next bar.
+            # Advance per-zone + daily trade counters at order placement
+            # (not fill) to prevent double-signals during the wait window.
             if hasattr(self.strategy, "notify_trade_executed"):
                 self.strategy.notify_trade_executed(signal)
 
@@ -618,7 +649,12 @@ class Backtester:
 
         structure = d.get("structure")
         if structure is not None and swing_context is not None and not df_context.empty:
-            structure.update(df_context, swing_context, context_tf)
+            new_struct_events = structure.update(df_context, swing_context, context_tf)
+            ob = d.get("ob")
+            if ob is not None:
+                for _ev in new_struct_events:
+                    if _ev.type in ("BOS", "CHoCH", "MSS"):
+                        ob.invalidate_by_structure(_ev.direction)
 
         fvg = d.get("fvg")
         if fvg is not None and not df_entry.empty:
@@ -656,6 +692,7 @@ class Backtester:
         ob = d.get("ob")
         if ob is not None and not df_entry.empty:
             ob.detect(df_entry, entry_tf, swing_entry, fvg)
+            ob.expire_old(df_entry.index[-1])
 
         displacement = d.get("displacement")
         if displacement is not None and not df_entry.empty:

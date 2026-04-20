@@ -275,7 +275,7 @@ GEX_REFRESH_INTERVAL_MIN = 30  # Refresh GEX data every 30 minutes
 # Bearish FVG: mitigated when price >= bottom + ratio * range (filling upward)
 # Bullish FVG: mitigated when price <= top   - ratio * range (filling downward)
 # ---------------------------------------------------------------------------
-FVG_MITIGATION_RATIO = 0.75
+FVG_MITIGATION_RATIO = 0.50
 
 # ---------------------------------------------------------------------------
 # OB Proximity Gate
@@ -286,6 +286,22 @@ FVG_MITIGATION_RATIO = 0.75
 # need for this gate — market orders that far from the OB are not OB entries.
 # ---------------------------------------------------------------------------
 OB_PROXIMITY_TOLERANCE = 3.0      # pts — max gap from OB edge to current price
+
+# ---------------------------------------------------------------------------
+# Limit Order TTL
+# Unfilled limit entry orders are cancelled after this many 1-min bars.
+# With a 5-min entry TF, 10 bars ≈ 50 min — enough for a retrace to the OB
+# without holding through the next major session move.
+# ---------------------------------------------------------------------------
+LIMIT_ORDER_TTL_BARS = 10         # cancel unfilled limit entry after N bars
+
+# ---------------------------------------------------------------------------
+# OB Age Decay
+# OBs older than OB_MAX_AGE_BARS × 5-min bars are expired automatically.
+# 500 bars × 5 min = 2500 min ≈ 41h RTH ≈ 6.4 trading days.
+# Prevents stale weekly/multi-day OBs from polluting the active pool.
+# ---------------------------------------------------------------------------
+OB_MAX_AGE_BARS = 500             # 5-min bars; ~41h RTH before OB expires
 
 # ---------------------------------------------------------------------------
 # Database Tables

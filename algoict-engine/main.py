@@ -873,6 +873,7 @@ def _update_detectors(
                 _close_5, candle_body=_body_5, atr_14=_atr_5,
             )
             components.detectors["ob"].update_mitigation(df_5min)
+            components.detectors["ob"].expire_old(df_5min.index[-1])
 
             # ── Liquidity: check sweeps on the just-closed 5min candle ──
             # `tracked_levels` is seeded in _run_premarket_scan with PDH/PDL/PWH/PWL.
@@ -901,7 +902,25 @@ def _update_detectors(
             # point list to confirm BOS/CHoCH against the context TF.
             swing = components.detectors["swing"]
             swing.detect(df_15min, "15min")
-            components.detectors["structure"].update(df_15min, swing, "15min")
+            new_struct_events = components.detectors["structure"].update(
+                df_15min, swing, "15min",
+            )
+            # Purge stale OBs from the prior trend direction.
+            # A bullish BOS/MSS invalidates all bearish OBs; bearish BOS
+            # invalidates all bullish OBs. Without this, a 2-week-old OB
+            # from the opposite trend survives until price physically
+            # crosses its distal — giving false signals like London 2026-04-20.
+            for _ev in new_struct_events:
+                if _ev.type in ("BOS", "CHoCH", "MSS"):
+                    purged = components.detectors["ob"].invalidate_by_structure(
+                        _ev.direction,
+                    )
+                    if purged:
+                        logger.info(
+                            "STRUCTURE %s %s: purged %d stale %s OBs",
+                            _ev.type, _ev.direction, len(purged),
+                            "bearish" if _ev.direction == "bullish" else "bullish",
+                        )
         except Exception as exc:
             logger.warning("15min structure update failed: %s", exc)
         state.last_completed_tf_ts["15min"] = last_15_ts
@@ -1243,7 +1262,10 @@ async def _execute_signal(
         logger.error("Target order failed: %s", exc)
         target_order = None
 
-    # Track the position
+    # Track the position. Limit entries start as "pending" until a fill
+    # callback confirms the actual fill price. A TTL sweep in _on_new_bar
+    # cancels + removes positions that never fill within LIMIT_ORDER_TTL_BARS.
+    entry_confirmed = bool(entry_order.filled_price is not None)
     state.open_positions[entry_order.order_id] = {
         "signal": signal,
         "entry_order": entry_order,
@@ -1251,6 +1273,8 @@ async def _execute_signal(
         "target_order": target_order,
         "opened_at": datetime.now(timezone.utc),
         "current_stop_price": float(signal.stop_price),
+        "entry_fill_confirmed": entry_confirmed,
+        "bars_pending": 0,
     }
 
     # Log to Supabase. Only fields KNOWN to exist in the `signals` table
@@ -1493,10 +1517,20 @@ async def _on_broker_fill(
     fill_price = float(fill_price_raw)
 
     for pos_key, pos in list(state.open_positions.items()):
+        entry_order = pos.get("entry_order")
         stop_order = pos.get("stop_order")
         target_order = pos.get("target_order")
+        entry_id = str(entry_order.order_id) if entry_order else ""
         stop_id = str(stop_order.order_id) if stop_order else ""
         target_id = str(target_order.order_id) if target_order else ""
+
+        # Entry fill: mark position as confirmed so TTL sweep won't cancel it.
+        if entry_id and entry_id == order_id and not pos.get("entry_fill_confirmed"):
+            pos["entry_fill_confirmed"] = True
+            logger.info(
+                "ENTRY FILL confirmed for pos %s at %.2f", pos_key, fill_price,
+            )
+            continue
 
         is_stop = bool(stop_id and stop_id == order_id)
         is_target = bool(target_id and target_id == order_id)
@@ -2030,6 +2064,45 @@ async def _on_new_bar(
                 and components.broker is not None
                 and not getattr(components.broker, "user_hub_alive", True)):
             await _poll_position_status(components, state)
+
+        # ── 4d. Limit order TTL — cancel unfilled entries ─────────────
+        # Limit entries that were placed but never filled (entry_fill_confirmed=False)
+        # are cancelled after LIMIT_ORDER_TTL_BARS 1-min bars. Without this,
+        # a never-filled limit sits in open_positions forever, blocking new signals.
+        _ttl = getattr(config, "LIMIT_ORDER_TTL_BARS", 10)
+        for _pos_key, _pos in list(state.open_positions.items()):
+            if _pos.get("entry_fill_confirmed", True):
+                continue
+            _pos["bars_pending"] = _pos.get("bars_pending", 0) + 1
+            if _pos["bars_pending"] < _ttl:
+                continue
+            # TTL expired — cancel all three orders and remove
+            _entry_ord = _pos.get("entry_order")
+            _stop_ord = _pos.get("stop_order")
+            _target_ord = _pos.get("target_order")
+            for _field, _ord in (("entry", _entry_ord), ("stop", _stop_ord), ("target", _target_ord)):
+                if _ord is None:
+                    continue
+                _oid = getattr(_ord, "order_id", None)
+                if _oid:
+                    try:
+                        await components.broker.cancel_order(str(_oid))
+                    except Exception as _exc:
+                        logger.debug("TTL cancel %s order %s failed: %s", _field, _oid, _exc)
+            del state.open_positions[_pos_key]
+            logger.info(
+                "LIMIT TTL: entry order for %s never filled after %d bars — cancelled",
+                _pos.get("signal") and _pos["signal"].symbol or _pos_key, _ttl,
+            )
+            if components.telegram is not None:
+                try:
+                    _sig = _pos.get("signal")
+                    _sym = _sig.symbol if _sig else str(_pos_key)
+                    await components.telegram.send_message(
+                        f"LIMIT EXPIRED: {_sym} entry not filled after {_ttl} bars — cancelled"
+                    )
+                except Exception:
+                    pass
 
         # ── 5. Strategy evaluation ────────────────────────────────────
         bars = state.bars_1min

@@ -213,32 +213,32 @@ class TestFVGMitigation:
         return det, det.fvgs[0]
 
     def test_bullish_fvg_mitigated_at_mitigation_level(self):
-        """Bullish FVG (bottom=10, top=15) mitigated when price reaches 75% fill level.
-        mitigation_level = top - 0.75 * (top - bottom) = 15 - 3.75 = 11.25
+        """Bullish FVG (bottom=10, top=15) mitigated when price reaches 50% fill level.
+        mitigation_level = top - 0.50 * (top - bottom) = 15 - 2.50 = 12.5
         """
         det, fvg = self._build_bullish_fvg()
-        assert fvg.midpoint == pytest.approx(12.5)   # midpoint unchanged (property)
-        mitigated = det.update_mitigation(11.25)
+        assert fvg.midpoint == pytest.approx(12.5)   # midpoint == mitigation level at 50%
+        mitigated = det.update_mitigation(12.5)
         assert len(mitigated) == 1
         assert fvg.mitigated
 
     def test_bullish_fvg_mitigated_below_mitigation_level(self):
         det, fvg = self._build_bullish_fvg()
-        det.update_mitigation(10.5)   # below mitigation level (11.25)
+        det.update_mitigation(10.5)   # below mitigation level (12.5)
         assert fvg.mitigated
 
     def test_bullish_fvg_not_mitigated_above_mitigation_level(self):
         det, fvg = self._build_bullish_fvg()
-        det.update_mitigation(12.5)   # above mitigation level (11.25) — old midpoint, no longer triggers
+        det.update_mitigation(13.0)   # above mitigation level (12.5) — not yet mitigated
         assert not fvg.mitigated
 
     def test_bearish_fvg_mitigated_at_mitigation_level(self):
-        """Bearish FVG (bottom=15, top=20) mitigated when price reaches 75% fill level.
-        mitigation_level = bottom + 0.75 * (top - bottom) = 15 + 3.75 = 18.75
+        """Bearish FVG (bottom=15, top=20) mitigated when price reaches 50% fill level.
+        mitigation_level = bottom + 0.50 * (top - bottom) = 15 + 2.50 = 17.5
         """
         det, fvg = self._build_bearish_fvg()
-        assert fvg.midpoint == pytest.approx(17.5)   # midpoint unchanged (property)
-        det.update_mitigation(18.75)
+        assert fvg.midpoint == pytest.approx(17.5)   # midpoint == mitigation level at 50%
+        det.update_mitigation(17.5)
         assert fvg.mitigated
 
     def test_bearish_fvg_mitigated_above_mitigation_level(self):
@@ -248,7 +248,7 @@ class TestFVGMitigation:
 
     def test_bearish_fvg_not_mitigated_below_mitigation_level(self):
         det, fvg = self._build_bearish_fvg()
-        det.update_mitigation(17.5)   # old midpoint, no longer triggers with 75% ratio
+        det.update_mitigation(16.5)   # below mitigation level (17.5) — not yet mitigated
         assert not fvg.mitigated
 
     def test_double_mitigation_no_duplicate(self):
