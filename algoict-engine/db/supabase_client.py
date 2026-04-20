@@ -131,6 +131,11 @@ class SupabaseClient:
     # Signals
     # ------------------------------------------------------------------ #
 
+    # Cache of signals-table columns confirmed missing in the DB schema.
+    # Populated lazily on first PGRST204 failure; future writes strip them
+    # silently. Reset by restarting the bot after applying the migration.
+    _missing_signals_cols: set = set()
+
     def write_signal(self, signal: dict) -> bool:
         """
         Write a trading signal.
@@ -139,37 +144,58 @@ class SupabaseClient:
             timestamp, symbol, signal_type, price, confluence_score,
             liquidity_grab, fair_value_gap, order_block, etc.
 
+        On PGRST204 ("column X not found"), the offending column is cached
+        and future writes strip it silently, mirroring update_bot_state.
+        Apply the pending migration + restart bot to restore full coverage.
+
         Returns True on success.
         """
-        try:
-            signal_id = f"{signal.get('symbol')}_{signal.get('timestamp')}"
+        signal_id = f"{signal.get('symbol')}_{signal.get('timestamp')}"
+        payload: dict = {
+            "id": signal_id,
+            "timestamp": signal.get("timestamp"),
+            "symbol": signal.get("symbol"),
+            "signal_type": signal.get("signal_type"),
+            "price": signal.get("price"),
+            "confluence_score": signal.get("confluence_score"),
+            "liquidity_grab": signal.get("liquidity_grab"),
+            "fair_value_gap": signal.get("fair_value_gap"),
+            "order_block": signal.get("order_block"),
+            "market_structure": signal.get("market_structure"),
+            "vpin": signal.get("vpin"),
+            "gex_regime": signal.get("gex_regime"),
+        }
+        # Strip known-missing columns up front
+        for col in self._missing_signals_cols:
+            payload.pop(col, None)
 
-            self._client.table("signals").insert(
-                {
-                    "id": signal_id,
-                    "timestamp": signal.get("timestamp"),
-                    "symbol": signal.get("symbol"),
-                    "signal_type": signal.get("signal_type"),
-                    "price": signal.get("price"),
-                    "confluence_score": signal.get("confluence_score"),
-                    "liquidity_grab": signal.get("liquidity_grab"),
-                    "fair_value_gap": signal.get("fair_value_gap"),
-                    "order_block": signal.get("order_block"),
-                    "market_structure": signal.get("market_structure"),
-                    "vpin": signal.get("vpin"),
-                    "gex_regime": signal.get("gex_regime"),
-                    **{k: v for k, v in signal.items()
-                       if k not in [
-                           "id", "timestamp", "symbol", "signal_type",
-                           "price", "confluence_score", "liquidity_grab",
-                           "fair_value_gap", "order_block", "market_structure",
-                           "vpin", "gex_regime"
-                       ]}
-                }
-            ).execute()
+        try:
+            self._client.table("signals").insert(payload).execute()
             logger.debug("Signal written: %s", signal_id)
             return True
         except Exception as exc:
+            missing = _parse_pgrst204_column(exc)
+            if missing and missing in payload and missing not in self._missing_signals_cols:
+                self._missing_signals_cols.add(missing)
+                logger.warning(
+                    "signals column %r missing in DB schema — stripping from "
+                    "future writes. Apply migration + restart to restore.",
+                    missing,
+                )
+                payload.pop(missing, None)
+                try:
+                    self._client.table("signals").insert(payload).execute()
+                    logger.debug("Signal written (partial): %s", signal_id)
+                    return True
+                except Exception as exc2:
+                    missing2 = _parse_pgrst204_column(exc2)
+                    if missing2 and missing2 not in self._missing_signals_cols:
+                        self._missing_signals_cols.add(missing2)
+                        logger.warning(
+                            "signals column %r also missing — stripped.", missing2,
+                        )
+                    logger.error("Failed to write signal (retry): %s", exc2)
+                    return False
             logger.error("Failed to write signal: %s", exc)
             return False
 

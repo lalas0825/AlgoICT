@@ -1051,6 +1051,16 @@ def _log_bar_snapshot(components: Components, state: EngineState, ts) -> None:
 # Signal execution
 # ---------------------------------------------------------------------------
 
+def _snap(price: float, tick: float = config.MNQ_TICK_SIZE) -> float:
+    """Round price to the nearest tick increment (e.g. 0.25 for MNQ).
+
+    TopstepX rejects limit/stop orders whose price is not an exact multiple
+    of the contract tick size (errorCode=2). All prices sent to the broker
+    must pass through this before submission.
+    """
+    return round(round(price / tick) * tick, 10)
+
+
 async def _execute_signal(
     signal,
     components: Components,
@@ -1169,7 +1179,7 @@ async def _execute_signal(
             symbol=signal.symbol,
             side=exit_side,
             contracts=signal.contracts,
-            stop_price=signal.stop_price,
+            stop_price=_snap(signal.stop_price),
         )
     except Exception as exc:
         logger.error("Stop order failed: %s", exc)
@@ -1210,7 +1220,7 @@ async def _execute_signal(
             symbol=signal.symbol,
             side=exit_side,
             contracts=signal.contracts,
-            limit_price=adjusted_target,
+            limit_price=_snap(adjusted_target),
             reference_price=effective_fill,
         )
     except Exception as exc:
@@ -1614,15 +1624,13 @@ async def _on_trade_closed(
 async def _reconcile_positions(components: Components, state: EngineState) -> None:
     """Compare broker-reported open positions with local state.open_positions.
 
-    Runs every 5 minutes during active trading. Logs WARNING on any
-    divergence:
-      - ghost: broker has a position we don't track (manual trade?
-        orphaned bracket from a failed submit flow?)
-      - orphan: we track a position the broker says is flat (broker
-        filled our stop/target and we missed the fill callback)
+    Runs every 5 minutes during active trading.
 
-    Does NOT auto-heal — only reports. Manual intervention or the
-    hard-close flatten will converge state.
+    - GHOST: broker has a position we don't track → log warning + attempt
+      flatten so we don't carry an unmanaged position.
+    - ORPHAN: we track a position the broker says is flat → cancel any
+      pending stop/target orders for it, remove from local state, and log
+      the resolution. Does NOT call _on_trade_closed (no confirmed P&L).
     """
     if components.broker is None:
         return
@@ -1634,15 +1642,11 @@ async def _reconcile_positions(components: Components, state: EngineState) -> No
 
     # Normalize both sides to a root-symbol set. Broker can return either
     # the short name ("MNQ") or the full TopstepX contract id
-    # ("CON.F.US.MNQ.M26"); local state always stores signal.symbol
-    # ("MNQ"). Without normalization, every single bar flagged every local
-    # position as ORPHAN and every broker position as GHOST — spam drowned
-    # real reconcile signal. Meta-audit 2026-04-17.
+    # ("CON.F.US.MNQ.M26"); local state always stores signal.symbol ("MNQ").
     def _root(sym: str) -> str:
         if not sym:
             return ""
         s = str(sym).upper()
-        # TopstepX format: "CON.F.US.<ROOT>.<CONTRACT>" → extract <ROOT>
         if s.startswith("CON.F.") and "." in s:
             parts = s.split(".")
             if len(parts) >= 4:
@@ -1661,14 +1665,47 @@ async def _reconcile_positions(components: Components, state: EngineState) -> No
 
     if ghosts:
         logger.warning(
-            "Position reconcile: GHOST at broker (not in local state): %s",
+            "Position reconcile: GHOST at broker (not in local state): %s — "
+            "attempting flatten",
             sorted(ghosts),
         )
+        try:
+            await components.broker.flatten_all()
+        except Exception as exc:
+            logger.warning("Reconcile: flatten_all for ghost failed: %s", exc)
+
     if orphans:
         logger.warning(
             "Position reconcile: ORPHAN in local state (not at broker): %s",
             sorted(orphans),
         )
+        # Cancel all pending stop/target orders for each orphaned position
+        # then remove from local state. We do NOT record a P&L event because
+        # the position was never confirmed at the broker.
+        orphan_keys = [
+            key for key, pos in state.open_positions.items()
+            if _root((pos.get("signal") and pos["signal"].symbol) or "") in orphans
+        ]
+        for key in orphan_keys:
+            pos = state.open_positions.pop(key, None)
+            if pos is None:
+                continue
+            for order_field in ("stop_order", "target_order"):
+                order = pos.get(order_field)
+                oid = getattr(order, "order_id", None) if order else None
+                if oid:
+                    try:
+                        await components.broker.cancel_order(oid)
+                    except Exception as exc:
+                        logger.debug(
+                            "Reconcile: cancel %s order %s failed: %s",
+                            order_field, oid, exc,
+                        )
+            sym = (pos.get("signal") and pos["signal"].symbol) or key
+            logger.info(
+                "ORPHAN resolved: removed local position %s, cancelled pending orders",
+                sym,
+            )
 
 
 async def _manage_open_positions(
@@ -1732,7 +1769,7 @@ async def _manage_open_positions(
                 symbol=symbol,
                 side=exit_side,
                 contracts=contracts,
-                stop_price=new_stop,
+                stop_price=_snap(new_stop),
             )
         except Exception as exc:
             logger.error("TRAILING STOP: failed to submit new stop: %s", exc)

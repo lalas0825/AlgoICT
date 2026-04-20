@@ -70,6 +70,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 RISK_PER_TRADE = 250          # $250 max risk per trade
 MNQ_POINT_VALUE = 2.0         # USD per point per contract (4 ticks × $0.50)
 MNQ_TICK_VALUE = 0.50         # USD per tick per contract (0.25 pts)
+MNQ_TICK_SIZE = 0.25          # minimum price increment (used for order rounding)
 KILL_SWITCH_LOSSES = 3        # 3 consecutive losses = done for the day
 KILL_SWITCH_AMOUNT = 750      # $750 max daily loss from kill switch
 DAILY_PROFIT_CAP = 1500       # $1,500/day — stop trading after this
