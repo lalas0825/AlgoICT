@@ -654,7 +654,7 @@ class Backtester:
             if ob is not None:
                 for _ev in new_struct_events:
                     if _ev.type in ("BOS", "CHoCH", "MSS"):
-                        ob.invalidate_by_structure(_ev.direction)
+                        ob.invalidate_by_structure(_ev.direction, current_bar_count=new_entry_idx)
 
         fvg = d.get("fvg")
         if fvg is not None and not df_entry.empty:

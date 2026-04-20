@@ -914,6 +914,7 @@ def _update_detectors(
                 if _ev.type in ("BOS", "CHoCH", "MSS"):
                     purged = components.detectors["ob"].invalidate_by_structure(
                         _ev.direction,
+                        current_bar_count=len(df_5min),
                     )
                     if purged:
                         logger.info(

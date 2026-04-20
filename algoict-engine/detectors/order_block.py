@@ -271,16 +271,22 @@ class OrderBlockDetector:
             return None
         return min(candidates, key=lambda ob: abs(ob.proximal - current_price))
 
-    def invalidate_by_structure(self, direction: str) -> list[OrderBlock]:
-        """Invalidate OBs whose direction is OPPOSITE to a new BOS/CHoCH/MSS.
+    def invalidate_by_structure(
+        self,
+        direction: str,
+        current_bar_count: int = 0,
+    ) -> list[OrderBlock]:
+        """Invalidate OBs whose direction is OPPOSITE to a new BOS/CHoCH/MSS,
+        but only when the OB is older than 100 entry-TF bars (≈ 8h RTH).
 
-        ICT: a bullish BOS confirms the new uptrend — bearish OBs from the
-        prior trend are now stale and should not be used as entry zones.
-        Called by main.py and backtester.py whenever a new structure event fires.
+        Fresh OBs (age ≤ 100 bars) are intentionally preserved — a BOS on the
+        bar immediately after an OB forms should NOT kill that OB; the level is
+        still relevant for a retrace entry.
 
         Parameters
         ----------
-        direction : 'bullish' | 'bearish' — direction of the new structure event
+        direction         : 'bullish' | 'bearish' — direction of the new structure event
+        current_bar_count : int — current entry-TF bar index (passed by caller)
 
         Returns
         -------
@@ -290,12 +296,14 @@ class OrderBlockDetector:
         invalidated: list[OrderBlock] = []
         for ob in self.order_blocks:
             if not ob.mitigated and ob.direction == opposite:
-                ob.mitigated = True
-                invalidated.append(ob)
-                logger.debug(
-                    "OB %s [%.2f-%.2f] invalidated by %s structure event",
-                    ob.direction, ob.low, ob.high, direction,
-                )
+                age = current_bar_count - ob.candle_index
+                if age > 100:
+                    ob.mitigated = True
+                    invalidated.append(ob)
+                    logger.debug(
+                        "OB %s [%.2f-%.2f] invalidated by %s structure event (age=%d bars)",
+                        ob.direction, ob.low, ob.high, direction, age,
+                    )
         return invalidated
 
     def expire_old(self, current_ts: pd.Timestamp) -> list[OrderBlock]:

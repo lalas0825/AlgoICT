@@ -468,7 +468,8 @@ class TestInvalidateByStructure:
         det.detect(df, "5min")
         bearish_obs = [ob for ob in det.order_blocks if ob.direction == "bearish"]
         assert len(bearish_obs) >= 1, "need at least one bearish OB for this test"
-        invalidated = det.invalidate_by_structure("bullish")
+        # current_bar_count=200 ensures age (200 - candle_index) > 100 for all OBs
+        invalidated = det.invalidate_by_structure("bullish", current_bar_count=200)
         assert len(invalidated) == len(bearish_obs)
         for ob in bearish_obs:
             assert ob.mitigated
@@ -479,18 +480,32 @@ class TestInvalidateByStructure:
         det.detect(df, "5min")
         bullish_obs = [ob for ob in det.order_blocks if ob.direction == "bullish"]
         assert len(bullish_obs) >= 1
-        invalidated = det.invalidate_by_structure("bearish")
+        invalidated = det.invalidate_by_structure("bearish", current_bar_count=200)
         assert len(invalidated) == len(bullish_obs)
         for ob in bullish_obs:
             assert ob.mitigated
+
+    def test_fresh_ob_not_purged_by_structure(self):
+        """OBs younger than 100 bars must survive a BOS (age gate)."""
+        df = _make_bearish_displacement_df()
+        det = OrderBlockDetector()
+        det.detect(df, "5min")
+        bearish_obs = [ob for ob in det.order_blocks if ob.direction == "bearish"]
+        assert len(bearish_obs) >= 1
+        # current_bar_count close to candle_index → age ≤ 100 → not purged
+        max_candle_idx = max(ob.candle_index for ob in bearish_obs)
+        invalidated = det.invalidate_by_structure("bullish", current_bar_count=max_candle_idx + 50)
+        assert invalidated == []
+        for ob in bearish_obs:
+            assert not ob.mitigated
 
     def test_invalidate_does_not_touch_same_direction(self):
         df = _make_bullish_displacement_df()
         det = OrderBlockDetector()
         det.detect(df, "5min")
-        # bullish BOS should NOT invalidate bullish OBs
+        # bullish BOS should NOT invalidate bullish OBs regardless of bar count
         before_count = len([ob for ob in det.order_blocks if not ob.mitigated and ob.direction == "bullish"])
-        det.invalidate_by_structure("bullish")
+        det.invalidate_by_structure("bullish", current_bar_count=200)
         after_count = len([ob for ob in det.order_blocks if not ob.mitigated and ob.direction == "bullish"])
         assert after_count == before_count
 
@@ -500,14 +515,14 @@ class TestInvalidateByStructure:
         det.detect(df, "5min")
         for ob in det.order_blocks:
             ob.mitigated = True
-        invalidated = det.invalidate_by_structure("bullish")
+        invalidated = det.invalidate_by_structure("bullish", current_bar_count=200)
         assert invalidated == []
 
     def test_invalidate_returns_list_of_affected_obs(self):
         df = _make_bearish_displacement_df()
         det = OrderBlockDetector()
         det.detect(df, "5min")
-        result = det.invalidate_by_structure("bullish")
+        result = det.invalidate_by_structure("bullish", current_bar_count=200)
         assert isinstance(result, list)
         assert all(isinstance(ob, OrderBlock) for ob in result)
 
@@ -523,7 +538,7 @@ class TestExpireOld:
     def test_ob_within_max_age_not_expired(self):
         det = OrderBlockDetector()
         ts_ob = pd.Timestamp("2025-03-03 09:00", tz="US/Central")
-        ts_now = ts_ob + pd.Timedelta(minutes=100)   # 20 bars × 5min — well within 500-bar limit
+        ts_now = ts_ob + pd.Timedelta(minutes=100)   # 20 bars × 5min — well within 1000-bar limit
         det.order_blocks = [self._make_ob_at_ts(ts_ob)]
         expired = det.expire_old(ts_now)
         assert expired == []
@@ -532,7 +547,7 @@ class TestExpireOld:
     def test_ob_beyond_max_age_expires(self):
         det = OrderBlockDetector()
         ts_ob = pd.Timestamp("2025-03-03 09:00", tz="US/Central")
-        ts_now = ts_ob + pd.Timedelta(minutes=500 * 5 + 1)   # 1 min beyond 500-bar window
+        ts_now = ts_ob + pd.Timedelta(minutes=1000 * 5 + 1)   # 1 min beyond 1000-bar window
         det.order_blocks = [self._make_ob_at_ts(ts_ob)]
         expired = det.expire_old(ts_now)
         assert len(expired) == 1
