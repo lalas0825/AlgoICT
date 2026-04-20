@@ -189,6 +189,10 @@ class TopstepXClient:
         # WebSocket — user hub (order fills)
         self._user_hub_task: Optional[asyncio.Task] = None
         self._fill_callback: Optional[Callable] = None
+        # Tracks consecutive user-hub failures. After _USER_HUB_MAX_FAILURES
+        # the loop stops reconnecting; engine falls back to position polling.
+        self._user_hub_failure_count: int = 0
+        self.user_hub_alive: bool = False   # True once first clean connect
 
         # Account selection — resolved via /Account/search after auth
         self._requested_account_id: str = str(account_id or "")
@@ -736,21 +740,37 @@ class TopstepXClient:
     # User hub URL — receives GatewayUserOrder fill notifications
     _USER_HUB = "wss://rtc.topstepx.com/hubs/user"
 
+    _USER_HUB_MAX_FAILURES = 3
+
     async def _user_hub_listener_loop(self) -> None:
         """Outer retry loop for the user/account hub (order fills).
 
         Mirrors the market hub retry pattern: exponential backoff,
-        re-auth on reconnect. Does NOT have a hard max-retries limit
-        (fills are too critical to give up on).
+        re-auth on reconnect.
+
+        After _USER_HUB_MAX_FAILURES consecutive errors (e.g. paper-account
+        SubscribeAccounts rejection) the loop stops so the engine can fall
+        back to REST position polling instead of burning reconnect cycles.
+        Sets self.user_hub_alive=False on exit so callers can detect this.
         """
         backoff = WS_RECONNECT_BASE_S
         while self._ws_running:
             try:
                 await self._connect_user_hub_and_listen()
                 backoff = WS_RECONNECT_BASE_S  # reset on clean exit
+                self._user_hub_failure_count = 0
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                self._user_hub_failure_count += 1
+                if self._user_hub_failure_count >= self._USER_HUB_MAX_FAILURES:
+                    logger.warning(
+                        "User hub: %d consecutive failures (%s) — stopping reconnect. "
+                        "Engine will use position polling for fill detection.",
+                        self._user_hub_failure_count, exc,
+                    )
+                    self.user_hub_alive = False
+                    return
                 logger.warning(
                     "User hub disconnected (%s). Reconnecting in %.1fs", exc, backoff
                 )
@@ -815,6 +835,7 @@ class TopstepXClient:
             logger.info(
                 "User hub: connected, subscribing account %s", self._account_id
             )
+            self.user_hub_alive = True
             conn.send("SubscribeAccounts", [self._account_id])
 
         # Capture whether the disconnect came from an error or a clean

@@ -266,6 +266,28 @@ class TelegramBot:
             logger.error("Failed to send trade alert: %s", exc)
             return False
 
+    async def send_trailing_stop_update(
+        self,
+        symbol: str,
+        direction: str,
+        old_stop: float,
+        new_stop: float,
+    ) -> bool:
+        """Notify when trailing stop tightens by a meaningful amount."""
+        try:
+            delta = new_stop - old_stop if direction == "long" else old_stop - new_stop
+            sign = "+" if delta >= 0 else ""
+            msg = (
+                f"TRAIL: {symbol} {direction.upper()} stop "
+                f"{old_stop:.2f} → {new_stop:.2f} ({sign}{delta:.1f}pts)"
+            )
+            await self._bot.send_message(chat_id=self._chat_id, text=msg)
+            logger.info("Trailing stop alert sent: %s %.2f → %.2f", symbol, old_stop, new_stop)
+            return True
+        except Exception as exc:
+            logger.error("Failed to send trailing stop alert: %s", exc)
+            return False
+
     # ------------------------------------------------------------------ #
     # Kill Switch Alerts
     # ------------------------------------------------------------------ #

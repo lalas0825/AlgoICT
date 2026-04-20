@@ -246,6 +246,10 @@ class EngineState:
     # window (burst / replay after a WS hiccup).
     reconcile_inflight: bool = False
 
+    # Trailing stop Telegram throttle — only alert if delta > threshold
+    # OR more than TRAILING_ALERT_MIN_INTERVAL seconds have passed.
+    last_trailing_alert_time: Optional[datetime] = None
+
     def __post_init__(self):
         if self.bars_1min is None:
             self.bars_1min = pd.DataFrame(
@@ -1621,6 +1625,91 @@ async def _on_trade_closed(
             logger.error("Post-mortem analysis failed: %s", exc)
 
 
+# Throttle constants for trailing-stop Telegram alerts
+_TRAILING_ALERT_MIN_PTS = 5.0       # only alert if delta >= this many points
+_TRAILING_ALERT_MIN_INTERVAL_S = 300  # or if >= 5 min since last alert
+
+
+async def _poll_position_status(components: Components, state: EngineState) -> None:
+    """Fallback fill detection when the User hub is unavailable.
+
+    Polls broker positions every bar. If a locally-tracked position is no
+    longer reported by get_positions(), the exit is inferred from the latest
+    close price and routed through _on_broker_fill so all accounting
+    (risk, Supabase, Telegram, post-mortem) fires exactly once.
+
+    Called from _on_new_bar() whenever user_hub_alive is False.
+    """
+    if not state.open_positions:
+        return
+    try:
+        broker_positions = await components.broker.get_positions()
+    except Exception:
+        return  # silent — don't disrupt bar loop on poll failure
+
+    def _root(sym: str) -> str:
+        if not sym:
+            return ""
+        s = str(sym).upper()
+        if s.startswith("CON.F.") and "." in s:
+            parts = s.split(".")
+            if len(parts) >= 4:
+                return parts[3]
+        return s
+
+    broker_symbols = {
+        _root(getattr(p, "symbol", ""))
+        for p in broker_positions
+        if getattr(p, "contracts", 0) != 0
+    } - {""}
+
+    last_close = (
+        float(state.bars_1min["close"].iloc[-1])
+        if not state.bars_1min.empty else None
+    )
+
+    for pos_key, pos in list(state.open_positions.items()):
+        signal = pos.get("signal")
+        if signal is None:
+            continue
+        if _root(signal.symbol) in broker_symbols:
+            continue  # still open — nothing to do
+
+        # Position is flat at broker. Infer exit from last close price.
+        if last_close is None:
+            continue
+
+        direction = signal.direction
+        current_stop = pos.get("current_stop_price", float(signal.stop_price))
+        target_price = float(getattr(signal, "target_price", 0) or 0)
+
+        # Heuristic: if price is within 2 pts of stop → stop fill; else target.
+        if direction == "long":
+            is_stop = last_close <= current_stop + 2.0
+        else:
+            is_stop = last_close >= current_stop - 2.0
+
+        stop_order = pos.get("stop_order")
+        target_order = pos.get("target_order")
+
+        if is_stop and stop_order:
+            inferred_id = str(stop_order.order_id)
+            exit_price = _snap(current_stop)
+        elif not is_stop and target_order and target_price:
+            inferred_id = str(target_order.order_id)
+            exit_price = _snap(target_price)
+        else:
+            inferred_id = pos_key
+            exit_price = _snap(last_close)
+
+        logger.info(
+            "POLL: %s closed at broker — inferred exit %.2f (%s)",
+            _root(signal.symbol), exit_price, "stop" if is_stop else "target",
+        )
+        synthetic_fill = {"orderId": inferred_id, "filledPrice": exit_price}
+        await _on_broker_fill(synthetic_fill, components, state)
+
+
 async def _reconcile_positions(components: Components, state: EngineState) -> None:
     """Compare broker-reported open positions with local state.open_positions.
 
@@ -1783,6 +1872,25 @@ async def _manage_open_positions(
         pos["stop_order"] = new_stop_order
         pos["current_stop_price"] = new_stop
 
+        # Telegram alert — throttled: only send if delta >= threshold OR
+        # enough time has passed since last alert (avoids spam on fast moves).
+        if components.telegram is not None:
+            now = datetime.now(timezone.utc)
+            last = state.last_trailing_alert_time
+            time_ok = (last is None or
+                       (now - last).total_seconds() >= _TRAILING_ALERT_MIN_INTERVAL_S)
+            if diff >= _TRAILING_ALERT_MIN_PTS or time_ok:
+                try:
+                    await components.telegram.send_trailing_stop_update(
+                        symbol=symbol,
+                        direction=direction,
+                        old_stop=current_stop,
+                        new_stop=new_stop,
+                    )
+                    state.last_trailing_alert_time = now
+                except Exception as exc:
+                    logger.debug("Trailing stop Telegram alert failed: %s", exc)
+
 
 async def _on_new_bar(
     bar: dict,
@@ -1899,6 +2007,17 @@ async def _on_new_bar(
                     )
                     state._partials_be_warned = True  # type: ignore[attr-defined]
             # mode == "fixed": nothing to do — bracket runs to SL/TP
+
+        # ── 4c. Position-status polling (User hub fallback) ───────────
+        # When the User hub is unavailable (paper-account SubscribeAccounts
+        # failure after 3 retries), we poll get_positions() every bar to
+        # detect fills. This is less latent than the 5-min reconcile and
+        # routes inferred closes through _on_broker_fill so risk accounting,
+        # Supabase, Telegram, and post-mortem all fire correctly.
+        if (state.open_positions
+                and components.broker is not None
+                and not getattr(components.broker, "user_hub_alive", True)):
+            await _poll_position_status(components, state)
 
         # ── 5. Strategy evaluation ────────────────────────────────────
         bars = state.bars_1min
