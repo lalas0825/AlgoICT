@@ -1114,11 +1114,23 @@ async def _execute_signal(
     side = "buy" if signal.direction == "long" else "sell"
     exit_side = "sell" if side == "buy" else "buy"
 
+    # Use a limit order at the OB proximal edge (signal.entry_price) so the
+    # fill occurs at the ICT-intended level, not wherever the market happens
+    # to be at order submission. The proximity gate in the strategy already
+    # ensures price is within OB_PROXIMITY_TOLERANCE pts of this level, so
+    # the limit will fill immediately or on the first tick back to the OB.
+    # reference_price guards against pre-submission deviation > 2%.
+    _ref_close = (
+        float(state.bars_1min["close"].iloc[-1])
+        if not state.bars_1min.empty else None
+    )
     try:
-        entry_order = await broker.submit_market_order(
+        entry_order = await broker.submit_limit_order(
             symbol=signal.symbol,
             side=side,
             contracts=signal.contracts,
+            limit_price=_snap(float(signal.entry_price)),
+            reference_price=_ref_close,
         )
     except Exception as exc:
         logger.error("Entry order failed: %s", exc)

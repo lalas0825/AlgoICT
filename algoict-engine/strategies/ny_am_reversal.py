@@ -260,6 +260,30 @@ class NYAMReversalStrategy:
             return None
         last_ob = obs[-1]
 
+        # ICT requirement: price must be AT or retrace INTO the OB.
+        # Reject if the current close is more than OB_PROXIMITY_TOLERANCE pts
+        # away from the proximal OB edge — firing a market order 40+ pts above
+        # the OB is not an OB entry (London fire at 44 pts, 2026-04-20).
+        _prox = config.OB_PROXIMITY_TOLERANCE
+        if direction == "long":
+            _ob_gap = last_close - float(last_ob.high)
+            if _ob_gap > _prox:
+                logger.info(
+                    "EVAL ny_am [%s]: confluence=N/A, signal=reject, "
+                    "reason=no_valid_setup (price_above_ob: close=%.2f ob_high=%.2f gap=%.1fpts)",
+                    _ts_hm(ts), last_close, float(last_ob.high), _ob_gap,
+                )
+                return None
+        else:
+            _ob_gap = float(last_ob.low) - last_close
+            if _ob_gap > _prox:
+                logger.info(
+                    "EVAL ny_am [%s]: confluence=N/A, signal=reject, "
+                    "reason=no_valid_setup (price_below_ob: close=%.2f ob_low=%.2f gap=%.1fpts)",
+                    _ts_hm(ts), last_close, float(last_ob.low), _ob_gap,
+                )
+                return None
+
         displacements = self.detectors["displacement"].get_recent(
             n=5, timeframe="5min", direction=bias_dir,
         )

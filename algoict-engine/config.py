@@ -278,6 +278,16 @@ GEX_REFRESH_INTERVAL_MIN = 30  # Refresh GEX data every 30 minutes
 FVG_MITIGATION_RATIO = 0.75
 
 # ---------------------------------------------------------------------------
+# OB Proximity Gate
+# ICT entry requirement: price must be AT or inside the OB when the signal
+# fires. This constant is the maximum allowed distance above OB.high (long)
+# or below OB.low (short) before the signal is rejected.
+# London session fire at 44 pts above OB.high (2026-04-20) confirmed the
+# need for this gate — market orders that far from the OB are not OB entries.
+# ---------------------------------------------------------------------------
+OB_PROXIMITY_TOLERANCE = 3.0      # pts — max gap from OB edge to current price
+
+# ---------------------------------------------------------------------------
 # Database Tables
 # ---------------------------------------------------------------------------
 DB_TABLES = [

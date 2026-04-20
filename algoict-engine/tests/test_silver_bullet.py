@@ -457,3 +457,34 @@ class TestReset:
         strat.reset_daily()
         sig2 = strat.evaluate(c1, c5)
         assert sig2 is not None
+
+
+# ─── OB Proximity Gate ────────────────────────────────────────────────────────
+
+class TestOBProximityGate:
+    """OB proximity gate for Silver Bullet — same tolerance as ny_am_reversal.
+
+    Baseline setup: OB high=100.0, low=99.0 (bullish, 1min).
+    Long rejects when close > OB.high + 3.0.
+    Short rejects when close < OB.low  - 3.0.
+    """
+
+    def test_long_rejects_when_price_far_above_ob(self):
+        """close=103.1 → gap=3.1 pts > 3.0 tolerance → reject."""
+        strat, _, c5 = _build_full_setup()
+        c1 = _make_1min(_sb_ts(10, 15), close=103.1)
+        assert strat.evaluate(c1, c5) is None
+
+    def test_long_accepts_at_exact_tolerance(self):
+        """close=103.0 → gap=3.0 pts = tolerance → accept."""
+        strat, _, c5 = _build_full_setup()
+        c1 = _make_1min(_sb_ts(10, 15), close=103.0)
+        sig = strat.evaluate(c1, c5)
+        assert sig is not None
+        assert sig.direction == "long"
+
+    def test_long_accepts_price_at_ob_high(self):
+        """close=100.0 → price exactly at OB.high → accept."""
+        strat, c1, c5 = _build_full_setup()
+        sig = strat.evaluate(c1, c5)
+        assert sig is not None

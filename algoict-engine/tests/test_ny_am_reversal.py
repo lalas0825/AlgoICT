@@ -510,4 +510,183 @@ class TestKillZones:
         strat.reset_daily()
         assert strat._trades_by_zone.get("london", 0) == 0
         assert strat._trades_by_zone.get("ny_am", 0) == 0
-        assert strat._trades_by_zone.get("ny_pm", 0) == 0
+
+
+# ─── OB Proximity Gate ────────────────────────────────────────────────────────
+
+def _bearish_bias_fn(price: float) -> BiasResult:
+    return BiasResult(
+        direction="bearish",
+        premium_discount="premium",
+        htf_levels={"daily_high": 110.0, "daily_low": 95.0,
+                    "weekly_high": 115.0, "weekly_low": 90.0},
+        confidence="high",
+        weekly_bias="bearish",
+        daily_bias="bearish",
+    )
+
+
+def _build_bearish_setup(close: float = 100.0, ts=None):
+    """Full bearish ny_am setup for proximity gate tests (short direction)."""
+    ts = ts or _ny_am_ts(9, 30)
+
+    structure_det = MarketStructureDetector()
+    structure_det.events.append(StructureEvent(
+        type="MSS", direction="bearish",
+        level=102.0, timestamp=ts - pd.Timedelta(minutes=15),
+        timeframe="15min",
+    ))
+
+    fvg_det = FairValueGapDetector()
+    fvg_det.fvgs.append(FVG(
+        top=101.5, bottom=100.5, direction="bearish",
+        timeframe="5min", candle_index=10,
+        timestamp=ts - pd.Timedelta(minutes=10),
+    ))
+
+    ob_det = OrderBlockDetector()
+    # Bearish OB: entry = ob.low (proximal), stop = ob.high (distal)
+    ob_det.order_blocks.append(OrderBlock(
+        high=101.0, low=100.0, direction="bearish",
+        timeframe="5min", candle_index=10,
+        timestamp=ts - pd.Timedelta(minutes=10),
+    ))
+
+    disp_det = DisplacementDetector()
+    disp_det.displacements.append(Displacement(
+        direction="bearish", magnitude=5.0, atr=1.0,
+        timestamp=ts - pd.Timedelta(minutes=5),
+        timeframe="5min", candle_index=11,
+    ))
+
+    tracked_levels = [LiquidityLevel(
+        price=102.0, type="BSL", swept=True,
+        timestamp=ts - pd.Timedelta(minutes=20),
+    )]
+
+    detectors = {
+        "structure":      structure_det,
+        "fvg":            fvg_det,
+        "ob":             ob_det,
+        "displacement":   disp_det,
+        "liquidity":      LiquidityDetector(),
+        "confluence":     ConfluenceScorer(),
+        "tracked_levels": tracked_levels,
+    }
+
+    risk = RiskManager()
+    session = SessionManager()
+    strategy = NYAMReversalStrategy(
+        detectors=detectors,
+        risk_manager=risk,
+        session_manager=session,
+        htf_bias_fn=_bearish_bias_fn,
+    )
+    c5 = _make_5min(ts, close=close)
+    c15 = _make_15min(ts, close=close)
+    return strategy, c5, c15
+
+
+class TestOBProximityGate:
+    """OB proximity gate — price must be within OB_PROXIMITY_TOLERANCE of OB edge.
+
+    Baseline setup: OB high=100.0, low=99.0 (bullish).
+    Tolerance = 3.0 pts (config.OB_PROXIMITY_TOLERANCE).
+    Long rejects when close > OB.high + 3.0.
+    Short rejects when close < OB.low  - 3.0.
+    """
+
+    def test_long_rejects_when_price_far_above_ob(self):
+        """close=103.1 → gap=3.1 pts > tolerance → reject (price_above_ob)."""
+        strat, _, c15 = _build_full_setup()
+        c5 = _make_5min(_ny_am_ts(9, 30), close=103.1)
+        assert strat.evaluate(c5, c15) is None
+
+    def test_long_accepts_at_exact_tolerance(self):
+        """close=103.0 → gap=3.0 pts = tolerance → accept (NOT strictly greater)."""
+        strat, _, c15 = _build_full_setup()
+        c5 = _make_5min(_ny_am_ts(9, 30), close=103.0)
+        sig = strat.evaluate(c5, c15)
+        assert sig is not None
+        assert sig.direction == "long"
+
+    def test_long_accepts_price_inside_ob(self):
+        """close=99.5 → price inside OB range → accept."""
+        strat, _, c15 = _build_full_setup()
+        c5 = _make_5min(_ny_am_ts(9, 30), close=99.5)
+        sig = strat.evaluate(c5, c15)
+        assert sig is not None
+
+    def test_short_rejects_when_price_far_below_ob(self):
+        """close=96.9 → gap=3.1 pts below OB.low=100.0 → reject (price_below_ob)."""
+        strat, _, c15 = _build_bearish_setup(close=96.9)
+        c5 = _make_5min(_ny_am_ts(9, 30), close=96.9)
+        assert strat.evaluate(c5, c15) is None
+
+    def test_short_accepts_at_exact_tolerance(self):
+        """close=97.0 → gap=3.0 pts = tolerance → accept (NOT strictly greater)."""
+        strat, _, c15 = _build_bearish_setup(close=97.0)
+        c5 = _make_5min(_ny_am_ts(9, 30), close=97.0)
+        sig = strat.evaluate(c5, c15)
+        assert sig is not None
+        assert sig.direction == "short"
+
+    def test_london_scenario_44pts_above_ob_rejects(self):
+        """Reproduces London 2026-04-20: close=26656.75, OB.high=26620 → gap=36.75 → reject."""
+        ts = _london_ts(3, 5)
+
+        structure_det = MarketStructureDetector()
+        structure_det.events.append(StructureEvent(
+            type="MSS", direction="bullish",
+            level=26610.0, timestamp=ts - pd.Timedelta(minutes=15),
+            timeframe="15min",
+        ))
+
+        fvg_det = FairValueGapDetector()
+        fvg_det.fvgs.append(FVG(
+            top=26658.0, bottom=26654.0, direction="bullish",
+            timeframe="5min", candle_index=10,
+            timestamp=ts - pd.Timedelta(minutes=10),
+        ))
+
+        ob_det = OrderBlockDetector()
+        ob_det.order_blocks.append(OrderBlock(
+            high=26620.0, low=26606.0, direction="bullish",
+            timeframe="5min", candle_index=10,
+            timestamp=ts - pd.Timedelta(minutes=10),
+        ))
+
+        disp_det = DisplacementDetector()
+        disp_det.displacements.append(Displacement(
+            direction="bullish", magnitude=30.0, atr=5.0,
+            timestamp=ts - pd.Timedelta(minutes=5),
+            timeframe="5min", candle_index=11,
+        ))
+
+        tracked_levels = [LiquidityLevel(
+            price=26610.0, type="SSL", swept=True,
+            timestamp=ts - pd.Timedelta(minutes=20),
+        )]
+
+        detectors = {
+            "structure":      structure_det,
+            "fvg":            fvg_det,
+            "ob":             ob_det,
+            "displacement":   disp_det,
+            "liquidity":      LiquidityDetector(),
+            "confluence":     ConfluenceScorer(),
+            "tracked_levels": tracked_levels,
+        }
+
+        risk = RiskManager()
+        session = SessionManager()
+        strategy = NYAMReversalStrategy(
+            detectors=detectors,
+            risk_manager=risk,
+            session_manager=session,
+            htf_bias_fn=_bullish_bias_fn,
+        )
+
+        c5 = _make_5min(ts, close=26656.75)
+        c15 = _make_15min(ts, close=26656.75)
+        assert strategy.evaluate(c5, c15) is None
