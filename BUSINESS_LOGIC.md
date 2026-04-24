@@ -161,11 +161,14 @@ Tres niveles via `TELEGRAM_VERBOSITY` en `.env`:
 
 ---
 
-## 10. Validation Status (2026-04-22)
+## 10. Validation Status (2026-04-24)
 
 ### Tests + infra
-- **Tests**: 1,477 passing (engine) · dashboard build ✓
-- **Combine Simulator**: 72.4% pass rate (210 attempts, random start day)
+- **Tests**: 1,479 unit passing (engine) + 5 integration contract tests (opt-in) · dashboard build ✓
+- **Combine Simulator V8**: 72.4% pass rate (210 attempts, random start day)
+- **Combine Simulator V9** (session-recency fix): **76.7% pass rate** (+4.3pp vs V8)
+- **Config drift scanner**: `scripts/audit_config_defaults.py` clean (23/23 keys explicit)
+- **Health JSON**: `.health.json` atomic snapshot every 10s for external monitors
 
 ### 7-year walk-forward (2019–2025, Silver Bullet v8 trailing RTH Mode)
 
@@ -196,11 +199,60 @@ Tres niveles via `TELEGRAM_VERBOSITY` en `.env`:
 - **Equal levels refresh (Q1 2024)**: flat-to-neg (−$1,283, London regresa −$2,064). NY-only hybrid sí positivo (+$780), re-evaluar con más data real post-Combine
 - **Risk ladder 250/200/150/100/50 + London 2L cap (Q1 2024)**: sobrevive mejor (−71% combine resets, −28% max DD) pero corta P&L 82% ($14,768 → $2,638, PF 1.47 → 1.15). London cap específicamente **cortaría el KZ más productivo** (64.9% del P&L agg). **Rechazado**: flat $250 v8 retained
 
-### Bug fixes 2026-04-22
-- **Phantom fill** en `_poll_position_status`: `entry_order.filled_price is None` → cancel stop/target + clean state (bug report: bot reportó +$2,154 sin fill real)
+### Bug fixes 2026-04-22 → 2026-04-24 (33 bugs in 3 days)
+
+**2026-04-22** — foundational wiring:
+- **Phantom fill** en `_poll_position_status`: `entry_order.filled_price is None` → cancel stop/target + clean state (bot reportó +$2,154 sin fill real)
 - **MAX_MNQ_TRADES_PER_DAY**: 3 → 15 (silenciaba NY AM tras London 3 trades)
-- **1-min FVG + 5-min structure** ahora detect en live (antes solo 5-min FVG / 15-min structure → SB no veía sus propios triggers)
-- **end_of_day()** ahora called en `_reset_for_new_day` (Topstep MLL trailing peak nunca advanzaba)
+- **1-min FVG + 5-min structure** detect en live
+- **`end_of_day()`** called en `_reset_for_new_day`
+
+**2026-04-23 V9** — session recency + phantom cleanup:
+- **Bug A** session-recency filter for 5-min / 15-min structure events
+- **Bug B/C** phantom cleanup respects `LIMIT_ORDER_TTL_BARS` + KZ-aware
+- **Bug D** single-position guard en `_evaluate_strategies`
+- **PWH/PDH** forming-bar fix (`as_of_ts` param)
+
+**2026-04-24 AM** — trail + API contract:
+- **Bug E** trail gate sobre `entry_filled_price is None`
+- **Bug F** trail stop direction validation
+- **Bug G** 5-min MSS/BOS invalidation rule
+- **Bug H** target order skipped en trailing mode
+- **Bug I** Telegram trail alert gate on broker-accept
+- **Bug J** 🚨 `get_positions` endpoint `POST /Position/searchOpen` (era GET→404; bot ciego a posiciones días)
+- **Bug K** 🚨 User Hub `SubscribeAccounts()` + `SubscribeOrders/Positions/Trades(int accountId)` (era wrong signature)
+- **Bug L** poll-path `send_trade_opened` on first detected fill
+
+**2026-04-24 PM** — full audit (12 bugs from 4 parallel agents):
+- **C1** signals table `direction` column (not `signal_type`) — dashboard blank permanentemente antes
+- **C2** detector state clear en day reset
+- **C3** `send_kill_switch_alert` wired (estaba defined, zero callers)
+- **C4** CHoCH + MSS/BOS invalidator symmetry
+- **C5** displacement session-recency
+- **C6** `record_trade(order_id=)` idempotency (no triple-booking)
+- **C7** `end_of_day()` post-flatten (no solo morning reset)
+- **C8** `cancel_order` return checked en 6 callsites (ghost orders escalados)
+- **H1** reconciler 5s timing guard (broker fill propagation)
+- **H2** User Hub path stamps `filled_price`
+- **H3** poll `get_positions` exception logged
+- **H4** VPIN alert verbosity (extreme/normalized siempre fire)
+- **H10** broken swings filtrados de `_latest_unconsumed_swing`
+- **H11** hard-close Telegram alert pro-activo
+
+**2026-04-24 night** — systemic hardening (Batch 4):
+- `config.cfg(name, default)` fail-loud accessor + `scripts/audit_config_defaults.py`
+- `tests/test_topstepx_live_contract.py` — 5 integration tests (habrían cazado J+K en CI)
+- Session-recency audit completo (structure + displacement ✓; FVG/OB intencionalmente NO por ICT)
+- `.debug` → `.warning` en critical paths (reconciler, KZ rollback)
+- `core/health.py` → `.health.json` para monitores externos
+
+### Defensive systems activos
+- Telegram alerts: fire, trade_opened (fill-gated), trade_closed, trail (accept-gated), kill_switch, MLL zone change, orphan cleanup, NAKED stop, hard close, VPIN extreme/normalized
+- `.engine.lock` PID file (zombie prevention)
+- `.health.json` (external monitor, 10s cadence)
+- Reconciler 5s grace (fill-propagation safety)
+- `record_trade(order_id=)` dedup (triple-path)
+- Config fail-loud warnings on missing keys
 
 ---
 

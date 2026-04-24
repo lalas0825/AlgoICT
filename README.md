@@ -105,8 +105,14 @@ cd algoict-engine
 pip install -r requirements.txt
 cp .env.example .env
 
-# Tests (1,477 passing as of 2026-04-22)
+# Tests (1,479 unit passing as of 2026-04-24)
 python -m pytest tests/ -v
+
+# Integration contract tests (opt-in, hit real TopstepX API)
+TOPSTEPX_INTEGRATION=1 python -m pytest tests/test_topstepx_live_contract.py -v
+
+# Config drift scanner (catches silent config defaults in CI)
+python scripts/audit_config_defaults.py
 
 # Backtest (Silver Bullet Q1 2024)
 python scripts/run_backtest.py --strategy silver_bullet \
@@ -128,20 +134,28 @@ cd ../algoict-dashboard && npm run dev
 
 ---
 
-## Validation Status (2026-04-22)
+## Validation Status (2026-04-24)
 
-- **Tests**: 1,477 passing (engine) · dashboard build ✓
+- **Tests**: 1,479 unit passing + 5 integration contract tests (opt-in) · dashboard build ✓
 - **7-year walk-forward** (2019–2025, Silver Bullet v8 trailing RTH Mode):
   - **14,186 trades · 43.8% WR · +$673,000 aggregate · PF 1.91**
-  - **0 negative years** (range $70K - $116K, std dev $15K)
-  - **Monthly hit rate 91.7%** (77 of 84 months positive)
-  - **Daily hit rate 54.4%** (983 of 1,808 trading days positive)
-  - **DLL breach rate 0.61%** (11 days ≤ -$1000 in 1,808 days)
-- **Full 2024 baseline**: 2,067 trades · 44.1% WR · +$115,547 · **PF 2.05** · max DD $3,864 · 7 combine resets
-- **Kill-zone contribution across 7 years**: London 64.9% · NY AM 24.4% · NY PM 10.7%
-- **Combine Simulator**: 72.4% pass rate (210 random-start attempts)
+  - **0 negative years** · Monthly hit 91.7% · Daily hit 54.4% · DLL breach rate 0.61%
+- **Full 2024 baseline**: +$115,547 · PF 2.05 · max DD $3,864 · 7 combine resets
+- **V9 (session-recency)**: +$606K · 0 negative years · 97.6% monthly hit · **combine pass 76.7%** (+4.3pp vs V8)
+- **Cross-instrument** (7-yr): ES +$444K · YM +$575K · 0 negative years each
+- **Kill-zone contribution**: London 64.9% · NY AM 24.4% · NY PM 10.7%
+- **Combine Simulator V8**: 72.4% pass rate · **V9**: 76.7% pass rate (210 random-start attempts)
 - **Q1 2024 equal_levels A/B**: flat-to-negative (kept OFF); see `SILVER_BULLET_STRATEGY_GUIDE.md` §11
-- **Q1 2024 risk ladder A/B**: survives better (−71% combine resets, −28% max DD) but cuts P&L 82% → **rejected**, V8 flat $250 retained
+- **Q1 2024 risk ladder A/B**: cuts P&L 82% → **rejected**, V8 flat $250 retained
+
+### Resilience / defensive systems (2026-04-24)
+- **33 production bugs fixed** across 3 days (phantom fill, session-recency, trail gate, API contract, signals DB, kill-switch alert wiring, etc.)
+- **`config.cfg(name, default)`** fail-loud config accessor + `scripts/audit_config_defaults.py` CI scanner
+- **Integration contract tests** against real TopstepX API (would have caught `GET /Position/account/{id}` 404 + User Hub wrong signature in CI)
+- **`.health.json`** — atomic 10s snapshot for external monitors (divergence detection)
+- **`.engine.lock`** — PID-based single-instance guard
+- **Reconciler 5s timing guard** — no false-orphan during broker fill propagation
+- **`record_trade(order_id=)` idempotency** — triple-path dedup
 
 ---
 

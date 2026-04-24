@@ -526,7 +526,7 @@ Requiere migration `0003_bot_state_overlays.sql` aplicada.
 
 ---
 
-## Session Snapshot (2026-04-22)
+## Session Snapshot (2026-04-24)
 
 ### 7-year walk-forward (SB v8 trailing RTH Mode, 2019–2025)
 
@@ -541,37 +541,95 @@ Requiere migration `0003_bot_state_overlays.sql` aplicada.
 | 2025 | 1,952 | 44.9% | +$89,759 | 1.86 | $3,032 | 9 |
 | **AGG** | **14,186** | **43.8%** | **+$673,000** | **1.91** | — | 64 |
 
-**Consistency** (what the docs used to miss):
-- **0 negative years** · mean $96,143 · median $92,203 · std dev $15,320
-- **Monthly hit rate 91.7%** — 77 of 84 months positive (~1 negative month/year)
-- **Daily hit rate 54.4%** — 983 of 1,808 trading days positive
-- **DLL breach rate 0.61%** — only 11 days (≤-$1000) in 1,808 trading days
+**Consistency**:
+- 0 negative years · mean $96,143 · median $92,203 · std $15,320
+- Monthly hit rate 91.7% · Daily hit rate 54.4% · DLL breach rate 0.61%
 - **KZ contribution** (agg): London 64.9% · NY AM 24.4% · NY PM 10.7%
-  - London is the **workhorse in every single year** — not a Q1 anomaly
 
-**Full 2024**: 2,067 trades · 44.1% WR · **+$115,547 · PF 2.05** (corrected from "1.47" which was Q1 PF mis-propagated) · max DD $3,864 · 7 combine resets · only Sept negative month.
+**V9 (session-recency fix) 7-year**: +$606K · 0 negative years · 97.6% monthly hit · combine pass 76.7% (up from 72.4%) · resets 64 → 33 (−48%).
 
-### Tests + infra
-- Tests: 1,477 passing (engine) · dashboard build ✓
-- Combine Simulator: 72.4% pass rate (210 random-start attempts)
+**Cross-instrument** (7-yr): ES +$444K · YM +$575K · 0 negative years each.
 
-### Key bug fixes 2026-04-22
-- **Phantom fill bug** in `_poll_position_status` — bot reported +$2,154 "win" when entry never filled. Fix: branch on `entry_order.filled_price is None` → cancel remaining orders + rollback KZ counter + clean state.
-- **MAX_MNQ_TRADES_PER_DAY**: 3 → 15 (was silently blocking NY AM after London filled the 3-trade global cap).
-- **1-min FVG + 5-min structure** now detect in live (was only 5-min FVG / 15-min structure — SB never saw the setups it's wired to consume).
-- **end_of_day()** now called in `_reset_for_new_day` (Topstep MLL trailing peak never advanced before).
+### Tests + infra (2026-04-24)
+- **1,479 unit tests passing** (was 1,477; +2 from Bug J searchOpen/error)
+- **5 integration tests** (`tests/test_topstepx_live_contract.py`) — opt-in via `TOPSTEPX_INTEGRATION=1`
+- `scripts/audit_config_defaults.py` — 23/23 config keys explicit (0 silent defaults)
+
+### 2026-04-22 → 2026-04-24: 33 bugs fixed in 3 days
+
+**Phase 1 — 2026-04-22** (phantom fill + wiring):
+- Phantom fill bug in `_poll_position_status` (fake +$2,154 "win")
+- MAX_MNQ_TRADES_PER_DAY 3→15
+- 1-min FVG + 5-min structure wired in live
+- `end_of_day()` called in `_reset_for_new_day`
+
+**Phase 2 — 2026-04-23 V9** (session recency + phantom cleanup):
+- **Bug A** — session-recency filter for 5-min / 15-min structure events
+- **Bug B** — phantom cleanup respects `LIMIT_ORDER_TTL_BARS` + KZ boundary
+- **Bug C** — TTL sweep KZ-aware
+- **Bug D** — single-position guard in `_evaluate_strategies`
+- PWH/PDH forming-bar fix (`as_of_ts` param in `detectors/liquidity.py`)
+
+**Phase 3 — 2026-04-24 AM** (trail + structure + API contract):
+- **Bug E** — trail gate on `entry_order.filled_price is None` (no trail on unfilled)
+- **Bug F** — trail stop direction validation (SHORT stop BUY above price)
+- **Bug G** — 5-min MSS/BOS structure invalidation rule (opposite BOS invalidates)
+- **Bug H** — target order skipped in trailing mode (broker deviation cap)
+- **Bug I** — Telegram trail alert gated on broker `status != rejected`
+- **Orphan alert** — `send_emergency_alert` on reconcile cleanup
+- **Bug J** 🚨 — `get_positions` endpoint: `GET /Position/account/{id}` 404s → `POST /Position/searchOpen`. Bot was blind to real positions for DAYS.
+- **Bug K** 🚨 — User Hub `SubscribeAccounts` wrong signature → no fill events. Added `SubscribeOrders/Positions/Trades(int accountId)`.
+- **Bug L** — poll-path sends `send_trade_opened` alert on first detected fill
+
+**Phase 4 — 2026-04-24 PM** (12 more from full audit, 4 parallel agents):
+- **C1** signals table `direction` column (was writing `signal_type` → PGRST23502 silent failure, dashboard blank forever)
+- **C2** detector state cleared on `_reset_for_new_day`
+- **C3** `send_kill_switch_alert` wired (was defined, zero callers)
+- **C4** CHoCH + MSS/BOS invalidator symmetry
+- **C5** displacement session-recency filter
+- **C6** `record_trade(order_id=)` dedup (no triple-booking)
+- **C7** `end_of_day()` called post-flatten (not just next morning)
+- **C8** `cancel_order` return checked at 6 callsites (ghost orders escalated)
+- **H1** reconciler 5-second timing guard (broker position API lag safety)
+- **H2** User Hub fill path stamps `filled_price`
+- **H3** poll `get_positions` exception logged (was silent)
+- **H4** VPIN alert respects verbosity (extreme/normalized always fire)
+- **H10** broken swings filtered from `_latest_unconsumed_swing`
+- **H11** hard-close Telegram alert pro-activo
+
+**Phase 5 — 2026-04-24 night (Batch 4 systemic hardening)**:
+- `config.cfg(name, default)` — fail-loud config accessor
+- `scripts/audit_config_defaults.py` — CI scanner for missing keys
+- `tests/test_topstepx_live_contract.py` — 5 integration tests vs real API
+- Session-recency audit + design comment for FVG/OB (intentionally not filtered per ICT)
+- Silent-`.debug` → `.warning` escalation in reconciler + KZ rollback
+- `core/health.py` — atomic `.health.json` snapshot every 10s for external monitors
 
 ### A/B tests rejected (features stay OFF)
-- **equal_levels_refresh** (Q1 2024) — flat-to-neg (−$1,283; London regresses −$2,064). NY-only hybrid positive (+$780) but not worth the complexity until post-Combine validation. Kept OFF.
-- **Risk ladder 250/200/150/100/50 + London 2L cap** (Q1 2024) — survives better (−71% combine resets, −28% max DD) BUT cuts P&L 82% ($14,768 → $2,638, PF 1.47 → 1.15). **Critical insight**: London cap would have cut the KZ that produces 64.9% of 7-year P&L. Rejected — V8 flat $250 retained.
+- **equal_levels_refresh** (Q1 2024) — flat-to-neg (−$1,283). Kept OFF.
+- **Risk ladder + London 2L cap** (Q1 2024) — cuts P&L 82%. London cap would kill the KZ producing 64.9% of 7-year P&L. Rejected.
 
 ### Current feature decisions
-- **`RISK_LADDER_ENABLED` = False** (code in place, default off; ready if ever needed)
+- **`RISK_LADDER_ENABLED` = False** (infrastructure in place, ready if needed)
 - **`KZ_LOSS_CAPS` = {}** (no per-KZ loss caps)
-- **`equal_levels_refresh` OFF** (code in detectors/liquidity.py, wired only in backtester)
-- **SB confluence gate** — removed (scoring was noise for SB; structural gates handle filtering)
+- **`equal_levels_refresh` OFF**
+- **SB confluence gate** — removed (structural gates handle filtering)
 - **`TRADE_MANAGEMENT` = "trailing"** (matches live + backtest)
-- **Silver Bullet v4 RTH Mode** — active; wider KZ coverage (London 01-04 / NY AM 08:30-12 / NY PM 13:30-15 CT)
+- **Silver Bullet v4 RTH Mode** — wider KZ coverage (London 01-04 / NY AM 08:30-12 / NY PM 13:30-15 CT)
+
+### Defensive systems now live
+- **Telegram alerts on state transitions**: fire, trade_opened (fill-gated), trade_closed, trail (broker-accept-gated), kill_switch, MLL zone change, phantom/orphan cleanup, NAKED stop, hard close, VPIN extreme/normalized
+- **`.engine.lock` PID file** — prevents zombie multi-fire (2026-04-17)
+- **`.health.json`** — every 10s; external monitors check `user_hub_alive`, `last_bar_age_s`, local-vs-broker position divergence, `kill_switch_active`
+- **Reconciler 5s grace period** — no false-orphan during broker fill propagation
+- **`record_trade(order_id=)` idempotency** — triple-path dedup (User Hub + poll + reconcile)
+- **Session-recency filters** — structure (Bug A) + displacement (C5). FVG/OB intentionally NOT filtered per ICT.
+
+### Pendientes watch-list
+- Telegram "DELETE" banner on mobile (awaiting user screenshot)
+- C9 confluence-scorer missing-data flag (nice-to-have, deferred)
+- C10 `OrderResult` frozen-refactor wrapper (defensive, not urgent)
+- H6 flatten exit price accuracy via broker fill-query (workaround: last 1-min close, ~1pt off)
 
 ---
 
