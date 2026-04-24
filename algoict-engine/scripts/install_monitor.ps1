@@ -1,0 +1,105 @@
+# install_monitor.ps1
+# ====================
+# Register the AlgoICT health monitor as a Windows Scheduled Task
+# that fires every 60 seconds, indefinitely.
+#
+# The monitor is INDEPENDENT of the bot -- it runs as its own PowerShell
+# process, reads .health.json, and alerts via Telegram (+ local log
+# fallback) when the bot is dead, feed is stale, positions diverge
+# from broker, kill switch trips, or MLL zone escalates.
+#
+# Usage:
+#   # Install (creates the task)
+#   powershell -ExecutionPolicy Bypass -File scripts\install_monitor.ps1
+#
+#   # Uninstall (remove the task)
+#   powershell -ExecutionPolicy Bypass -File scripts\install_monitor.ps1 -Uninstall
+#
+#   # Verify after install
+#   Get-ScheduledTask -TaskName AlgoICT-Monitor
+#   schtasks /Query /TN AlgoICT-Monitor /V /FO LIST
+#
+#   # Force an immediate run (for testing)
+#   Start-ScheduledTask -TaskName AlgoICT-Monitor
+#
+#   # Check what the monitor wrote (local alert log)
+#   Get-Content C:\AI Projects\AlgoICT\algoict-engine\.monitor_alerts.log -Tail 50
+
+param(
+    [switch]$Uninstall,
+    [string]$TaskName = "AlgoICT-Monitor",
+    [string]$EngineRoot = "C:\AI Projects\AlgoICT\algoict-engine"
+)
+
+$ErrorActionPreference = 'Stop'
+
+$scriptPath = Join-Path $EngineRoot "scripts\monitor.ps1"
+
+if ($Uninstall) {
+    try {
+        Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction Stop
+        Write-Host "OK: task '$TaskName' removed."
+    } catch {
+        Write-Host "INFO: task '$TaskName' was not registered (nothing to remove)."
+    }
+    exit 0
+}
+
+# Verify prerequisites
+if (-not (Test-Path $scriptPath)) {
+    Write-Error "monitor.ps1 not found at $scriptPath"
+    exit 1
+}
+
+$envFile = Join-Path $EngineRoot ".env"
+if (-not (Test-Path $envFile)) {
+    Write-Warning ".env not found at $envFile -- monitor will log alerts locally only (no Telegram)."
+}
+
+# Build the scheduled task
+$action = New-ScheduledTaskAction `
+    -Execute "powershell.exe" `
+    -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$scriptPath`""
+
+# Trigger: start now, repeat every 1 minute, for up to 10 years.
+# (Task Scheduler rejects [TimeSpan]::MaxValue as out-of-range.)
+$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date)
+$trigger.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) `
+    -RepetitionInterval (New-TimeSpan -Minutes 1) `
+    -RepetitionDuration (New-TimeSpan -Days 3650)).Repetition
+
+# Settings: allow start on battery, no time limit, restart on failure
+$settings = New-ScheduledTaskSettingsSet `
+    -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries `
+    -StartWhenAvailable `
+    -ExecutionTimeLimit (New-TimeSpan -Minutes 2) `
+    -MultipleInstances IgnoreNew
+
+# Register / replace
+try {
+    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+} catch {}
+
+Register-ScheduledTask `
+    -TaskName $TaskName `
+    -Action $action `
+    -Trigger $trigger `
+    -Settings $settings `
+    -Description "AlgoICT external health monitor -- reads .health.json every 60s, alerts via Telegram on divergence / bot death / WS stale / kill switch / MLL danger." `
+    -RunLevel Limited `
+    -Force | Out-Null
+
+Write-Host "OK: task '$TaskName' registered."
+Write-Host ""
+Write-Host "Verify with:"
+Write-Host "   Get-ScheduledTask -TaskName $TaskName"
+Write-Host ""
+Write-Host "Force a test run:"
+Write-Host "   Start-ScheduledTask -TaskName $TaskName"
+Write-Host ""
+Write-Host "Tail the alert log:"
+Write-Host "   Get-Content '$EngineRoot\.monitor_alerts.log' -Tail 20 -Wait"
+Write-Host ""
+Write-Host "Uninstall:"
+Write-Host "   powershell -ExecutionPolicy Bypass -File scripts\install_monitor.ps1 -Uninstall"

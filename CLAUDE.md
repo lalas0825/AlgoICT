@@ -620,7 +620,19 @@ Requiere migration `0003_bot_state_overlays.sql` aplicada.
 ### Defensive systems now live
 - **Telegram alerts on state transitions**: fire, trade_opened (fill-gated), trade_closed, trail (broker-accept-gated), kill_switch, MLL zone change, phantom/orphan cleanup, NAKED stop, hard close, VPIN extreme/normalized
 - **`.engine.lock` PID file** — prevents zombie multi-fire (2026-04-17)
-- **`.health.json`** — every 10s; external monitors check `user_hub_alive`, `last_bar_age_s`, local-vs-broker position divergence, `kill_switch_active`
+- **`.health.json`** — bot writes every 10s; external monitor reads.
+- **External monitor (`scripts/monitor.ps1`)** — Windows Task Scheduler runs every 60s, independent of bot process. Reads `.health.json` + alerts via Telegram (canal A, same bot) + local `.monitor_alerts.log` fallback. Catches what the bot cannot alert on itself:
+  * **bot_dead** (`.health.json` mtime > 60s → crash/deadlock)
+  * **heartbeat_stale** (ts field > 90s old → bot hung writing stale data)
+  * **ws_feed_stale** (`last_bar_age_s` > 20 min during market hours → SignalR dropped)
+  * **user_hub_dead** (after 60s uptime grace)
+  * **position_divergence** (local vs broker — the Bug J check)
+  * **kill_switch** + **mll_danger** (re-alert in case bot's own alert never delivered)
+  * Dedup: same alert re-fires at most every 15 min. Resolve: fires `[OK] RESOLVED` when condition clears.
+  * Install: `powershell -ExecutionPolicy Bypass -File scripts\install_monitor.ps1`
+  * Verify: `Get-ScheduledTask -TaskName AlgoICT-Monitor`
+  * Tail live: `Get-Content .monitor_alerts.log -Tail 20 -Wait`
+  * Uninstall: `scripts\install_monitor.ps1 -Uninstall`
 - **Reconciler 5s grace period** — no false-orphan during broker fill propagation
 - **`record_trade(order_id=)` idempotency** — triple-path dedup (User Hub + poll + reconcile)
 - **Session-recency filters** — structure (Bug A) + displacement (C5). FVG/OB intentionally NOT filtered per ICT.

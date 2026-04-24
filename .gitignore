@@ -97,3 +97,9 @@ algoict-engine/analysis/combine_sim_*.log
 # Current batch: run_4bt*.ps1, run_v[5-8]*.ps1 — keep tracked suites in scripts/
 algoict-engine/run_4bt*.ps1
 algoict-engine/run_v[0-9]*_walkforward.ps1
+
+# ─── Runtime state files written by bot + monitor (never commit) ────────────
+algoict-engine/.health.json
+algoict-engine/.monitor_state.json
+algoict-engine/.monitor_alerts.log
+algoict-engine/engine_stdout.log
