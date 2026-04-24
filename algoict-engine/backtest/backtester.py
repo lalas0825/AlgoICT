@@ -270,6 +270,17 @@ class Backtester:
 
             # ── Session reset at every new calendar date (CT) ─────────
             if current_session_date != current_date:
+                # 2026-04-24 post-audit: call end_of_day BEFORE reset_daily
+                # so Topstep MLL trailing peak advances with the prior
+                # day's realized balance. Mirrors live path (Bug C7).
+                # Combine simulator reads trades.json from this backtester
+                # and reconstructs MLL state — without this call, the
+                # peak reconstruction is off by 1 day.
+                if hasattr(self.risk, "end_of_day"):
+                    try:
+                        self.risk.end_of_day()
+                    except Exception:
+                        pass
                 self.risk.reset_daily()
                 if hasattr(self.strategy, "reset_daily"):
                     self.strategy.reset_daily()
@@ -316,7 +327,9 @@ class Backtester:
                             open_position, bar_high, bar_low, bar_close, current_ts, i,
                         )
                     elif self.trade_management == "trailing":
-                        self._update_trailing_stop(open_position)
+                        # Pass bar_close for Bug F parity — ensures trail
+                        # stop isn't placed on the wrong side of price.
+                        self._update_trailing_stop(open_position, bar_close=bar_close)
                         closed_trades = self._process_fixed(
                             open_position, bar_high, bar_low, bar_close, current_ts, i,
                         )
@@ -610,24 +623,39 @@ class Backtester:
         pos["closed"] = True
         return [trade]
 
-    def _update_trailing_stop(self, pos: dict) -> None:
+    def _update_trailing_stop(self, pos: dict, bar_close: float | None = None) -> None:
         """
         Advance the trailing stop to the most recent swing low (long) or
         swing high (short) detected by swing_entry, if it improves the stop.
         Only tightens — never widens.
+
+        2026-04-24 post-audit: mirror live Bug F direction validation.
+        For LONG, new stop must be below current price (would-be SELL
+        stop). For SHORT, new stop must be above current price. Without
+        this, the backtester would accept a stale swing level on the
+        wrong side of price — which live broker would reject with
+        errorCode=2. Keeping backtester strict here preserves parity so
+        backtest P&L matches what live can actually execute.
         """
         swing = self.detectors.get("swing_entry")
         if swing is None:
             return
         direction = pos["direction"]
         current_stop = pos["stop_price"]
+        buffer_pts = 0.25  # 1 MNQ tick — mirrors main.py:_manage_open_positions
         if direction == "long":
             sp = swing.get_latest_swing_low()
             if sp is not None and sp.price > current_stop:
+                # Bug F parity: new long stop must be safely BELOW price
+                if bar_close is not None and sp.price >= bar_close - buffer_pts:
+                    return
                 pos["stop_price"] = sp.price
         else:
             sp = swing.get_latest_swing_high()
             if sp is not None and sp.price < current_stop:
+                # Bug F parity: new short stop must be safely ABOVE price
+                if bar_close is not None and sp.price <= bar_close + buffer_pts:
+                    return
                 pos["stop_price"] = sp.price
 
     # ------------------------------------------------------------------ #

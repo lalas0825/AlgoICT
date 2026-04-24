@@ -2013,15 +2013,27 @@ async def _poll_position_status(components: Components, state: EngineState) -> N
                 if avg_price <= 0.0 and last_close is not None:
                     avg_price = float(last_close)
                 pos["entry_fill_confirmed"] = True
-                # Stamp filled_price on entry_order so downstream trail /
-                # close logic can use it (previously only set by the
-                # User Hub fill event path).
+                # 2026-04-24 post-audit: never stamp 0.0 on filled_price.
+                # If broker's avg_price is 0 AND last_close is None
+                # (very early startup, first bar not yet set), leave
+                # filled_price None and let the next bar retry — better
+                # than stamping 0 which would let Bug E gate pass and
+                # downstream trail logic compute stops against zero.
                 entry_order = pos.get("entry_order")
-                if entry_order is not None and getattr(entry_order, "filled_price", None) is None:
+                if (entry_order is not None
+                        and getattr(entry_order, "filled_price", None) is None
+                        and avg_price > 0.0):
                     try:
                         entry_order.filled_price = avg_price  # type: ignore[attr-defined]
                     except Exception:
                         pass
+                elif avg_price <= 0.0:
+                    logger.warning(
+                        "POLL: detected fill for %s but no valid price source "
+                        "(broker avg=0, last_close=None) — NOT stamping filled_price; "
+                        "trail logic will retry on next bar",
+                        _root(signal.symbol),
+                    )
                 logger.info(
                     "POLL: %s entry fill detected (avg=%.2f) — marking confirmed "
                     "and sending Telegram trade opened alert",
@@ -2335,10 +2347,36 @@ async def _reconcile_positions(components: Components, state: EngineState) -> No
                 continue
             opened_at = pos.get("opened_at")
             if opened_at is not None:
+                # 2026-04-24 post-audit: tz-aware safety. opened_at
+                # SHOULD be UTC-aware (set by `_execute_signal` via
+                # datetime.now(timezone.utc)) but defensive: if a
+                # future path writes a naive datetime or a different
+                # tz, the subtraction raises TypeError which previously
+                # fell into `age = grace + 1` (treat as old → orphan
+                # the real position). Now convert to UTC explicitly,
+                # and log if anything looks off.
                 try:
-                    age = (now - opened_at).total_seconds()
-                except Exception:
-                    age = _RECONCILE_GRACE_SEC + 1  # treat as old on error
+                    oa = opened_at
+                    if getattr(oa, "tzinfo", None) is None:
+                        logger.warning(
+                            "Reconcile: position %s opened_at is naive "
+                            "(tzinfo=None); assuming UTC. Fix the call site.",
+                            key,
+                        )
+                        oa = oa.replace(tzinfo=timezone.utc)
+                    elif oa.utcoffset() != timezone.utc.utcoffset(now):
+                        # Convert to UTC without warning — legit for
+                        # tz-aware non-UTC timestamps (e.g. backtester
+                        # uses US/Central)
+                        oa = oa.astimezone(timezone.utc)
+                    age = (now - oa).total_seconds()
+                except Exception as exc:
+                    logger.warning(
+                        "Reconcile: opened_at subtraction failed for %s "
+                        "(opened_at=%r): %s. Proceeding WITHOUT grace guard.",
+                        key, opened_at, exc,
+                    )
+                    age = _RECONCILE_GRACE_SEC + 1  # proceed to orphan check
                 if age < _RECONCILE_GRACE_SEC:
                     logger.debug(
                         "Reconcile: position %s too young (%.1fs < %.1fs grace) "
@@ -2547,15 +2585,24 @@ async def _manage_open_positions(
                 "reason=%s). Old stop already cancelled — POSITION UNPROTECTED.",
                 direction, symbol, new_stop, getattr(new_stop_order, "message", "?"),
             )
-            # Leave current_stop_price unchanged so dashboard still shows
-            # the last-known stop level (misleading but less bad than
-            # reporting a stop that doesn't exist). Escalate to Telegram.
+            # 2026-04-24 post-audit fix: CLEAR pos["stop_order"] so the
+            # NEXT bar's trail attempt doesn't try to cancel the
+            # already-rejected order (which would return False and
+            # short-circuit via Bug C8's gate, leaving position naked
+            # forever with zero retry). By nulling stop_order, the next
+            # tightening-gate pass will submit a fresh stop attempt —
+            # if the rejection was transient (e.g. price outside range
+            # at that moment), the retry succeeds. Leave
+            # current_stop_price unchanged so we know the last known
+            # target level.
+            pos["stop_order"] = None
             if components.telegram is not None:
                 try:
                     await components.telegram.send_emergency_alert(
                         f"Trail stop REJECTED — {symbol} {direction.upper()} @ "
                         f"{new_stop:.2f} rejected by broker. "
-                        f"OLD STOP CANCELLED. POSITION IS NAKED.",
+                        f"OLD STOP CANCELLED. POSITION IS NAKED. "
+                        f"Next bar will retry.",
                     )
                 except Exception:
                     pass

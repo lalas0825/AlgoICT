@@ -223,21 +223,34 @@ if (-not (Test-Path $healthFile)) {
             } catch { }
 
             # Check 4: WS feed alive? last_bar_age_s should stay small during market.
-            # Suppress during CME closed windows (Sat all day + Fri 16+ ET + Sun <17 ET)
-            # to avoid false-positive alerts every 15 min all weekend.
-            $nowUtc = [datetime]::UtcNow
-            $dow = $nowUtc.DayOfWeek
-            # Approx CT = UTC - 5 (CDT) or UTC - 6 (CST). For monitor coarseness
-            # use UTC hour windows: weekdays 20-22 UTC is the CME daily break.
+            # 2026-04-24 post-audit fix: use actual ET timezone conversion
+            # with DST awareness instead of hardcoded UTC hours. Previous
+            # version was hardcoded for EST (UTC-5) and would false-fire
+            # during EDT (UTC-4) period, March-November — most of the year.
+            #
+            # CME MNQ futures trade Sun 17:00 ET → Fri 16:00 ET, with a
+            # daily 16:00-17:00 ET break. Outside those hours, no bars
+            # are expected.
             $cmeClosed = $false
-            if ($dow -eq 'Saturday') {
-                $cmeClosed = $true
-            } elseif ($dow -eq 'Friday' -and $nowUtc.Hour -ge 21) {
-                $cmeClosed = $true       # Fri after 4 PM ET / 9 PM UTC
-            } elseif ($dow -eq 'Sunday' -and $nowUtc.Hour -lt 22) {
-                $cmeClosed = $true       # Sun before 5 PM ET / 10 PM UTC
-            } elseif ($nowUtc.Hour -ge 21 -and $nowUtc.Hour -lt 22) {
-                $cmeClosed = $true       # weekday 4-5 PM ET / 21-22 UTC daily break
+            try {
+                $etTz = [System.TimeZoneInfo]::FindSystemTimeZoneById("Eastern Standard Time")
+                $etNow = [System.TimeZoneInfo]::ConvertTimeFromUtc([datetime]::UtcNow, $etTz)
+                $etDow = $etNow.DayOfWeek
+                $etHour = $etNow.Hour
+                if ($etDow -eq 'Saturday') {
+                    $cmeClosed = $true
+                } elseif ($etDow -eq 'Friday' -and $etHour -ge 16) {
+                    $cmeClosed = $true       # Fri after 4 PM ET
+                } elseif ($etDow -eq 'Sunday' -and $etHour -lt 17) {
+                    $cmeClosed = $true       # Sun before 5 PM ET
+                } elseif ($etHour -eq 16) {
+                    $cmeClosed = $true       # daily 4-5 PM ET break
+                }
+            } catch {
+                # TimeZone DB missing on minimal Windows builds — fall back
+                # to no suppression (risk: false-fire during breaks, but
+                # at least doesn't MISS a real stale feed).
+                $cmeClosed = $false
             }
             if (-not $cmeClosed -and
                 $health.last_bar_age_s -ne $null -and
