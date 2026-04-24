@@ -1,16 +1,20 @@
 """
 tests/test_silver_bullet.py
 ============================
-Unit tests for strategies/silver_bullet.py
+Unit tests for the 2026-04-20 FVG-based rewrite of
+strategies/silver_bullet.py.
 
-Strategy: build a complete bullish setup that satisfies every gate, then
-verify the strategy returns a Signal. Mutate one condition at a time to
-verify each gate rejects properly.
+Strategy reference (all ICT video sections 2026-04-20):
+  - Entry at FVG proximal + 1 tick (section 2.3)
+  - Stop at FVG candle-1 extreme ± 1 tick (section 5.1)
+  - Target at next unswept liquidity pool in direction, framework ≥ 10 pts
+    for MNQ (section 8.1)
+  - Three 60-min windows (london_silver_bullet 02:00-03:00 CT,
+    silver_bullet 09:00-10:00 CT, pm_silver_bullet 13:00-14:00 CT)
+  - No HTF bias required; confluence min = 5/19
 
 Run: cd algoict-engine && python -m pytest tests/test_silver_bullet.py -v
 """
-
-from dataclasses import dataclass
 
 import pandas as pd
 import pytest
@@ -33,13 +37,12 @@ CT = pytz.timezone("US/Central")
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
-def _sb_ts(hour: int = 10, minute: int = 15) -> pd.Timestamp:
-    """Timestamp inside Silver Bullet kill zone (10:00–11:00 CT)."""
+def _sb_ts(hour: int = 9, minute: int = 15) -> pd.Timestamp:
+    """Timestamp inside the AM Silver Bullet kill zone (09:00-10:00 CT)."""
     return pd.Timestamp(CT.localize(pd.Timestamp(2025, 3, 3, hour, minute)))
 
 
 def _make_1min(ts: pd.Timestamp, close: float = 100.0) -> pd.DataFrame:
-    """Build a tiny 1min DataFrame with a single bar at *ts*."""
     return pd.DataFrame(
         {
             "open":   [close - 0.1],
@@ -69,8 +72,10 @@ def _bullish_bias_fn(price: float) -> BiasResult:
     return BiasResult(
         direction="bullish",
         premium_discount="discount",
-        htf_levels={"daily_high": 110.0, "daily_low": 95.0,
-                    "weekly_high": 115.0, "weekly_low": 90.0},
+        htf_levels={
+            "daily_high": 115.0, "daily_low": 95.0,
+            "weekly_high": 115.0, "weekly_low": 90.0,
+        },
         confidence="high",
         weekly_bias="bullish",
         daily_bias="bullish",
@@ -92,22 +97,26 @@ def _build_full_setup(
     bias_fn=_bullish_bias_fn,
     inject_sweep: bool = True,
     inject_fvg: bool = True,
-    inject_ob: bool = True,
-    inject_displacement: bool = True,
+    inject_target: bool = True,
     inject_structure: bool = True,
     ts: pd.Timestamp = None,
 ):
-    """
-    Build a complete Silver Bullet setup. Each `inject_*` flag toggles
-    one component on/off so individual rejection paths can be tested.
+    """Build a complete Silver Bullet setup.
 
-    Returns: (strategy, candles_1min, candles_5min)
+    Components (dims chosen to pass v2 filters:
+    stop distance ≥ 8pts, framework ≥ 10pts):
+      - bullish FVG inside AM window (top=101, bottom=99, stop_ref=91 →
+        entry=101.25, stop=90.75, stop_dist=10.5pts)
+      - SSL sweep before the window
+      - 5-min MSS bullish
+      - BSL liquidity target at 120.0 (>= 10 pts framework from entry 101.25)
     """
-    ts = ts or _sb_ts(10, 15)
+    ts = ts or _sb_ts(9, 20)   # 5 min past arm time (09:15) for safe margin
 
-    # ── Build detectors with state ─────────────────────────────────────
     structure_det = MarketStructureDetector()
     if inject_structure:
+        # SB uses 5-min structure (V9 post-2026-04-23 audit). Option B
+        # (1-min) tested + rejected on Q1 backtest due to noise.
         structure_det.events.append(StructureEvent(
             type="MSS", direction="bullish",
             level=98.0, timestamp=ts - pd.Timedelta(minutes=5),
@@ -116,33 +125,32 @@ def _build_full_setup(
 
     fvg_det = FairValueGapDetector()
     if inject_fvg:
+        # FVG must live INSIDE the active KZ window.
         fvg_det.fvgs.append(FVG(
-            top=100.5, bottom=99.5, direction="bullish",
+            top=101.0, bottom=99.0, direction="bullish",
             timeframe="1min", candle_index=10,
             timestamp=ts - pd.Timedelta(minutes=3),
+            # Candle-1 low well below bottom so stop distance passes 8pt min.
+            stop_reference=91.0,
         ))
 
+    # OBs and displacements are passed to the confluence scorer but not
+    # required for entry in the FVG-based SB.
     ob_det = OrderBlockDetector()
-    if inject_ob:
-        ob_det.order_blocks.append(OrderBlock(
-            high=100.0, low=99.0, direction="bullish",
-            timeframe="1min", candle_index=10,
-            timestamp=ts - pd.Timedelta(minutes=3),
-        ))
-
     disp_det = DisplacementDetector()
-    if inject_displacement:
-        disp_det.displacements.append(Displacement(
-            direction="bullish", magnitude=5.0, atr=1.0,
-            timestamp=ts - pd.Timedelta(minutes=2),
-            timeframe="1min", candle_index=11,
-        ))
 
     tracked_levels = []
     if inject_sweep:
         tracked_levels.append(LiquidityLevel(
             price=98.5, type="SSL", swept=True,
             timestamp=ts - pd.Timedelta(minutes=5),
+        ))
+    if inject_target:
+        # BSL >= 10 pts above projected entry (101.25) satisfies the
+        # MIN_FRAMEWORK_PTS filter.
+        tracked_levels.append(LiquidityLevel(
+            price=120.0, type="BSL", swept=False,
+            timestamp=ts - pd.Timedelta(hours=1),
         ))
 
     detectors = {
@@ -192,51 +200,45 @@ class TestPositiveSetup:
     def test_signal_kill_zone_field(self):
         strat, c1, c5 = _build_full_setup()
         sig = strat.evaluate(c1, c5)
-        assert sig.kill_zone == "silver_bullet"
+        # v4 "RTH Mode": default KILL_ZONES = (london, ny_am, ny_pm).
+        # The _build_full_setup fixture uses 09:20 CT which sits inside ny_am.
+        assert sig.kill_zone == "ny_am"
 
-    def test_signal_entry_at_ob_high(self):
-        """Long entry = OB.high (proximal of bullish OB)."""
+    def test_signal_entry_at_fvg_proximal_plus_tick(self):
+        """Long entry = FVG.top + 1 tick (ICT section 2.3)."""
         strat, c1, c5 = _build_full_setup()
         sig = strat.evaluate(c1, c5)
-        assert sig.entry_price == pytest.approx(100.0)   # ob.high
+        # FVG.top = 101.0, tick = 0.25 → entry = 101.25
+        assert sig.entry_price == pytest.approx(101.25)
 
-    def test_signal_stop_at_ob_low(self):
+    def test_signal_stop_at_candle1_low_minus_tick(self):
+        """Long stop = FVG.stop_reference - 1 tick (ICT section 5.1)."""
         strat, c1, c5 = _build_full_setup()
         sig = strat.evaluate(c1, c5)
-        assert sig.stop_price == pytest.approx(99.0)     # ob.low
+        # stop_reference = 91.0, tick = 0.25 → stop = 90.75
+        assert sig.stop_price == pytest.approx(90.75)
 
-    def test_signal_target_is_2rr(self):
-        """target = entry + 2 × actual_stop_points (1:2 RR)."""
+    def test_signal_target_is_liquidity_pool(self):
+        """Target = nearest unswept liquidity pool in direction."""
         strat, c1, c5 = _build_full_setup()
         sig = strat.evaluate(c1, c5)
-        # stop_points = 1.0; raw = 250 / (1 × 2.0) = 125 → clamped to 50
-        # actual_stop = 250 / (50 × 2.0) = 2.5
-        # target = 100.0 + 2 × 2.5 = 105.0
-        assert sig.target_price == pytest.approx(105.0)
-
-    def test_signal_contracts_clamped_to_max(self):
-        """Stop = 1pt → raw = 125 → clamped to 50."""
-        strat, c1, c5 = _build_full_setup()
-        sig = strat.evaluate(c1, c5)
-        assert sig.contracts == 50
+        # Target is the BSL at 120.0 (only one above entry).
+        assert sig.target_price == pytest.approx(120.0)
 
     def test_signal_has_confluence_score(self):
+        """Confluence score still computed and attached to Signal for
+        reporting, even though the v2 strategy no longer gates on it."""
         strat, c1, c5 = _build_full_setup()
         sig = strat.evaluate(c1, c5)
-        assert sig.confluence_score >= 7  # MIN_CONFLUENCE
+        assert sig.confluence_score >= 0
         assert isinstance(sig.confluence_breakdown, dict)
-        assert len(sig.confluence_breakdown) > 0
 
     def test_notify_trade_executed_increments_trades_today(self):
-        """Counter advances only after broker-confirmed execution.
-        evaluate() emits the signal; notify_trade_executed() advances.
-        """
         strat, c1, c5 = _build_full_setup()
         assert strat.trades_today == 0
         sig = strat.evaluate(c1, c5)
         assert sig is not None
-        # evaluate() alone must NOT advance
-        assert strat.trades_today == 0
+        assert strat.trades_today == 0   # evaluate() does not advance
         strat.notify_trade_executed(sig)
         assert strat.trades_today == 1
 
@@ -246,44 +248,37 @@ class TestPositiveSetup:
 class TestRejectionGates:
 
     def test_outside_kill_zone_returns_none(self):
-        """Timestamp at 09:00 CT — before Silver Bullet (10:00–11:00)."""
-        out_ts = _sb_ts(9, 0)
+        out_ts = _sb_ts(8, 0)   # before AM window (starts at 09:00 CT)
         strat, _, c5 = _build_full_setup(ts=out_ts)
         c1_out = _make_1min(out_ts, close=100.0)
         assert strat.evaluate(c1_out, c5) is None
 
     def test_after_kill_zone_returns_none(self):
-        """Timestamp at 11:30 CT — after Silver Bullet window."""
-        out_ts = _sb_ts(11, 30)
+        """v4: ny_am ends at 12:00 CT. 12:30 CT is outside all 3 RTH KZs
+        (not london 01-04, not ny_am 08:30-12, not ny_pm 13:30-15)."""
+        out_ts = _sb_ts(12, 30)
         strat, _, c5 = _build_full_setup(ts=out_ts)
         c1_out = _make_1min(out_ts, close=100.0)
         assert strat.evaluate(c1_out, c5) is None
 
     def test_past_cancel_time_returns_none(self):
-        """Timestamp at 10:50 CT — cancel window (no new entries)."""
-        cancel_ts = _sb_ts(10, 50)
+        """v4: ny_am ends at 12:00, cancels 10min earlier → 11:50 CT."""
+        cancel_ts = _sb_ts(11, 50)
         strat, _, c5 = _build_full_setup(ts=cancel_ts)
         c1_cancel = _make_1min(cancel_ts, close=100.0)
         assert strat.evaluate(c1_cancel, c5) is None
 
-    def test_at_1051_returns_none(self):
-        """10:51 CT — also past cancel time."""
-        late_ts = _sb_ts(10, 51)
-        strat, _, c5 = _build_full_setup(ts=late_ts)
-        c1_late = _make_1min(late_ts, close=100.0)
-        assert strat.evaluate(c1_late, c5) is None
-
     def test_just_before_cancel_time_allowed(self):
-        """10:49 CT — just before cancel cutoff, should still evaluate."""
-        early_ts = _sb_ts(10, 49)
+        """v4: 11:49 CT — just before ny_am cancel cutoff."""
+        early_ts = _sb_ts(11, 49)
         strat, _, c5 = _build_full_setup(ts=early_ts)
         c1_early = _make_1min(early_ts, close=100.0)
-        # Setup has all detectors injected — should return signal
         assert strat.evaluate(c1_early, c5) is not None
 
-    def test_neutral_htf_bias_returns_none(self):
+    def test_neutral_htf_bias_does_NOT_reject(self):
+        """ICT: Silver Bullet does not require HTF bias alignment."""
         strat, c1, c5 = _build_full_setup(bias_fn=_neutral_bias_fn)
-        assert strat.evaluate(c1, c5) is None
+        assert strat.evaluate(c1, c5) is not None
 
     def test_no_5min_structure_returns_none(self):
         strat, c1, c5 = _build_full_setup(inject_structure=False)
@@ -293,16 +288,22 @@ class TestRejectionGates:
         strat, c1, c5 = _build_full_setup(inject_fvg=False)
         assert strat.evaluate(c1, c5) is None
 
-    def test_no_ob_returns_none(self):
-        strat, c1, c5 = _build_full_setup(inject_ob=False)
-        assert strat.evaluate(c1, c5) is None
-
-    def test_no_displacement_returns_none(self):
-        strat, c1, c5 = _build_full_setup(inject_displacement=False)
-        assert strat.evaluate(c1, c5) is None
-
     def test_no_sweep_returns_none(self):
         strat, c1, c5 = _build_full_setup(inject_sweep=False)
+        assert strat.evaluate(c1, c5) is None
+
+    def test_no_liquidity_target_returns_none(self):
+        strat, c1, c5 = _build_full_setup(inject_target=False)
+        assert strat.evaluate(c1, c5) is None
+
+    def test_framework_below_minimum_returns_none(self):
+        """Liquidity target closer than 10 pts fails the framework filter."""
+        strat, c1, c5 = _build_full_setup(inject_target=False)
+        # BSL at 108 → framework ~7.25 pts from entry 100.75 < 10 pt minimum
+        strat.detectors["tracked_levels"].append(LiquidityLevel(
+            price=108.0, type="BSL", swept=False,
+            timestamp=_sb_ts(8, 30),
+        ))
         assert strat.evaluate(c1, c5) is None
 
     def test_kill_switch_active_returns_none(self):
@@ -321,14 +322,15 @@ class TestRejectionGates:
         assert strat.evaluate(c1, c5) is None
 
     def test_max_trades_reached_returns_none(self):
+        """v4 uses MAX_TRADES_PER_ZONE=999 (effectively unlimited). The real
+        halt is RiskManager's 3-consecutive-loss kill switch. To test the
+        per-zone cap as a GATE, we simulate reaching the cap manually."""
         strat, c1, c5 = _build_full_setup()
-        # silver_bullet zone's cap has been reached (1 trade in silver_bullet)
-        strat._trades_by_zone["silver_bullet"] = strat.MAX_TRADES_PER_ZONE
-        strat.trades_today = strat.MAX_TRADES_PER_ZONE
+        # Fixture ts=09:20 CT → zone is "ny_am".
+        strat._trades_by_zone["ny_am"] = strat.MAX_TRADES_PER_ZONE
         assert strat.evaluate(c1, c5) is None
 
     def test_past_hard_close_returns_none(self):
-        """Timestamp at 15:30 CT — past 3 PM hard close."""
         late_ts = _sb_ts(15, 30)
         strat, _, c5 = _build_full_setup(ts=late_ts)
         c1_late = _make_1min(late_ts, close=100.0)
@@ -351,93 +353,131 @@ class TestRejectionGates:
         assert strat.evaluate(c1, empty) is None
 
 
-# ─── Timeframe-specific: detectors queried on correct TF ─────────────────────
+# ─── Timeframe: FVG must be on 1-min ─────────────────────────────────────────
 
 class TestTimeframeUsage:
 
-    def test_fvg_on_1min_tf_only(self):
-        """
-        Injecting an FVG on '5min' (wrong TF) should be rejected — the
-        strategy only queries 1min FVGs for entry.
-        """
-        ts = _sb_ts(10, 15)
+    def test_fvg_on_5min_tf_rejected(self):
+        """Silver Bullet entry looks at 1-min FVGs only."""
+        ts = _sb_ts(9, 15)
         strat, c1, c5 = _build_full_setup(inject_fvg=False, ts=ts)
-        # Inject FVG on wrong timeframe
         strat.detectors["fvg"].fvgs.append(FVG(
             top=100.5, bottom=99.5, direction="bullish",
             timeframe="5min",   # wrong TF
-            candle_index=10, timestamp=ts,
+            candle_index=10, timestamp=ts - pd.Timedelta(minutes=2),
+            stop_reference=99.3,
         ))
         assert strat.evaluate(c1, c5) is None
 
-    def test_ob_on_1min_tf_only(self):
-        """
-        Injecting an OB on '5min' (wrong TF) should be rejected — the
-        strategy only queries 1min OBs for entry.
-        """
-        ts = _sb_ts(10, 15)
-        strat, c1, c5 = _build_full_setup(inject_ob=False, ts=ts)
-        # Inject OB on wrong timeframe
-        strat.detectors["ob"].order_blocks.append(OrderBlock(
-            high=100.0, low=99.0, direction="bullish",
-            timeframe="5min",   # wrong TF
-            candle_index=10, timestamp=ts,
-        ))
-        assert strat.evaluate(c1, c5) is None
-
-    def test_structure_on_5min_tf_only(self):
-        """
-        Injecting MSS on '15min' (wrong TF) should be rejected — the
-        Silver Bullet uses 5min context, not 15min.
-        """
-        ts = _sb_ts(10, 15)
+    def test_structure_on_15min_tf_rejected(self):
+        """Silver Bullet uses 5-min structure (V9 post-2026-04-23 audit)."""
+        ts = _sb_ts(9, 15)
         strat, c1, c5 = _build_full_setup(inject_structure=False, ts=ts)
-        # Inject structure on wrong timeframe
         strat.detectors["structure"].events.append(StructureEvent(
             type="MSS", direction="bullish",
             level=98.0, timestamp=ts,
-            timeframe="15min",   # wrong TF — silver bullet needs 5min
+            timeframe="15min",   # wrong TF
         ))
         assert strat.evaluate(c1, c5) is None
 
 
-# ─── Wrong-direction sweep (bullish setup, BSL swept = wrong) ────────────────
+# ─── Wrong-direction sweep ───────────────────────────────────────────────────
 
 class TestSweepDirection:
 
     def test_bsl_sweep_rejected_for_long(self):
-        """A bullish setup must have an SSL/PDL/PWL/equal_lows sweep, not BSL."""
-        ts = _sb_ts(10, 15)
+        """Bullish FVG requires SSL/equal_lows sweep, not BSL."""
+        ts = _sb_ts(9, 15)
         strat, c1, c5 = _build_full_setup(inject_sweep=False, ts=ts)
-        # Inject wrong side sweep
         strat.detectors["tracked_levels"].append(LiquidityLevel(
             price=101.5, type="BSL", swept=True, timestamp=ts,
         ))
         assert strat.evaluate(c1, c5) is None
 
 
-# ─── Max trades: only 1 per session ─────────────────────────────────────────
+# ─── Direction determined by FVG ─────────────────────────────────────────────
+
+class TestBearishSetup:
+
+    def test_bearish_fvg_produces_short(self):
+        """Bearish FVG → short trade with inverted entry/stop/target logic.
+
+        Dimensions chosen to pass v2 filters:
+          - stop distance ≥ 8pts (FVG.bottom=99, stop_ref=109 → stop_dist=10.5)
+          - framework ≥ 10pts (SSL target at 88 → 10.75pts from entry 98.75)
+        """
+        ts = _sb_ts(9, 20)
+        strat, c1, c5 = _build_full_setup(
+            inject_fvg=False, inject_sweep=False, inject_target=False, ts=ts,
+        )
+        # Bearish FVG + BSL sweep + SSL target below entry.
+        strat.detectors["fvg"].fvgs.append(FVG(
+            top=101.0, bottom=99.0, direction="bearish",
+            timeframe="1min", candle_index=10,
+            timestamp=ts - pd.Timedelta(minutes=3),
+            stop_reference=109.0,   # candle-1 high, well above top
+        ))
+        strat.detectors["tracked_levels"].append(LiquidityLevel(
+            price=105.0, type="BSL", swept=True,
+            timestamp=ts - pd.Timedelta(minutes=5),
+        ))
+        strat.detectors["tracked_levels"].append(LiquidityLevel(
+            price=88.0, type="SSL", swept=False,
+            timestamp=ts - pd.Timedelta(hours=1),
+        ))
+        # Need bearish structure too (5-min per V9 post-2026-04-23 audit).
+        strat.detectors["structure"].events.clear()
+        strat.detectors["structure"].events.append(StructureEvent(
+            type="MSS", direction="bearish",
+            level=102.0, timestamp=ts - pd.Timedelta(minutes=5),
+            timeframe="5min",
+        ))
+        sig = strat.evaluate(c1, c5)
+        assert sig is not None
+        assert sig.direction == "short"
+        assert sig.entry_price == pytest.approx(98.75)   # bottom - tick
+        assert sig.stop_price == pytest.approx(109.25)   # stop_ref + tick
+        assert sig.target_price == pytest.approx(88.0)
+
+
+# ─── Three windows: each zone routes correctly ──────────────────────────────
+
+class TestThreeWindows:
+
+    def test_london_kz_active(self):
+        """v4 default KILL_ZONES = (london, ny_am, ny_pm). 02:20 CT is
+        inside London (01-04 CT)."""
+        ts = _sb_ts(2, 20)
+        strat, c1, c5 = _build_full_setup(ts=ts)
+        sig = strat.evaluate(c1, c5)
+        assert sig is not None
+        assert sig.kill_zone == "london"
+
+    def test_ny_pm_window(self):
+        """v4: NY PM kill zone is 13:30-15:00 CT (not pm_silver_bullet's
+        narrow 13-14). 13:45 CT is inside ny_pm."""
+        ts = _sb_ts(13, 45)
+        strat, c1, c5 = _build_full_setup(ts=ts)
+        sig = strat.evaluate(c1, c5)
+        assert sig is not None
+        assert sig.kill_zone == "ny_pm"
+
+
+# ─── Max trades ─────────────────────────────────────────────────────────────
 
 class TestMaxTrades:
 
-    def test_max_trades_is_one(self):
-        """MAX_TRADES=1: second call blocked once first trade is confirmed."""
+    def test_max_trades_is_one_per_zone(self):
         strat, c1, c5 = _build_full_setup()
         sig1 = strat.evaluate(c1, c5)
         assert sig1 is not None
         strat.notify_trade_executed(sig1)
         assert strat.trades_today == 1
-        # Second evaluation — should be blocked now that counter advanced
         sig2 = strat.evaluate(c1, c5)
         assert sig2 is None
 
-    def test_rr_ratio_is_2(self):
-        """Confirm RISK_REWARD constant is 2.0 (not 3.0 like ny_am)."""
-        strat, c1, c5 = _build_full_setup()
-        assert strat.RISK_REWARD == 2.0
 
-
-# ─── Reset behavior ──────────────────────────────────────────────────────────
+# ─── Reset ───────────────────────────────────────────────────────────────────
 
 class TestReset:
 
@@ -453,38 +493,6 @@ class TestReset:
         strat, c1, c5 = _build_full_setup()
         sig = strat.evaluate(c1, c5)
         strat.notify_trade_executed(sig)
-        assert strat.trades_today == 1
         strat.reset_daily()
         sig2 = strat.evaluate(c1, c5)
         assert sig2 is not None
-
-
-# ─── OB Proximity Gate ────────────────────────────────────────────────────────
-
-class TestOBProximityGate:
-    """OB proximity gate for Silver Bullet — same tolerance as ny_am_reversal.
-
-    Baseline setup: OB high=100.0, low=99.0 (bullish, 1min).
-    Long rejects when close > OB.high + 3.0.
-    Short rejects when close < OB.low  - 3.0.
-    """
-
-    def test_long_rejects_when_price_far_above_ob(self):
-        """close=103.1 → gap=3.1 pts > 3.0 tolerance → reject."""
-        strat, _, c5 = _build_full_setup()
-        c1 = _make_1min(_sb_ts(10, 15), close=103.1)
-        assert strat.evaluate(c1, c5) is None
-
-    def test_long_accepts_at_exact_tolerance(self):
-        """close=103.0 → gap=3.0 pts = tolerance → accept."""
-        strat, _, c5 = _build_full_setup()
-        c1 = _make_1min(_sb_ts(10, 15), close=103.0)
-        sig = strat.evaluate(c1, c5)
-        assert sig is not None
-        assert sig.direction == "long"
-
-    def test_long_accepts_price_at_ob_high(self):
-        """close=100.0 → price exactly at OB.high → accept."""
-        strat, c1, c5 = _build_full_setup()
-        sig = strat.evaluate(c1, c5)
-        assert sig is not None

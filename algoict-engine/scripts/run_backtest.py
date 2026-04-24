@@ -96,6 +96,7 @@ from timeframes.session_manager import SessionManager  # noqa: E402
 # Strategies
 from strategies.ny_am_reversal import NYAMReversalStrategy  # noqa: E402
 from strategies.silver_bullet import SilverBulletStrategy  # noqa: E402
+from strategies.donchian_vol import DonchianVolStrategy  # noqa: E402
 
 # HTF bias detector for dynamic bias mode
 from timeframes.htf_bias import HTFBiasDetector, BiasResult  # noqa: E402
@@ -303,6 +304,12 @@ def build_backtester(
     mll_warning_pct: float = 0.40,
     mll_caution_pct: float = 0.60,
     mll_stop_pct: float = 0.85,
+    combine_reset_on_breach: bool = False,
+    risk_ladder: Optional[tuple] = None,
+    kz_loss_caps: Optional[dict] = None,
+    refresh_equal_levels: bool = False,
+    equal_levels_threshold_pct: float = 0.001,
+    equal_levels_min_count: int = 2,
     ny_am_only: bool = False,
     ifvg_enabled: bool = True,
     # None → fall back to config.TRADE_MANAGEMENT (default "trailing") so
@@ -382,14 +389,28 @@ def build_backtester(
             warning_pct=mll_warning_pct,
             caution_pct=mll_caution_pct,
             stop_pct=mll_stop_pct,
+            reset_on_mll_breach=combine_reset_on_breach,
         )
         mll = risk_mgr._mll_limit
+        reset_tag = " +AUTO-RESET" if combine_reset_on_breach else ""
         print(
-            f"  Topstep $50K Combine mode ON "
+            f"  Topstep $50K Combine mode ON{reset_tag} "
             f"(warn=${mll * mll_warning_pct:.0f} @ {mll_warning_pct:.0%}, "
             f"caution=${mll * mll_caution_pct:.0f} @ {mll_caution_pct:.0%}, "
             f"stop=${mll * mll_stop_pct:.0f} @ {mll_stop_pct:.0%})"
         )
+    # Optional: risk ladder (Combine-aware stepping-down sizing)
+    if risk_ladder is not None:
+        risk_mgr.enable_ladder(schedule=risk_ladder)
+        print(
+            f"  Risk Ladder ON: schedule={risk_ladder} "
+            f"(max daily loss if all miss: ${sum(risk_ladder):.0f})"
+        )
+    # Optional: per-KZ losing-trade caps
+    if kz_loss_caps:
+        risk_mgr.set_kz_loss_caps(kz_loss_caps)
+        caps_str = ", ".join(f"{k}={v}" for k, v in kz_loss_caps.items())
+        print(f"  Per-KZ loss caps: {caps_str}")
     tf_mgr = TimeframeManager()
     session_mgr = SessionManager()
 
@@ -417,10 +438,15 @@ def build_backtester(
         strategy = SilverBulletStrategy(
             detectors, risk_mgr, session_mgr, static_bullish_bias
         )
+    elif strategy_name_lc == "donchian_vol":
+        # Donchian-Vol does not use HTF bias; pass the stub for API compat.
+        strategy = DonchianVolStrategy(
+            detectors, risk_mgr, session_mgr, static_bullish_bias
+        )
     else:
         raise ValueError(
             f"Unknown strategy '{strategy_name}'. "
-            f"Valid: ny_am_reversal, silver_bullet"
+            f"Valid: ny_am_reversal, silver_bullet, donchian_vol"
         )
 
     # Ablation overrides
@@ -460,9 +486,17 @@ def build_backtester(
     backtester = Backtester(
         strategy, detectors, risk_mgr, tf_mgr, session_mgr,
         trade_management=trade_management,
+        refresh_equal_levels=refresh_equal_levels,
+        equal_levels_threshold_pct=equal_levels_threshold_pct,
+        equal_levels_min_count=equal_levels_min_count,
     )
     if trade_management != "fixed":
         print(f"  Trade management: {trade_management}")
+    if refresh_equal_levels:
+        print(
+            f"  Equal levels: ON (threshold={equal_levels_threshold_pct*100:.2f}%, "
+            f"min_count={equal_levels_min_count})"
+        )
 
     config = {
         "strategy": strategy_name_lc,
@@ -620,6 +654,33 @@ def main() -> int:
         kz_override = None
         if args.kill_zones:
             kz_override = tuple(z.strip() for z in args.kill_zones.split(",") if z.strip())
+        # Parse --risk-ladder "250,200,150,100,50" -> (250.0, 200.0, ...)
+        ladder = None
+        if args.risk_ladder:
+            try:
+                ladder = tuple(
+                    float(x.strip()) for x in args.risk_ladder.split(",")
+                    if x.strip()
+                )
+                if not ladder or any(r <= 0 for r in ladder):
+                    raise ValueError("ladder must be positive non-empty")
+            except Exception as e:
+                print(f"✗ Invalid --risk-ladder '{args.risk_ladder}': {e}")
+                return 1
+        # Parse --kz-loss-cap "london=2,ny_am=3" -> {"london": 2, "ny_am": 3}
+        kz_caps = None
+        if args.kz_loss_cap:
+            kz_caps = {}
+            try:
+                for pair in args.kz_loss_cap.split(","):
+                    pair = pair.strip()
+                    if not pair:
+                        continue
+                    k, v = pair.split("=", 1)
+                    kz_caps[k.strip()] = int(v.strip())
+            except Exception as e:
+                print(f"✗ Invalid --kz-loss-cap '{args.kz_loss_cap}': {e}")
+                return 1
         backtester, config = build_backtester(
             args.strategy,
             df_1min=df,
@@ -628,6 +689,12 @@ def main() -> int:
             mll_warning_pct=args.mll_warning_pct,
             mll_caution_pct=args.mll_caution_pct,
             mll_stop_pct=args.mll_stop_pct,
+            combine_reset_on_breach=args.combine_reset_on_breach,
+            risk_ladder=ladder,
+            kz_loss_caps=kz_caps,
+            refresh_equal_levels=args.equal_levels,
+            equal_levels_threshold_pct=args.equal_levels_threshold_pct,
+            equal_levels_min_count=args.equal_levels_min_count,
             ny_am_only=args.ny_am_only,
             ifvg_enabled=not args.no_ifvg,
             trade_management=args.trade_management,
@@ -717,6 +784,10 @@ def main() -> int:
             dd = peak - equity
             max_dd = max(max_dd, dd)
             equity_curve.append({"t": str(t.entry_time), "equity": equity, "peak": peak, "dd": dd})
+        # Pull combine reset info off the risk manager if available.
+        rm = backtester.risk if hasattr(backtester, "risk") else None
+        combine_resets = getattr(rm, "combine_resets", 0) if rm else 0
+        combine_reset_events = getattr(rm, "combine_reset_events", []) if rm else []
         payload = {
             "strategy": result.strategy,
             "total_trades": int(result.total_trades),
@@ -726,6 +797,8 @@ def main() -> int:
             "total_pnl": float(result.total_pnl),
             "max_drawdown_dollars": float(max_dd),
             "peak_equity": float(peak),
+            "combine_resets": int(combine_resets),
+            "combine_reset_events": combine_reset_events,
             "start_date": str(result.start_date),
             "end_date": str(result.end_date),
             "trades": [
@@ -773,7 +846,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--strategy",
         required=True,
-        choices=("ny_am_reversal", "silver_bullet"),
+        choices=("ny_am_reversal", "silver_bullet", "donchian_vol"),
         help="Strategy to backtest",
     )
 
@@ -814,6 +887,69 @@ def _parse_args() -> argparse.Namespace:
             "Halves position at 75%% MLL drawdown, stops at 90%%, "
             "enters protective mode after profit target reached."
         ),
+    )
+    p.add_argument(
+        "--combine-reset-on-breach",
+        action="store_true",
+        help=(
+            "With --topstep: when MLL is breached, auto-reset the account "
+            "to the starting balance (simulates paying for a Combine "
+            "reset) instead of permanently blocking trades. Counts the "
+            "number of resets in the final report so you can estimate "
+            "total reset-fee cost for a given period."
+        ),
+    )
+    p.add_argument(
+        "--risk-ladder",
+        default=None,
+        help=(
+            "Enable the post-loss risk ladder. Accepts a comma-separated "
+            "list of dollar amounts (e.g. '250,200,150,100,50'). Sum should "
+            "be <= DLL ($1000 for Topstep). When set, the Nth loss of the "
+            "day risks ladder[N-1] dollars; wins do NOT reset the ladder. "
+            "After len(ladder) losses the kill switch halts trading for "
+            "the rest of the day. Default: off (flat config.RISK_PER_TRADE)."
+        ),
+    )
+    p.add_argument(
+        "--kz-loss-cap",
+        default=None,
+        help=(
+            "Cap losing trades per kill zone. Format: "
+            "'kz1=N,kz2=M' (e.g. 'london=2' — after 2 losses in London, "
+            "halt London for the day but let NY AM/PM still take setups). "
+            "Zones not listed get no cap. Default: no caps."
+        ),
+    )
+    p.add_argument(
+        "--equal-levels",
+        action="store_true",
+        help=(
+            "Refresh equal_highs / equal_lows liquidity levels from recent "
+            "swing points on every entry-TF bar. Without this flag the "
+            "strategy only sees the 4 daily levels (PDH/PDL/PWH/PWL) seeded "
+            "at the start of the backtest. Enabling should increase trade "
+            "count on trending days where only intraday equal levels get "
+            "swept. 2026-04-22 live session showed 0 trades because the "
+            "09:30 CT dip only swept intraday equal lows — PDL was out of "
+            "reach. A/B test this flag on 2024 before wiring to live."
+        ),
+    )
+    p.add_argument(
+        "--equal-levels-threshold-pct",
+        type=float,
+        default=0.001,
+        help=(
+            "Relative price tolerance for clustering swings into equal "
+            "levels. Default 0.001 = 0.1%%. For MNQ at 27K that is ~27 pts. "
+            "Tighter (0.0005) = fewer, higher-conviction clusters."
+        ),
+    )
+    p.add_argument(
+        "--equal-levels-min-count",
+        type=int,
+        default=2,
+        help="Minimum swings per equal-level cluster. Default 2.",
     )
 
     p.add_argument(

@@ -108,71 +108,217 @@ class LiquidityDetector:
         levels.extend(self._cluster_swings(lows, "equal_lows", threshold_pct, min_count))
         return levels
 
-    def get_pdh_pdl(self, df_daily: pd.DataFrame) -> tuple[float, float]:
-        """
-        Return the Previous Day High and Low.
+    @staticmethod
+    def refresh_equal_levels_into(
+        tracked: list,
+        swing_points,
+        timeframe: str,
+        threshold_pct: float = 0.001,
+        min_count: int = 2,
+        merge_tolerance_pct: float = 0.0005,
+    ) -> int:
+        """Compute equal_highs / equal_lows from current swings and merge them
+        into `tracked` (the engine's live tracked_levels list) without
+        creating duplicates.
 
-        Expects df_daily to contain at least one completed daily bar.
-        The LAST row is treated as the most recent completed day.
+        Dedup rule: a newly-detected equal level is considered "the same" as
+        an existing one when both are the same type AND within
+        merge_tolerance_pct of each other. In that case we skip (keep the
+        existing level's swept flag and timestamp intact — we do NOT want
+        to reset a swept flag just because the cluster recomputed).
+
+        Stale "equal_*" levels whose cluster no longer holds are NOT pruned
+        here — the strategy already filters on `swept==True`, so once a
+        level is swept it stops mattering. Keeping the merged list small
+        (O(tens)) makes pruning unnecessary.
 
         Returns
         -------
-        (PDH, PDL) — or (nan, nan) if data unavailable
+        int — number of NEW levels appended to `tracked`.
         """
+        # Build a LiquidityDetector view of the swing input.
+        det = LiquidityDetector()
+        new_levels = det.detect_equal_levels(
+            swing_points, timeframe, threshold_pct, min_count,
+        )
+        if not new_levels:
+            return 0
+
+        _LVL_TYPES = ("equal_highs", "equal_lows")
+        existing = [
+            lvl for lvl in tracked
+            if getattr(lvl, "type", "") in _LVL_TYPES
+        ]
+
+        added = 0
+        for new in new_levels:
+            is_dup = False
+            for old in existing:
+                if old.type != new.type:
+                    continue
+                centre = old.price
+                if centre <= 0:
+                    continue
+                if abs(new.price - centre) / centre <= merge_tolerance_pct:
+                    is_dup = True
+                    break
+            if not is_dup:
+                tracked.append(new)
+                added += 1
+        return added
+
+    def get_pdh_pdl(
+        self,
+        df_daily: pd.DataFrame,
+        as_of_ts: Optional[pd.Timestamp] = None,
+    ) -> tuple[float, float]:
+        """
+        Return the Previous Day High and Low — i.e., the most recent
+        COMPLETED daily session's high/low.
+
+        CRITICAL (2026-04-23 fix): The last row of ``df_daily`` may be the
+        CURRENT forming session (tf_manager anchors daily sessions at
+        18:00 CT = CME Globex open; a bar labelled for "today's session"
+        starts at yesterday 18:00 CT and runs until today 17:00 CT — it
+        is FORMING all day). Using ``.iloc[-1]`` without a completion
+        check returns the forming bar, which means "PDH" is actually the
+        running high of the current session, not the previous one.
+
+        When ``as_of_ts`` is provided we drop the forming bar by keeping
+        only rows whose session-label date is strictly before the current
+        session's date. Falls back to ``iloc[-1]`` (legacy behavior) if
+        ``as_of_ts`` is None — callers that have a clock (main.py seed,
+        backtest per-bar loop) should always pass it.
+
+        Parameters
+        ----------
+        df_daily : pd.DataFrame — output of TimeframeManager.aggregate(_, "D")
+        as_of_ts : pd.Timestamp, optional — US/Central clock for forming-bar
+            exclusion. When provided, its date (+6h CME shift) becomes the
+            "today" that is excluded from PDH computation.
+
+        Returns
+        -------
+        (PDH, PDL) — or (nan, nan) if no completed session available
+        """
+        import math
         if df_daily.empty:
-            import math
             return math.nan, math.nan
-        row = df_daily.iloc[-1]
+        completed = df_daily
+        if as_of_ts is not None:
+            # Compute today's session-label the same way tf_manager does
+            today_label = (as_of_ts + pd.Timedelta(hours=6)).date()
+            # Keep only bars whose label is strictly before today's session
+            completed = df_daily[df_daily.index.map(lambda ts: ts.date()) < today_label]
+            if completed.empty:
+                return math.nan, math.nan
+        row = completed.iloc[-1]
         return float(row["high"]), float(row["low"])
 
-    def get_pwh_pwl(self, df_weekly: pd.DataFrame) -> tuple[float, float]:
+    def get_pwh_pwl(
+        self,
+        df_weekly: pd.DataFrame,
+        as_of_ts: Optional[pd.Timestamp] = None,
+    ) -> tuple[float, float]:
         """
-        Return the Previous Week High and Low.
+        Return the Previous Week High and Low — i.e., the most recent
+        COMPLETED weekly bar (Mon-Fri completed session).
 
-        The LAST row of df_weekly is treated as the most recent completed week.
+        CRITICAL (2026-04-23 fix): Same root cause as ``get_pdh_pdl``. The
+        last row of ``df_weekly`` is the CURRENT forming week whenever we
+        are inside that Mon-Fri window. tf_manager labels each weekly bar
+        by the Monday of the ISO week; the current forming bar stays under
+        that Monday label until Friday 17:00 CT. Taking ``.iloc[-1]`` then
+        returns this forming bar — "PWH" ends up being the running high
+        of the current week.
+
+        Fix: when ``as_of_ts`` is provided, exclude any weekly bar whose
+        Monday label matches the current week's Monday.
+
+        Parameters
+        ----------
+        df_weekly : pd.DataFrame — output of TimeframeManager.aggregate(_, "W")
+        as_of_ts : pd.Timestamp, optional
 
         Returns
         -------
-        (PWH, PWL) — or (nan, nan) if data unavailable
+        (PWH, PWL) — or (nan, nan)
         """
+        import math
         if df_weekly.empty:
-            import math
             return math.nan, math.nan
-        row = df_weekly.iloc[-1]
+        completed = df_weekly
+        if as_of_ts is not None:
+            # Compute current week's Monday the same way tf_manager does
+            session_date = (as_of_ts + pd.Timedelta(hours=6)).date()
+            # Monday of the ISO week containing session_date
+            current_monday = pd.Timestamp(session_date) - pd.Timedelta(
+                days=pd.Timestamp(session_date).weekday()
+            )
+            current_monday = current_monday.date()
+            # Keep only weekly bars strictly before the current week's Monday
+            completed = df_weekly[df_weekly.index.map(lambda ts: ts.date()) < current_monday]
+            if completed.empty:
+                return math.nan, math.nan
+        row = completed.iloc[-1]
         return float(row["high"]), float(row["low"])
 
     def build_key_levels(
         self,
         df_daily: Optional[pd.DataFrame] = None,
         df_weekly: Optional[pd.DataFrame] = None,
+        as_of_ts: Optional[pd.Timestamp] = None,
     ) -> list[LiquidityLevel]:
         """
         Convenience method: build PDH/PDL and PWH/PWL LiquidityLevel objects.
 
         Parameters
         ----------
-        df_daily  : pd.DataFrame, optional
-        df_weekly : pd.DataFrame, optional
+        df_daily  : pd.DataFrame, optional — daily bars (tf_manager "D")
+        df_weekly : pd.DataFrame, optional — weekly bars (tf_manager "W")
+        as_of_ts  : pd.Timestamp, optional — US/Central clock for
+            forming-bar exclusion. When provided, PDH/PDL/PWH/PWL come
+            from the most recent COMPLETED daily/weekly session.
+
+            Callers should pass the latest 1-min bar's timestamp so the
+            "today" and "current-week" forming bars get dropped. Omitting
+            this reproduces legacy behavior (iloc[-1]) which reads from
+            the forming bar — that bug at 2026-04-22 caused PWH to show
+            27,138 instead of the real 26,883.
 
         Returns
         -------
         list[LiquidityLevel]
         """
         levels: list[LiquidityLevel] = []
+        import math
 
         if df_daily is not None and not df_daily.empty:
-            pdh, pdl = self.get_pdh_pdl(df_daily)
-            import math
+            pdh, pdl = self.get_pdh_pdl(df_daily, as_of_ts=as_of_ts)
             if not math.isnan(pdh):
-                ts = df_daily.index[-1]
+                # Use the level's own bar timestamp (exclude forming)
+                if as_of_ts is not None:
+                    today_label = (as_of_ts + pd.Timedelta(hours=6)).date()
+                    completed = df_daily[df_daily.index.map(lambda t: t.date()) < today_label]
+                    ts = completed.index[-1] if not completed.empty else df_daily.index[-1]
+                else:
+                    ts = df_daily.index[-1]
                 levels.append(LiquidityLevel(price=pdh, type="PDH", timestamp=ts))
                 levels.append(LiquidityLevel(price=pdl, type="PDL", timestamp=ts))
 
         if df_weekly is not None and not df_weekly.empty:
-            pwh, pwl = self.get_pwh_pwl(df_weekly)
-            import math
+            pwh, pwl = self.get_pwh_pwl(df_weekly, as_of_ts=as_of_ts)
             if not math.isnan(pwh):
-                ts = df_weekly.index[-1]
+                if as_of_ts is not None:
+                    session_date = (as_of_ts + pd.Timedelta(hours=6)).date()
+                    current_monday = pd.Timestamp(session_date) - pd.Timedelta(
+                        days=pd.Timestamp(session_date).weekday()
+                    )
+                    current_monday = current_monday.date()
+                    completed = df_weekly[df_weekly.index.map(lambda t: t.date()) < current_monday]
+                    ts = completed.index[-1] if not completed.empty else df_weekly.index[-1]
+                else:
+                    ts = df_weekly.index[-1]
                 levels.append(LiquidityLevel(price=pwh, type="PWH", timestamp=ts))
                 levels.append(LiquidityLevel(price=pwl, type="PWL", timestamp=ts))
 

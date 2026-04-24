@@ -64,6 +64,31 @@ AI_MODEL_HYPOTHESIS_GEN = "claude-sonnet-4-6"  # Strategy Lab (when wired)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
+# Verbosity controls how much bot-internal reasoning gets pushed to Telegram.
+#   "quiet"   : only trade entries/exits, kill switch, heartbeat alerts,
+#               daily summary, VPIN shield + emergencies.
+#   "normal"  : quiet + kill-zone open/close summaries, liquidity sweeps,
+#               signal-fired alerts. ~15-25 msgs/day. (default)
+#   "verbose" : normal + new FVG forming inside active KZ, "near-miss"
+#               rejections (structurally valid but failed one gate),
+#               5-min MSS/BOS events. ~40-80 msgs/day.
+# Override via env: TELEGRAM_VERBOSITY=verbose in .env
+TELEGRAM_VERBOSITY = os.getenv("TELEGRAM_VERBOSITY", "normal").lower().strip()
+if TELEGRAM_VERBOSITY not in ("quiet", "normal", "verbose"):
+    TELEGRAM_VERBOSITY = "normal"
+
+# Per-alert-type throttle floors (seconds). The TelegramBot enforces these
+# across duplicate alert-types with the same bucket-key (e.g. the same
+# kill-zone + reject-reason won't re-alert for 5 min). 0 = no throttle.
+TELEGRAM_THROTTLE_SEC = {
+    "kz_enter":       0,    # once per KZ transition — no throttle needed
+    "kz_summary":     0,    # once per KZ close — no throttle needed
+    "sweep":          0,    # one per level (swept flag prevents re-alerting)
+    "fvg":           60,    # 1/min per (kz, direction) — verbose only
+    "near_miss":    300,    # 5 min per (kz, reason) — prevents reject-storm
+    "mss":          180,    # 3 min per (tf, direction) — verbose only
+}
+
 # ---------------------------------------------------------------------------
 # Risk Rules (HARDCODED — Sensei Rules)
 # ---------------------------------------------------------------------------
@@ -77,7 +102,11 @@ DAILY_PROFIT_CAP = 1500       # $1,500/day — stop trading after this
 HARD_CLOSE_HOUR = 15          # 3:00 PM CT — flatten everything
 HARD_CLOSE_MINUTE = 0
 MIN_CONFLUENCE = 7            # Minimum 7/20 to take a trade
-MAX_MNQ_TRADES_PER_DAY = 3   # Max 3 MNQ trades per day
+MAX_MNQ_TRADES_PER_DAY = 15  # Global daily cap. Silver Bullet v4 RTH Mode
+                              # uses kill_switch (3 consecutive losses) + per-KZ
+                              # reset as the real guards; this is an upper bound
+                              # that lets 3 zones × ~5 attempts each fit comfortably.
+                              # Was 3 (NY AM Reversal era) — too tight for RTH SB.
 MAX_CONTRACTS = 50            # Max 50 MNQ contracts
 TRADE_MANAGEMENT = "trailing"  # "fixed" | "partials_be" | "trailing"
 
@@ -152,6 +181,84 @@ CONFLUENCE_STANDARD = 7       # 7-8 = standard
 # < 7 = NO TRADE
 
 # ---------------------------------------------------------------------------
+# Risk Ladder + Per-KZ Loss Caps (2026-04-22 Combine-aware sizing)
+# ---------------------------------------------------------------------------
+# Default flat-$250 risk per trade + 3-consecutive-loss kill switch (existing
+# RISK_PER_TRADE / KILL_SWITCH_LOSSES) is NOT legal in the Topstep $50K
+# Combine — the current per-KZ reset allows up to 3 × 3 = 9 losses in a day
+# (-$2,250) which breaks the $1,000 DLL on trade #4. Live paper works
+# because no broker enforces the DLL halt, but Combine will bust us.
+#
+# Two independent knobs — toggle both OFF by default for backward-compat
+# with existing backtests / walk-forward JSONs:
+#
+# 1. RISK_LADDER — step down risk after each loss so we get 5 shots instead
+#    of 3 inside the same DLL budget:
+#       trade 1 loss: $250 risk (cumul -$250)
+#       trade 2 loss: $200         (cumul -$450)
+#       trade 3 loss: $150         (cumul -$600)
+#       trade 4 loss: $100         (cumul -$700)
+#       trade 5 loss: $50          (cumul -$750, $250 buffer to DLL)
+#    After 5 losses → hard halt for the day.
+#    Wins do NOT reset the ladder (C3 variant — eliminates martingale-like
+#    reset-after-win pattern). Position size for trade N depends only on
+#    losses_today count, not the cumulative PnL.
+#
+# 2. KZ_LOSS_CAPS — cap losing trades per kill zone so one bad KZ can't
+#    burn all daily shots. London's higher inherent loss rate (36% WR on
+#    2024 vs 47% NY AM) means we want to bleed less there. Default cap
+#    of 2 for London lets NY AM/PM still take setups after a bad London.
+#
+# Enable via:
+#   - config: set RISK_LADDER_ENABLED = True
+#   - backtest CLI: --risk-ladder 250,200,150,100,50 --kz-loss-cap london=2
+#   - live: read from .env if you want runtime override
+# ---------------------------------------------------------------------------
+RISK_LADDER_ENABLED: bool = False
+RISK_LADDER: tuple = (250, 200, 150, 100, 50)  # risk amounts by loss-count
+# Per-kill-zone cap on LOSING trades in a single day. Zones not listed have
+# no cap (only the ladder/DLL/kill-switch limits apply). Empty dict = no
+# KZ caps globally.
+KZ_LOSS_CAPS: dict = {}   # default off; set e.g. {"london": 2} to enable
+
+# ---------------------------------------------------------------------------
+# Silver Bullet — applicable confluence subset (Option B display, 2026-04-22)
+# ---------------------------------------------------------------------------
+# SB uses a different entry model than NY AM Reversal — it enters on FVG
+# proximal edge (not OTE fib), it does NOT require HTF bias, and it does not
+# scope HTF OB/FVG overlay. Additionally, its 5 structural requirements
+# (sweep, FVG, MSS, kill_zone, framework>=10pts) are HARD GATES — without
+# them the signal never reaches the scorer, so scoring them would add +7
+# guaranteed points that don't discriminate A+ from standard setups.
+#
+# SB_APPLICABLE_FACTORS is the subset of CONFLUENCE_WEIGHTS keys that
+# actually differentiate SB setup quality. The engine still uses the full
+# 19-pt scorer internally for historical compatibility (Signal /Trade DB
+# columns, 7 years of backtest comparability) — but logs + Telegram show
+# the SB-applicable sub-score alongside the full score so the number is
+# interpretable at a glance.
+#
+# Derivation: in strategies/silver_bullet.py.evaluate(), the scorer call
+# passes sweep, fvgs, obs, structure_event, kill_zone=True, htf_bias,
+# key_levels + live edge state (SWC/GEX/VPIN). It does NOT pass
+# swing_high/swing_low (so ote_fibonacci never scores) nor htf_fvgs/htf_obs
+# (so htf_ob_fvg_alignment never scores). Of the remaining 12 factors, the
+# 4 structural ones (liquidity_grab, fair_value_gap, market_structure_shift,
+# kill_zone) are gates — we exclude them from the sub-score too.
+SB_APPLICABLE_FACTORS = {
+    "target_at_pdh_pdl",      # +1 — target quality: institutional pool vs intraday
+    "order_block",            # +2 — Institutional Orderflow Entry Drill
+    "htf_bias_aligned",       # +1 — nice-to-have, not required by ICT
+    "sentiment_alignment",    # +1 — SWC
+    "gex_wall_alignment",     # +2 — dealer hedging flow reinforcement
+    "gamma_regime",           # +1 — vol regime
+    "vpin_validated_sweep",   # +1 — institutional flow confirmation
+    "vpin_quality_session",   # +1 — non-toxic session
+}
+# The SB-applicable denominator — sum of those 8 factors' weights.
+SB_APPLICABLE_MAX = sum(CONFLUENCE_WEIGHTS[k] for k in SB_APPLICABLE_FACTORS)  # 10
+
+# ---------------------------------------------------------------------------
 # Timeframes
 # ---------------------------------------------------------------------------
 TIMEFRAMES = {
@@ -189,8 +296,18 @@ KILL_ZONES = {
         "end": (15, 0),      # 3:00 PM CT
     },
     "silver_bullet": {
-        "start": (10, 0),    # 10:00 AM CT — inside NY AM KZ
-        "end": (11, 0),      # 11:00 AM CT
+        # ICT canonical (2026-04-20 audit): AM Silver Bullet is 10:00-11:00 ET
+        # = 9:00-10:00 CT. Previous 10:00-11:00 CT was wrong by 1 hour — the
+        # bot was firing Silver Bullet setups a full hour after the
+        # algorithmic window had closed. ICT windows are ALWAYS ET.
+        "start": (9, 0),     # 9:00 AM CT = 10:00 AM ET
+        "end": (10, 0),      # 10:00 AM CT = 11:00 AM ET
+    },
+    "pm_silver_bullet": {
+        # ICT PM Silver Bullet window: 2:00-3:00 PM ET = 1:00-2:00 PM CT.
+        # Third and last Silver Bullet window of the NY session day.
+        "start": (13, 0),    # 1:00 PM CT = 2:00 PM ET
+        "end": (14, 0),      # 2:00 PM CT = 3:00 PM ET
     },
 }
 
@@ -269,13 +386,19 @@ SWING_MAX_HISTORY = 50   # Keep last 50 swing points per detector instance
 GEX_REFRESH_INTERVAL_MIN = 30  # Refresh GEX data every 30 minutes
 
 # ---------------------------------------------------------------------------
-# FVG Mitigation Ratio
-# ICT standard: 50% (midpoint). Extended to 75% to keep FVGs alive longer,
-# allowing more time for price to return to the gap after a sweep.
-# Bearish FVG: mitigated when price >= bottom + ratio * range (filling upward)
-# Bullish FVG: mitigated when price <= top   - ratio * range (filling downward)
+# FVG Mitigation Mode
+# ICT rule (2026-04-20 video): an FVG is only INVALIDATED when a candle
+# BODY closes beyond the distal edge. Wicks through the gap do not count.
+# 50-75% fill is NORMAL retrace / add-position zone per ICT, NOT invalidation.
+#
+# Modes:
+#   "body_close" — ICT canonical: bullish FVG invalid when close < bottom,
+#                  bearish FVG invalid when close > top. No ratio.
+#   "ratio"      — legacy: FVG marked mitigated at FVG_MITIGATION_RATIO fill.
+#                  Kept for backward-compat and A/B testing only.
 # ---------------------------------------------------------------------------
-FVG_MITIGATION_RATIO = 0.75
+FVG_MITIGATION_MODE = "body_close"   # "body_close" (ICT) | "ratio" (legacy)
+FVG_MITIGATION_RATIO = 0.75          # only used when FVG_MITIGATION_MODE == "ratio"
 
 # ---------------------------------------------------------------------------
 # OB Proximity Gate
@@ -299,9 +422,40 @@ LIMIT_ORDER_TTL_BARS = 10         # cancel unfilled limit entry after N bars
 # OB Age Decay
 # OBs older than OB_MAX_AGE_BARS × 5-min bars are expired automatically.
 # 500 bars × 5 min = 2500 min ≈ 41h RTH ≈ 6.4 trading days.
-# Prevents stale weekly/multi-day OBs from polluting the active pool.
+#
+# Rationale 2026-04-20 (v3b revert): ICT methodology says OBs do not expire
+# by time — only by narrative/bias change. v2/v3a ran with AGE=96 as a
+# safety net; with FVG-required + Mean Threshold mitigation + ATR floor on
+# displacement (all added in v3), stale OBs self-purge and the aggressive
+# age cap no longer earns its keep. Reverting to 500 gives OBs the runway
+# ICT intends while still providing a hard ceiling for truly stale state.
 # ---------------------------------------------------------------------------
-OB_MAX_AGE_BARS = 1000            # 5-min bars; ~83h RTH (~13 trading days) before OB expires
+OB_MAX_AGE_BARS = 500             # 5-min bars; ~41h RTH (~6 trading days) before OB expires
+
+# ---------------------------------------------------------------------------
+# OB Detection — ICT canonical rules (2026-04-20)
+# ---------------------------------------------------------------------------
+# FVG-required filter (ICT hard rule): "without imbalance there is no order
+# block". Enforces that every OB emitted by the detector has an associated
+# FVG in the same direction within OB_FVG_LOOKFORWARD bars. If the FVG is
+# missing, the candle is NOT recorded as an OB.
+OB_REQUIRE_FVG = True
+# Displacement magnitude — AND of two conditions (v3b 2026-04-20):
+#   1. body >= OB_DISPLACEMENT_BODY_RATIO × OB body  (ICT proportional rule:
+#      "two to three times that as a rally away")
+#   2. body >= OB_DISPLACEMENT_ATR_FLOOR × ATR(14)   (noise floor — keeps
+#      tiny ranging-market setups from passing the proportional check with
+#      a 2pt-OB × 2 = 4pt displacement that is pure chop)
+# v3a used only rule 1 and produced 30% more low-quality trades. ICT
+# traders implicitly apply a visual noise filter; in code we need the
+# ATR floor to stand in for it.
+OB_DISPLACEMENT_BODY_RATIO = 2.0
+OB_DISPLACEMENT_ATR_FLOOR = 1.0
+# Mean Threshold — OB mitigated when close crosses the 50% point of the
+# OB body (open-to-close midpoint, NOT wick-to-wick). Bullish OB mitigated
+# when close < mean_threshold; bearish OB mitigated when close > mean_threshold.
+# "measure the open to the close on the down candle... do not use the wicks"
+OB_MEAN_THRESHOLD_RATIO = 0.50
 
 # ---------------------------------------------------------------------------
 # Database Tables

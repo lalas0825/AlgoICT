@@ -162,6 +162,9 @@ class Backtester:
         tf_manager,
         session_manager,
         trade_management: Optional[str] = None,
+        refresh_equal_levels: bool = False,
+        equal_levels_threshold_pct: float = 0.001,
+        equal_levels_min_count: int = 2,
     ):
         # Default to config.TRADE_MANAGEMENT so backtest and live share the
         # same exit regime out of the box. Prior default "fixed" silently
@@ -180,6 +183,9 @@ class Backtester:
         self.tf = tf_manager
         self.session = session_manager
         self.trade_management = trade_management
+        self.refresh_equal_levels = refresh_equal_levels
+        self.equal_levels_threshold_pct = equal_levels_threshold_pct
+        self.equal_levels_min_count = equal_levels_min_count
 
         self.trades: list = []
         self.signals: list = []
@@ -321,7 +327,12 @@ class Backtester:
 
                     for trade in closed_trades:
                         self.trades.append(trade)
-                        self.risk.record_trade(trade.pnl)
+                        # Pass kill_zone so RiskManager can track per-KZ
+                        # losing-trade counters for the cap + ladder.
+                        self.risk.record_trade(
+                            trade.pnl,
+                            kill_zone=getattr(trade, "kill_zone", None),
+                        )
                         if hasattr(self.risk, 'record_trading_day'):
                             self.risk.record_trading_day(current_date)
                         daily_pnl[current_date] = (
@@ -647,6 +658,27 @@ class Backtester:
         if swing_context is not None and not df_context.empty:
             swing_context.detect(df_context, context_tf)
 
+        # Intraday equal highs / lows into tracked_levels. This is the
+        # missing piece that kept 2026-04-22 live from trading the NY rally
+        # — PDL/PWL were out of reach, so bullish FVGs had "no sweep of
+        # SSL" all day. Clustering swings gives the strategy intraday
+        # institutional liquidity pools at repeated pivots (26,810 range
+        # equal lows, 27,050 range equal highs, etc).
+        if self.refresh_equal_levels and swing_entry is not None:
+            tracked = d.get("tracked_levels")
+            if tracked is not None:
+                try:
+                    from detectors.liquidity import LiquidityDetector
+                    LiquidityDetector.refresh_equal_levels_into(
+                        tracked=tracked,
+                        swing_points=swing_entry,
+                        timeframe=entry_tf,
+                        threshold_pct=self.equal_levels_threshold_pct,
+                        min_count=self.equal_levels_min_count,
+                    )
+                except Exception as exc:
+                    logger.debug("refresh_equal_levels_into failed: %s", exc)
+
         structure = d.get("structure")
         if structure is not None and swing_context is not None and not df_context.empty:
             new_struct_events = structure.update(df_context, swing_context, context_tf)
@@ -654,7 +686,16 @@ class Backtester:
             if ob is not None:
                 for _ev in new_struct_events:
                     if _ev.type in ("BOS", "CHoCH", "MSS"):
-                        ob.invalidate_by_structure(_ev.direction, current_bar_count=new_entry_idx)
+                        ob.invalidate_by_structure(_ev.direction, current_bar_count=len(df_entry) - 1)
+
+        # Entry-TF structure (1-min for Silver Bullet — Option B test 2026-04-23)
+        # 5-min context_tf lags the real-time CHoCH that forms during rapid
+        # ICT drops (observed 2026-04-23 NY AM where 5-min CHoCH didn't
+        # validate until 13:00 ET, 1h after price action). 1-min structure
+        # captures it at the moment of the drop. Risk: 1-min is noisier,
+        # may produce false CHoCHs on choppy days.
+        if structure is not None and swing_entry is not None and not df_entry.empty:
+            structure.update(df_entry, swing_entry, entry_tf)
 
         fvg = d.get("fvg")
         if fvg is not None and not df_entry.empty:

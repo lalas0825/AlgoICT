@@ -74,3 +74,26 @@ algoict-engine/*_output.txt
 algoict-engine/combine_*.log
 algoict-engine/*_suite*.log
 algoict-engine/*_rerun.log
+
+# Backtest ad-hoc log output (bt_*_all.log, bt_v2_london.log etc.)
+algoict-engine/bt_*.log
+algoict-engine/quick_bt_*.log
+algoict-engine/final_suite*.log
+algoict-engine/backtest_all_*.log
+algoict-engine/strategy_lab*.log
+algoict-engine/engine_smoke*.log
+
+# Temporary diagnostic script — not for commit
+_diag.ps1
+
+# ─── Analysis scratch logs (keep .md reports only) ──────────────────────────
+# Backtest JSONs / .log / .txt files in analysis/ are transient workspace.
+# Markdown reports (V9_FINAL_REPORT, combine_readiness_checklist) ARE tracked.
+algoict-engine/analysis/*.log
+algoict-engine/analysis/*.txt
+algoict-engine/analysis/combine_sim_*.log
+
+# ─── Ad-hoc walkforward launchers (scratch — not for commit) ────────────────
+# Current batch: run_4bt*.ps1, run_v[5-8]*.ps1 — keep tracked suites in scripts/
+algoict-engine/run_4bt*.ps1
+algoict-engine/run_v[0-9]*_walkforward.ps1

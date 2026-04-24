@@ -24,6 +24,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
+from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -191,7 +192,12 @@ class TestOnBrokerFillStop:
             )
         )
         expected_pnl = (19985.0 - 20000.0) * 2 * config.MNQ_POINT_VALUE
-        components.risk.record_trade.assert_called_once_with(pytest.approx(expected_pnl, abs=0.01))
+        # After 2026-04-22 ladder refactor, record_trade also receives
+        # kill_zone for per-KZ loss tracking.
+        components.risk.record_trade.assert_called_once_with(
+            pytest.approx(expected_pnl, abs=0.01),
+            kill_zone=mock.ANY,
+        )
 
 
 class TestOnBrokerFillTarget:
@@ -219,7 +225,10 @@ class TestOnBrokerFillTarget:
         )
 
         expected_pnl = (20000.0 - fill) * 1 * config.MNQ_POINT_VALUE
-        components.risk.record_trade.assert_called_once_with(pytest.approx(expected_pnl, abs=0.01))
+        components.risk.record_trade.assert_called_once_with(
+            pytest.approx(expected_pnl, abs=0.01),
+            kill_zone=mock.ANY,
+        )
 
     def test_target_fill_cancels_stop(self):
         components = _make_components()
@@ -334,7 +343,7 @@ class TestOnTradeClosed:
 
         asyncio.run(_on_trade_closed(components, state, trade))
 
-        components.risk.record_trade.assert_called_once_with(500.0)
+        components.risk.record_trade.assert_called_once_with(500.0, kill_zone=mock.ANY)
 
     def test_telegram_send_trade_closed_win(self):
         telegram = MagicMock()
@@ -374,14 +383,14 @@ class TestOnTradeClosed:
         trade = self._make_trade(pnl=100.0)
         # Should not raise
         asyncio.run(_on_trade_closed(components, state, trade))
-        components.risk.record_trade.assert_called_once_with(100.0)
+        components.risk.record_trade.assert_called_once_with(100.0, kill_zone=mock.ANY)
 
     def test_no_crash_when_supabase_none(self):
         components = _make_components(supabase=None)
         state = _State()
         trade = self._make_trade(pnl=200.0)
         asyncio.run(_on_trade_closed(components, state, trade))
-        components.risk.record_trade.assert_called_once_with(200.0)
+        components.risk.record_trade.assert_called_once_with(200.0, kill_zone=mock.ANY)
 
     def test_supabase_write_trade_called(self):
         supabase = MagicMock()

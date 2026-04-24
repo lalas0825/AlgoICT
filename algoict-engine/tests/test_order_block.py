@@ -303,7 +303,12 @@ class TestOrderBlockValidation:
 
         bullish = [ob for ob in obs if ob.direction == "bullish"]
         assert len(bullish) >= 1
-        assert all(not ob.validated for ob in bullish)
+        # Post-2026-04-20 semantics: FVG is a HARD filter at detection time
+        # (only enforced when fvg_detector is supplied), and `validated`
+        # reflects SWEEP presence only. With a sweep seeded and no FVG
+        # detector passed, the OB is emitted and marked validated because
+        # the sweep is what validates it in the new semantics.
+        assert all(ob.validated for ob in bullish)
 
 
 # ─── Tests: Mitigation ────────────────────────────────────────────────────────
@@ -337,7 +342,12 @@ class TestOrderBlockMitigation:
 
     def test_bullish_ob_not_mitigated_when_close_above_low(self):
         det, ob = self._build_bullish_ob()
-        close_above = ob.low + 0.5
+        # ICT Mean Threshold mitigation (2026-04-20): the trigger is
+        # close < mean_threshold (50% of body), not close < ob.low.
+        # A "safe" close must be ABOVE the mean threshold, not just above
+        # the wick distal — ICT considers retrace past 50% of body as
+        # an OB-quality event.
+        close_above = ob.mean_threshold + 0.5
         df_safe = _make_df([close_above], [close_above + 0.5], [close_above - 0.5], [close_above])
         det.update_mitigation(df_safe)
         assert not ob.mitigated
@@ -352,7 +362,9 @@ class TestOrderBlockMitigation:
 
     def test_bearish_ob_not_mitigated_when_close_below_high(self):
         det, ob = self._build_bearish_ob()
-        close_below = ob.high - 0.5
+        # ICT Mean Threshold (body 50%), not wick. Safe close must be
+        # below the mean threshold, not just below the wick high.
+        close_below = ob.mean_threshold - 0.5
         df_safe = _make_df([close_below], [close_below + 0.5], [close_below - 0.5], [close_below])
         det.update_mitigation(df_safe)
         assert not ob.mitigated

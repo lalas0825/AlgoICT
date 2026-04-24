@@ -109,6 +109,20 @@ class RiskManager:
         self._trading_days_set: set = set()         # dates with >=1 trade
         self._min_trading_days: int = 5             # Topstep minimum
 
+        # ── Risk Ladder + Per-KZ Loss Caps (2026-04-22) ─────────────────
+        # Ladder = step-down risk sizing after each loss so we get 5 shots
+        # instead of 3 inside the same $750-$1,000 DLL budget. DIFFERENT
+        # from consecutive_losses (which resets on win + can be reset per
+        # KZ) — losses_today only increments, never resets intraday.
+        self._ladder_enabled: bool = bool(getattr(config, "RISK_LADDER_ENABLED", False))
+        self._ladder_schedule: tuple = tuple(getattr(config, "RISK_LADDER", (250, 200, 150, 100, 50)))
+        self._losses_today: int = 0     # count of LOSING trades today; only increments
+        # Per-kill-zone losing-trade caps. Zones not listed have no cap.
+        # Mutated via set_kz_loss_caps(). Stats in _kz_losing_trades mirror
+        # the dict keys (plus any zone we see losses on). Both reset at EOD.
+        self._kz_loss_caps: dict = dict(getattr(config, "KZ_LOSS_CAPS", {}) or {})
+        self._kz_losing_trades: dict = {}
+
     # ------------------------------------------------------------------ #
     # Public API — Topstep Combine mode                                    #
     # ------------------------------------------------------------------ #
@@ -123,6 +137,7 @@ class RiskManager:
         stop_pct: float = 0.85,
         protective_after_target: bool = False,
         cruise_mode: bool = False,
+        reset_on_mll_breach: bool = False,
     ) -> None:
         """
         Enable Topstep Combine MLL-aware risk protection.
@@ -131,9 +146,15 @@ class RiskManager:
         ----------
         protective_after_target : bool
             If True, switch to 1-trade/day + halved size after target is
-            reached. This is for live funded-account protection, NOT for
-            combine simulations (the combine ends when target is reached,
-            so protective mode would just waste trades). Default False.
+            reached. For live funded-account protection, NOT for combine
+            simulations. Default False.
+        reset_on_mll_breach : bool
+            "Combine Mode with auto-reset" — when drawdown reaches MLL,
+            simulate a paid reset (counts as an event, resets balance/peak
+            to starting state) instead of permanently blocking trades.
+            Used for backtests that want to study the full-year edge while
+            still applying MLL position-size reductions at the warning and
+            caution zones. Default False (classic stop-on-breach behavior).
         """
         self._topstep_mode = True
         self._starting_balance = starting_balance
@@ -150,12 +171,52 @@ class RiskManager:
         self._cruise_enabled = cruise_mode
         self._cruise_mode = False
         self._trading_days_set = set()
+        self._reset_on_mll_breach = reset_on_mll_breach
+        self._combine_resets: int = 0
+        self._combine_reset_events: list = []   # list of (date, dd_at_reset)
         logger.info(
             "Topstep mode ON: balance=$%.2f, MLL=$%.2f, target=$%.2f, "
-            "protective=%s, cruise=%s",
+            "protective=%s, cruise=%s, reset_on_breach=%s",
             starting_balance, mll, profit_target, protective_after_target,
-            cruise_mode,
+            cruise_mode, reset_on_mll_breach,
         )
+
+    def _simulate_combine_reset(self) -> None:
+        """Simulate paying for a Combine reset: balance and peak are
+        restored to the starting value, all daily flags are cleared, and
+        the MLL zone drops back to normal. The reset event is logged and
+        counted so the backtest can compute reset-fee cost later.
+        """
+        self._combine_resets += 1
+        dd_at_reset = self.current_drawdown
+        self._combine_reset_events.append({
+            "reset_n": self._combine_resets,
+            "dd_at_reset": dd_at_reset,
+            "balance_before": self._current_balance,
+            "peak_before": self._peak_balance_eod,
+        })
+        logger.warning(
+            "Topstep Combine RESET #%d simulated (dd=$%.2f, bal=$%.2f -> $%.2f)",
+            self._combine_resets, dd_at_reset, self._current_balance,
+            self._starting_balance,
+        )
+        self._current_balance = self._starting_balance
+        self._peak_balance_eod = self._starting_balance
+        self._mll_zone = "normal"
+        # Clear daily flags so trading can resume immediately.
+        self.consecutive_losses = 0
+        self.kill_switch_active = False
+        self.profit_cap_active = False
+        self.daily_pnl = 0.0
+
+    @property
+    def combine_resets(self) -> int:
+        """Number of MLL-breach resets simulated so far."""
+        return getattr(self, "_combine_resets", 0)
+
+    @property
+    def combine_reset_events(self) -> list:
+        return getattr(self, "_combine_reset_events", [])
 
     def end_of_day(self) -> None:
         """
@@ -187,24 +248,42 @@ class RiskManager:
     # Public API — state updates                                           #
     # ------------------------------------------------------------------ #
 
-    def record_trade(self, pnl: float) -> None:
+    def record_trade(self, pnl: float, kill_zone: str = None) -> None:
         """
         Record a completed trade P&L and update all risk counters.
 
         Parameters
         ----------
         pnl : float — profit (+) or loss (-) in dollars
+        kill_zone : str, optional — KZ the trade was taken in. Required
+            for per-KZ loss cap tracking; ignored when no caps set.
         """
         self.daily_pnl += pnl
         self.trades_today += 1
 
         if pnl < 0:
             self.consecutive_losses += 1
+            # Ladder: monotonically increment on loss (never resets on win).
+            self._losses_today += 1
+            # Per-KZ loss counter (tracked even if no cap set — cheap).
+            if kill_zone:
+                self._kz_losing_trades[kill_zone] = (
+                    self._kz_losing_trades.get(kill_zone, 0) + 1
+                )
         else:
             self.consecutive_losses = 0
 
         # ── Kill switch: 3 consecutive losses ──────────────────────────
-        if self.consecutive_losses >= config.KILL_SWITCH_LOSSES:
+        # When the risk ladder is enabled, the 3-consecutive-loss kill
+        # switch is SUPPRESSED — the ladder (5 shots at step-down risk)
+        # IS the replacement loss-control mechanism. Triggering the old
+        # 3-loss halt would block shots 4 + 5 ($100 + $50) which the
+        # ladder explicitly budgets for inside the DLL. Daily-loss and
+        # ladder-exhaustion checks below still trip the kill switch.
+        if (
+            not self._ladder_enabled
+            and self.consecutive_losses >= config.KILL_SWITCH_LOSSES
+        ):
             self.kill_switch_active = True
             logger.warning(
                 "KILL SWITCH: %d consecutive losses (daily_pnl=%.2f)",
@@ -217,6 +296,17 @@ class RiskManager:
             logger.warning(
                 "KILL SWITCH: daily loss limit hit (daily_pnl=%.2f)",
                 self.daily_pnl,
+            )
+
+        # ── Ladder exhausted: all shots used, halt for the day ──────────
+        if (
+            self._ladder_enabled
+            and self._losses_today >= len(self._ladder_schedule)
+        ):
+            self.kill_switch_active = True
+            logger.warning(
+                "KILL SWITCH: risk ladder exhausted (%d losses, schedule=%s, daily_pnl=%.2f)",
+                self._losses_today, self._ladder_schedule, self.daily_pnl,
             )
 
         # ── Profit cap: $1,500/day ──────────────────────────────────────
@@ -375,6 +465,118 @@ class RiskManager:
         self.kill_switch_active = True
         logger.critical("EMERGENCY FLATTEN triggered — kill switch activated")
 
+    def reset_kill_switch_only(self, reason: str = "kz_boundary") -> None:
+        """
+        Reset ONLY the consecutive-loss kill switch — leaves daily P&L,
+        profit cap, MLL zones, VPIN state intact. Used when the strategy
+        crosses a kill-zone boundary (e.g., London ended, NY AM starts):
+        each session should get its own 3-loss budget instead of letting
+        a bad London morning lock NY out for the rest of the day.
+
+        Daily losses still accumulate toward DLL. If DLL is hit the full
+        kill_switch would re-activate on next trade anyway.
+        """
+        if self.consecutive_losses > 0 or self.kill_switch_active:
+            logger.info(
+                "Kill switch RESET (%s): losses %d -> 0, kill_active %s -> False",
+                reason, self.consecutive_losses, self.kill_switch_active,
+            )
+        self.consecutive_losses = 0
+        self.kill_switch_active = False
+        # CRITICAL: If the risk ladder is exhausted (5 losses already
+        # spent across any combination of KZs), KZ-boundary reset must NOT
+        # re-open trading. The ladder is day-global and kill_switch must
+        # stay active to honor the Combine DLL. losses_today persists.
+        if (
+            self._ladder_enabled
+            and self._losses_today >= len(self._ladder_schedule)
+        ):
+            self.kill_switch_active = True
+            logger.info(
+                "Kill switch re-activated post-reset: ladder exhausted "
+                "(%d losses)", self._losses_today,
+            )
+
+    # ------------------------------------------------------------------ #
+    # Risk Ladder + Per-KZ Loss Caps (2026-04-22)                          #
+    # ------------------------------------------------------------------ #
+
+    def enable_ladder(
+        self,
+        schedule: tuple = None,
+    ) -> None:
+        """
+        Turn on the post-loss risk ladder (5 shots inside 1 DLL budget).
+
+        Parameters
+        ----------
+        schedule : tuple[float], optional
+            Per-loss risk amounts in dollars. Default reads
+            config.RISK_LADDER. Sum should be <= $1,000 (Topstep DLL).
+            Example: (250, 200, 150, 100, 50) → sum $750 with $250 buffer.
+
+        Wins do NOT reset the ladder (C3 variant — _losses_today increments
+        monotonically, resets only at EOD). This eliminates the martingale-
+        like "reset after one win" pattern that lets us re-take full size
+        after breaking the DLL buffer.
+        """
+        self._ladder_enabled = True
+        if schedule is not None:
+            self._ladder_schedule = tuple(schedule)
+        logger.info(
+            "Risk ladder ENABLED: schedule=%s (max day loss if all shots miss: $%.0f)",
+            self._ladder_schedule, float(sum(self._ladder_schedule)),
+        )
+
+    def set_kz_loss_caps(self, caps: dict) -> None:
+        """
+        Set per-kill-zone losing-trade caps. Zones not in ``caps`` get no
+        cap from this mechanism (they only hit kill switch / DLL / ladder
+        halts). Example: ``{"london": 2}`` blocks new London entries after
+        2 losses in London — NY AM + NY PM still get their full budget.
+
+        Replaces any existing caps dict. Call with ``{}`` to clear.
+        """
+        self._kz_loss_caps = dict(caps or {})
+        logger.info("KZ loss caps set: %s", self._kz_loss_caps or "(none)")
+
+    def get_current_risk(self) -> float:
+        """
+        Return the dollar risk allowed for the NEXT trade.
+
+        When the ladder is disabled (default), returns config.RISK_PER_TRADE
+        ($250). When enabled, returns ladder_schedule[losses_today] — i.e.
+        the Nth loss has already happened when this is called, so we're
+        sizing trade N+1 (which will itself risk ladder[N]).
+
+        If _losses_today >= len(ladder), returns $0 and trade should be
+        blocked upstream by can_trade().
+        """
+        if not self._ladder_enabled:
+            return float(config.RISK_PER_TRADE)
+        if self._losses_today >= len(self._ladder_schedule):
+            return 0.0
+        return float(self._ladder_schedule[self._losses_today])
+
+    def can_trade_in_kz(self, kill_zone: str) -> tuple[bool, str]:
+        """
+        Check BOTH the global can_trade() gate AND the per-KZ loss cap.
+
+        Called by strategies before sizing a new entry. Returns the same
+        (allowed, reason) shape as can_trade() so callers treat both
+        identically.
+        """
+        # Per-KZ losing-trade cap (independent from kill switch)
+        cap = self._kz_loss_caps.get(kill_zone)
+        if cap is not None:
+            used = self._kz_losing_trades.get(kill_zone, 0)
+            if used >= cap:
+                return False, f"kz_loss_cap:{kill_zone}"
+        # Ladder exhausted
+        if self._ladder_enabled and self._losses_today >= len(self._ladder_schedule):
+            return False, "ladder_exhausted"
+        return self.can_trade()
+
     def record_trading_day(self, date) -> None:
         """
         Record that a trade occurred on this date. Call from the
@@ -414,6 +616,10 @@ class RiskManager:
         self._position_multiplier = 1.0
         self._vpin_halted = False
         self._vpin_halt_active = False
+        # Ladder + KZ caps reset daily — losses_today tallies from 0
+        # each morning. The ladder schedule + caps themselves persist.
+        self._losses_today = 0
+        self._kz_losing_trades = {}
 
         # MLL zone recalc at day start (the "stop" zone resets because
         # a new day gives the trader a fresh chance, but the drawdown
@@ -575,6 +781,16 @@ class RiskManager:
                 old_zone, self._mll_zone, dd,
                 self._peak_balance_eod, self._current_balance,
             )
+
+        # Combine-reset mode: when we hit the stop zone (DD >= stop_threshold
+        # = 85% of MLL by default), simulate a paid reset instead of
+        # permanently blocking trades. This lets backtests study full-year
+        # edge behavior with MLL position-size reductions still in effect.
+        if (
+            self._mll_zone == "stop"
+            and getattr(self, "_reset_on_mll_breach", False)
+        ):
+            self._simulate_combine_reset()
 
     def __repr__(self) -> str:
         base = (

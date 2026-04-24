@@ -38,7 +38,12 @@ try:
 except ImportError:
     TELEGRAM_AVAILABLE = False
 
-from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, MAX_CONFLUENCE, MNQ_POINT_VALUE
+from config import (
+    TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, MAX_CONFLUENCE, MNQ_POINT_VALUE,
+    SB_APPLICABLE_FACTORS, SB_APPLICABLE_MAX,
+    TELEGRAM_VERBOSITY, TELEGRAM_THROTTLE_SEC,
+)
+import time as _time_mod
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +75,54 @@ class TelegramBot:
         self._token = token
         self._chat_id = chat_id
         self._bot = Bot(token=token)
-        logger.info("TelegramBot initialized (chat_id: %s)", chat_id)
+        # Throttling state: {(alert_type, bucket_key): last_sent_epoch}.
+        # Callers pass bucket_key to differentiate within the same alert_type
+        # (e.g. (kz, reject_reason) so NY AM's reject alerts don't throttle
+        # London's). See config.TELEGRAM_THROTTLE_SEC for the per-type floors.
+        self._last_alert_ts: dict[tuple, float] = {}
+        self._verbosity = TELEGRAM_VERBOSITY
+        logger.info(
+            "TelegramBot initialized (chat_id: %s, verbosity=%s)",
+            chat_id, self._verbosity,
+        )
+
+    # ------------------------------------------------------------------ #
+    # Throttling / verbosity helpers
+    # ------------------------------------------------------------------ #
+
+    def _should_send(
+        self,
+        alert_type: str,
+        bucket_key: tuple = (),
+        min_verbosity: str = "normal",
+    ) -> bool:
+        """
+        Gate + throttle an alert call. Returns True if allowed (and updates
+        the throttle clock); False if suppressed.
+
+        Parameters
+        ----------
+        alert_type : str — key into config.TELEGRAM_THROTTLE_SEC (e.g. "sweep")
+        bucket_key : tuple — extra discriminators so similar alerts don't
+                     collide (e.g. (kz, reason) for near-miss rejects).
+        min_verbosity : "quiet" | "normal" | "verbose" — minimum verbosity
+                     level at which this alert type is permitted to send.
+        """
+        levels = {"quiet": 0, "normal": 1, "verbose": 2}
+        if levels.get(self._verbosity, 1) < levels.get(min_verbosity, 1):
+            return False
+
+        throttle_s = TELEGRAM_THROTTLE_SEC.get(alert_type, 0)
+        if throttle_s <= 0:
+            return True
+
+        now = _time_mod.time()
+        key = (alert_type,) + tuple(bucket_key)
+        last = self._last_alert_ts.get(key, 0.0)
+        if now - last < throttle_s:
+            return False
+        self._last_alert_ts[key] = now
+        return True
 
     # ------------------------------------------------------------------ #
     # Trade Alerts
@@ -126,12 +178,24 @@ class TelegramBot:
             stop_sign  = "-" if signal.direction == "long" else "+"
             tgt_sign   = "+" if signal.direction == "long" else "-"
 
+            # For Silver Bullet, also compute + show the SB-applicable
+            # sub-score (out of 10) so the number is interpretable on the
+            # SB-specific scale — the full /19 is kept for historical
+            # comparability (Option B — see SILVER_BULLET_STRATEGY_GUIDE §8).
+            conf_line = f"Confluence: {signal.confluence_score}/{MAX_CONFLUENCE}"
+            if signal.strategy == "silver_bullet":
+                sb_sub = sum(
+                    pts for key, pts in (signal.confluence_breakdown or {}).items()
+                    if key in SB_APPLICABLE_FACTORS
+                )
+                conf_line += f" (SB: {sb_sub}/{SB_APPLICABLE_MAX})"
+
             lines = [
                 "🔔 SIGNAL FIRED",
                 f"Strategy: {signal.strategy}",
                 f"Kill Zone: {signal.kill_zone}",
                 f"Direction: {direction}",
-                f"Confluence: {signal.confluence_score}/{MAX_CONFLUENCE}",
+                conf_line,
                 "",
                 f"Entry:    ${signal.entry_price:,.2f}",
                 f"Stop:     ${signal.stop_price:,.2f} ({stop_sign}{stop_pts:.2f} pts)",
@@ -286,6 +350,201 @@ class TelegramBot:
             return True
         except Exception as exc:
             logger.error("Failed to send trailing stop alert: %s", exc)
+            return False
+
+    # ------------------------------------------------------------------ #
+    # Verbose "what the bot sees" alerts (kill-zone context, sweeps,
+    # near-miss rejections, MSS events). All are verbosity + throttle-
+    # gated via self._should_send().
+    # ------------------------------------------------------------------ #
+
+    async def send_kz_enter(
+        self,
+        kz: str,
+        ts_str: str,
+        daily_bias: str = "n/a",
+        weekly_bias: str = "n/a",
+        tracked_levels: Optional[list] = None,
+        vpin: Optional[float] = None,
+        vpin_zone: str = "n/a",
+        swc_mood: Optional[str] = None,
+    ) -> bool:
+        """
+        Announce the bot entering a fresh kill zone.
+
+        Shows the context the bot will use to judge setups: HTF bias, which
+        key levels are still unswept (potential targets), VPIN state, SWC
+        mood. One alert per KZ transition.
+        """
+        if not self._should_send("kz_enter", (kz,), min_verbosity="normal"):
+            return False
+        try:
+            lines = [
+                f"KZ ARMED — {kz.upper()} at {ts_str}",
+                f"Bias:     daily={daily_bias} weekly={weekly_bias}",
+            ]
+            if tracked_levels:
+                # Group active (unswept) vs swept
+                active = [l for l in tracked_levels if not getattr(l, "swept", False)]
+                swept = [l for l in tracked_levels if getattr(l, "swept", False)]
+                # Show max 6 active levels to keep message compact
+                for l in active[:6]:
+                    lines.append(
+                        f"  - {getattr(l, 'type', '?')} @ "
+                        f"{getattr(l, 'price', 0):.2f} (active)"
+                    )
+                if len(active) > 6:
+                    lines.append(f"  ... (+{len(active) - 6} more active)")
+                if swept:
+                    lines.append(f"Swept this day: {len(swept)} level(s)")
+            if vpin is not None:
+                lines.append(f"VPIN:     {vpin:.3f} ({vpin_zone})")
+            if swc_mood:
+                lines.append(f"SWC mood: {swc_mood}")
+            msg = "\n".join(lines)
+            await self._bot.send_message(chat_id=self._chat_id, text=msg)
+            logger.info("KZ enter alert sent: %s", kz)
+            return True
+        except Exception as exc:
+            logger.debug("Failed to send KZ enter alert: %s", exc)
+            return False
+
+    async def send_kz_summary(
+        self,
+        kz: str,
+        ts_str: str,
+        stats: dict,
+    ) -> bool:
+        """
+        Summarize everything that happened inside a kill zone after it closed.
+
+        Parameters
+        ----------
+        kz : str — kill zone name that just closed
+        ts_str : str — human-friendly timestamp for the close
+        stats : dict — aggregate counters, expected keys:
+            fvgs_seen      : int  — new FVGs formed inside this KZ
+            sweeps         : int  — liquidity levels swept inside this KZ
+            evaluations    : int  — bars where strategy.evaluate() was called
+            rejections     : int  — evaluate() calls that returned None
+            reject_reasons : dict[str, int]  — counts by reason
+            signals_fired  : int  — signals that passed all gates
+            trades_taken   : int  — trades actually executed
+            pnl            : float — realized PnL inside this KZ (if known)
+        """
+        if not self._should_send("kz_summary", (kz,), min_verbosity="normal"):
+            return False
+        try:
+            lines = [
+                f"KZ CLOSED — {kz.upper()} at {ts_str}",
+                f"Evaluations: {stats.get('evaluations', 0)}",
+                f"FVGs seen:   {stats.get('fvgs_seen', 0)}",
+                f"Sweeps:      {stats.get('sweeps', 0)}",
+                f"Signals fired: {stats.get('signals_fired', 0)}",
+                f"Trades taken: {stats.get('trades_taken', 0)}",
+            ]
+            pnl = stats.get("pnl")
+            if pnl is not None:
+                sign = "+" if pnl >= 0 else ""
+                lines.append(f"Realized P&L: {sign}${pnl:,.2f}")
+            reasons = stats.get("reject_reasons") or {}
+            if reasons:
+                lines.append("")
+                lines.append("Top reject reasons:")
+                # Show top 4 reasons
+                ordered = sorted(reasons.items(), key=lambda x: -x[1])[:4]
+                for r, n in ordered:
+                    lines.append(f"  - {r}: {n}x")
+            msg = "\n".join(lines)
+            await self._bot.send_message(chat_id=self._chat_id, text=msg)
+            logger.info("KZ summary alert sent: %s", kz)
+            return True
+        except Exception as exc:
+            logger.debug("Failed to send KZ summary: %s", exc)
+            return False
+
+    async def send_sweep_detected(
+        self,
+        level_type: str,
+        price: float,
+        kz: str,
+        candle_high: float,
+        candle_low: float,
+        candle_close: float,
+        ts_str: str = "",
+    ) -> bool:
+        """
+        Announce a liquidity sweep — a key level got taken (wick-through,
+        close-back). This is what the bot waits for before looking for a
+        direction-matching FVG to enter on.
+        """
+        # The sweep itself only fires once per level (level.swept flips to
+        # True), so no secondary throttle needed. But we still gate on
+        # verbosity so "quiet" users don't get these.
+        if not self._should_send("sweep", (level_type, round(price, 2)),
+                                 min_verbosity="normal"):
+            return False
+        try:
+            # Which side did the sweep clean? BSL-ish types: wick above + close below.
+            bsl_types = {"BSL", "PDH", "PWH", "equal_highs"}
+            if level_type in bsl_types:
+                direction = "UP-wick (sell-side)"
+                implication = "watch for 5m MSS bearish + 1m bearish FVG"
+            else:
+                direction = "DOWN-wick (buy-side)"
+                implication = "watch for 5m MSS bullish + 1m bullish FVG"
+
+            msg = (
+                f"LIQUIDITY SWEPT — {kz.upper()} {ts_str}\n"
+                f"Level:   {level_type} @ {price:.2f}\n"
+                f"Candle:  H={candle_high:.2f} L={candle_low:.2f} "
+                f"C={candle_close:.2f}\n"
+                f"Type:    {direction}\n"
+                f"Watch:   {implication}"
+            )
+            await self._bot.send_message(chat_id=self._chat_id, text=msg)
+            logger.info("Sweep alert sent: %s @ %.2f", level_type, price)
+            return True
+        except Exception as exc:
+            logger.debug("Failed to send sweep alert: %s", exc)
+            return False
+
+    async def send_signal_near_miss(
+        self,
+        strategy: str,
+        kz: str,
+        ts_str: str,
+        reason: str,
+        details: Optional[dict] = None,
+    ) -> bool:
+        """
+        Announce a rejected signal that was structurally close to firing.
+
+        Only sent for rejects that are "interesting" — setups that had most
+        gates passed but failed one specific check (e.g. framework 8pts vs
+        10pt minimum). Not sent for routine rejects (outside_kz, max_trades,
+        past_cancel_time).
+
+        Throttled to 1 alert per (kz, reason) every 5 min — otherwise a
+        rejected setup would fire every minute for 10 minutes straight.
+        """
+        if not self._should_send("near_miss", (kz, reason),
+                                 min_verbosity="verbose"):
+            return False
+        try:
+            lines = [
+                f"NEAR-MISS — {strategy} rejected in {kz.upper()} at {ts_str}",
+                f"Reason: {reason}",
+            ]
+            if details:
+                for k, v in details.items():
+                    lines.append(f"  {k}: {v}")
+            msg = "\n".join(lines)
+            await self._bot.send_message(chat_id=self._chat_id, text=msg)
+            logger.info("Near-miss alert sent: %s/%s", kz, reason)
+            return True
+        except Exception as exc:
+            logger.debug("Failed to send near-miss alert: %s", exc)
             return False
 
     # ------------------------------------------------------------------ #

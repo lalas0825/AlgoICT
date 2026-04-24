@@ -11,6 +11,7 @@ from datetime import datetime, time
 import pytz
 
 from risk.risk_manager import RiskManager
+import config
 
 
 CT = pytz.timezone("US/Central")
@@ -117,7 +118,10 @@ class TestCanTrade:
 
     def test_max_trades_blocks_trade(self):
         rm = RiskManager()
-        rm.trades_today = 3   # MAX_MNQ_TRADES_PER_DAY = 3
+        # MAX_MNQ_TRADES_PER_DAY is 15 in config (v4 RTH Mode). The cap
+        # still gates, just at a higher threshold — this test verifies the
+        # gate fires, not the exact number.
+        rm.trades_today = config.MAX_MNQ_TRADES_PER_DAY
         allowed, reason = rm.can_trade()
         assert allowed is False
         assert reason == "max_trades"

@@ -139,6 +139,9 @@ class NYAMReversalStrategy:
         # flag flips this to False explicitly in tests that want to
         # double-guarantee the fallback is off regardless of config.
         self._ifvg_enabled: bool = getattr(config, "IFVG_ENABLED", False)
+        # Phantom-cleanup cooldown (2026-04-23 parity with SB). See
+        # silver_bullet.SilverBulletStrategy for full rationale.
+        self._phantom_cooldown_until: Optional[pd.Timestamp] = None
 
     # ------------------------------------------------------------------ #
     # Public API                                                           #
@@ -171,6 +174,21 @@ class NYAMReversalStrategy:
         # between two deliveries of the same minute), the correct setup
         # could never re-eval. Now we stamp only at the success exit.
         if ts == self._last_evaluated_bar_ts:
+            return None
+
+        # Phantom-cleanup cooldown — block re-fires for 5 bars after a
+        # limit-entry-never-filled cleanup. See silver_bullet.py for full
+        # rationale. Symmetric implementation to keep behavior consistent
+        # across both SB and NY AM.
+        if (
+            self._phantom_cooldown_until is not None
+            and ts < self._phantom_cooldown_until
+        ):
+            logger.info(
+                "EVAL ny_am [%s]: confluence=N/A, signal=reject, "
+                "reason=phantom_cooldown (until %s)",
+                _ts_hm(ts), _ts_hm(self._phantom_cooldown_until),
+            )
             return None
 
         active_zone = next(
@@ -219,15 +237,27 @@ class NYAMReversalStrategy:
         direction = "long" if bias_dir == "bullish" else "short"
 
         # ── 3. 15min structure: MSS or BOS in HTF direction ────────────
+        # Session recency filter (2026-04-23 Bug A fix): structure detector
+        # holds events from warm-up (multiple days). ICT requires structure
+        # shift WITHIN the current session, not stale events from prior
+        # days. Same rationale as silver_bullet.py — see that file for the
+        # full audit trail from 2026-04-23 NY AM phantom fires.
+        session_start = ts.normalize()
         structure_events = self.detectors["structure"].get_events(timeframe="15min")
-        aligned = [
+        fresh_events = [
             e for e in structure_events
-            if e.type in ("MSS", "BOS") and e.direction == bias_dir
+            if e.timestamp >= session_start
+        ]
+        aligned = [
+            e for e in fresh_events
+            if e.type in ("MSS", "BOS", "CHoCH") and e.direction == bias_dir
         ]
         if not aligned:
             logger.info(
-                "EVAL ny_am [%s]: confluence=N/A, signal=reject, reason=no_valid_setup (no_15min_struct)",
-                _ts_hm(ts),
+                "EVAL ny_am [%s]: confluence=N/A, signal=reject, "
+                "reason=no_valid_setup (no_15min_struct, %d total events, "
+                "%d from today)",
+                _ts_hm(ts), len(structure_events), len(fresh_events),
             )
             return None
         last_struct = aligned[-1]
@@ -410,6 +440,15 @@ class NYAMReversalStrategy:
         if self._last_evaluated_bar_ts == ts:
             self._last_evaluated_bar_ts = None
 
+    def record_phantom_cleanup(self, ts, cooldown_minutes: int = 5) -> None:
+        """Arm phantom-cleanup cooldown after a failed-fill cleanup. See
+        strategies/silver_bullet.py for full rationale (2026-04-23)."""
+        self._phantom_cooldown_until = ts + pd.Timedelta(minutes=cooldown_minutes)
+        logger.info(
+            "ny_am_reversal: phantom cooldown ARMED until %s (ts=%s, +%dmin)",
+            self._phantom_cooldown_until, ts, cooldown_minutes,
+        )
+
     def notify_trade_executed(self, signal) -> None:
         """Called by the main loop AFTER the broker confirms entry fill.
 
@@ -433,3 +472,4 @@ class NYAMReversalStrategy:
         self.trades_today = 0
         self._trades_by_zone = {z: 0 for z in self.KILL_ZONES}
         self._last_evaluated_bar_ts = None
+        self._phantom_cooldown_until = None

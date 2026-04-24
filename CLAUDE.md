@@ -51,7 +51,7 @@
 
 ---
 
-## Confluence Scoring (max **19** pts, min 7)
+## Confluence Scoring (engine-wide max **19** pts · NY AM min 7)
 
 > Source of truth: `config.CONFLUENCE_WEIGHTS`. `MAX_CONFLUENCE` is derived
 > (`sum(weights.values())`) so logs / telemetry / Telegram alerts always
@@ -75,7 +75,31 @@
 | VPIN validated sweep | +1 | VPIN |
 | VPIN quality session | +1 | VPIN |
 
-**Sum = 19.** Tiers: **12+ = A+ full position | 9-11 = high | 7-8 = standard | <7 = NO TRADE**
+**Sum = 19.** NY AM Reversal tiers: **12+ = A+ | 9-11 = high | 7-8 = standard | <7 = NO TRADE**.
+
+### Silver Bullet sub-score (SB_APPLICABLE_FACTORS, 2026-04-22)
+
+SB uses a different entry model (FVG-only, no HTF bias required, no OTE entry) — most 19-pt factors don't apply. `config.SB_APPLICABLE_FACTORS` isolates the 8 that actually discriminate SB setup quality:
+
+| Factor | Pts SB |
+|--------|--------|
+| Target at PDH/PDL/PWH/PWL | +2 |
+| Order Block overlap (Institutional Orderflow Drill) | +1 |
+| HTF bias aligned | +1 |
+| Sentiment alignment (SWC) | +1 |
+| GEX wall alignment | +2 |
+| Gamma regime | +1 |
+| VPIN validated sweep | +1 |
+| VPIN quality session | +1 |
+| **SB_APPLICABLE_MAX** | **10** |
+
+**Structural gates (0 pts each, must all pass)**: sweep, 1-min FVG, 5-min MSS/BOS, kill zone, framework ≥10pts.
+
+**Not applicable to SB (always 0)**: OTE Fibonacci (SB enters on FVG proximal, not 61.8-78.6 retrace), HTF OB/FVG alignment (SB doesn't scope HTF overlay).
+
+SB does **NOT enforce a min_confluence gate** (Q1 2024 analysis confirmed scoring was noise for SB — higher scores had lower WR). Real filtering: structural gates + kill switch + MLL + VPIN. The score is still computed for paper trail; logs + Telegram show dual display: `confluence=11/19 (SB: 4/10)`.
+
+Full details in [`SILVER_BULLET_STRATEGY_GUIDE.md`](SILVER_BULLET_STRATEGY_GUIDE.md) §8.
 
 ---
 
@@ -277,11 +301,11 @@ algoict/
 
 ## Estrategias
 
-### 1. NY AM Reversal (1:3) — Primary
-W/D bias → 15min structure → 5min entry. Kill Zone 8:30-11:00 AM. Max 2/dia.
+### 1. NY AM Reversal (1:3) — OB-based primary
+W/D bias → 15min structure → 5min OB entry at OTE fib. Kill Zone 8:30-12:00 CT. Uses full 19-pt scoring with hard gate `MIN_CONFLUENCE=7`.
 
-### 2. Silver Bullet (1:2)
-5min context → 1min entry. Kill Zone 10:00-11:00 AM. Max 1/dia.
+### 2. Silver Bullet v4 RTH Mode — FVG-only, no-bias
+5min context → 1min FVG entry. ICT canonical windows are narrower (London SB 02-03, AM SB 09-10, PM SB 13-14 CT), but we run the wider kill-zone windows (London 01-04, NY AM 08:30-12, NY PM 13:30-15) to capture setups forming slightly outside. Trailing exit (no fixed TP). No HTF bias required. No confluence gate (replaced by structural gates + kill switch). Unlimited trades per zone; per-KZ kill-switch reset so losing 3 in London doesn't lock NY AM. Full spec in `SILVER_BULLET_STRATEGY_GUIDE.md`.
 
 ### 3. Swing HTF (1:2)
 Weekly → Daily → 4H entry. S&P 500 stocks. Hold 2-15 dias. Max 5 positions.
@@ -293,11 +317,11 @@ Weekly → Daily → 4H entry. S&P 500 stocks. Hold 2-15 dias. Max 5 positions.
 | Regla | Valor |
 |-------|-------|
 | Riesgo/trade | $250 — floor() + expand stop |
-| Kill switch | 3 losses ($750) → done |
+| Kill switch | 3 consecutive losses per SESSION (not day) → halt that KZ only |
 | Profit cap | $1,500/dia |
 | Hard close | 3:00 PM CT |
-| Min confluence | 7/19 |
-| Max MNQ trades/zona | 2 (ny_am_reversal) / 1 (silver_bullet) |
+| Min confluence | NY AM: 7/19 (hard gate) · SB: 0 (no gate, structural gates handle) |
+| Max MNQ trades/dia | 15 (global cap; kill_switch + MLL handle real filtering) |
 | Heartbeat | 5s o flatten |
 | VPIN shield | activar ≥0.70 · resume ≤0.55 (histéresis) |
 | Topstep MLL/DLL | $2,000 / $1,000 |
@@ -379,6 +403,41 @@ Este patrón cerró el bug 2026-04-18 donde flatten paths perdían P&L silently.
 
 ---
 
+## Telegram Verbosity (2026-04-22)
+
+Tres niveles vía `TELEGRAM_VERBOSITY` en `.env` (default `normal`):
+
+| Level | Alertas | Volumen/día |
+|-------|---------|-------------|
+| `quiet` | Entries/exits, kill switch, heartbeat, daily summary, VPIN shield | 5–10 |
+| `normal` | Anterior + **KZ enter** (bias + tracked levels + VPIN + SWC) + **KZ close summary** (evals, sweeps, rejects top-4) + **liquidity sweep detected** (level, candle, watch-for) + signal fired (dual /19 /10 display) | 15–25 |
+| `verbose` | Anterior + **near-miss rejects** (FVG present + no sweep, framework <10pts, no 5min MSS, etc.) | 40–80 |
+
+**Throttling built-in** (`config.TELEGRAM_THROTTLE_SEC`):
+- `near_miss`: 300s por `(kz, reason)` → 18 rejects iguales = 3 alertas máx
+- `sweep`: 0 (flag `level.swept` previene re-alertar)
+- `kz_enter` / `kz_summary`: 0 (una por transición KZ)
+
+**Implementación**:
+- `alerts/telegram_bot.py` — `_should_send()` gate unificado (verbosity + per-bucket throttle)
+- `strategies/silver_bullet.py` — `last_rejection` dict con `is_near_miss` flag en 5 reject sites
+- `main.py._evaluate_strategies` — KZ transition detection, KZ stats tracking (evaluations, fvgs_seen, sweeps, rejections, reject_reasons, signals_fired, trades_taken, pnl), drain de `state.pending_sweep_alerts` en async context
+
+---
+
+## Equal Levels Refresh (OFF per 2026-04-22 A/B)
+
+`detectors/liquidity.py.refresh_equal_levels_into()` detecta clusters de swing highs/lows dentro de `threshold_pct` (default 0.1% ≈ 27pts @ MNQ 27K) y los merge a `tracked_levels`. Wired al backtester vía `--equal-levels` (+ `--equal-levels-threshold-pct` / `--equal-levels-min-count`).
+
+**Q1 2024 A/B**: feature **neta negativa** (-$1,283, PF -0.08). Desglose:
+- London KZ regresa fuerte (-$2,064) — sweeps overnight de equal-levels son algo noise
+- NY AM (+$492) y NY PM (+$288) mejoran modestamente
+- Simulated NY-only hybrid: +$780 vs baseline, PF 1.47, +1.9pp WR → clean win si gated
+
+**Decisión**: OFF en live por defecto. Considerar NY-only gate tras más sesiones reales. NO wired to main.py.
+
+---
+
 ## Database — 7 Tables
 
 `trades` `signals` `daily_performance` `bot_state` `market_levels` `post_mortems` `strategy_candidates`
@@ -432,6 +491,7 @@ SUPABASE_URL=
 SUPABASE_KEY=
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=
+TELEGRAM_VERBOSITY=normal   # quiet | normal | verbose
 ANTHROPIC_API_KEY=
 ALPHA_VANTAGE_API_KEY=
 MENTHORQ_API_KEY=
@@ -466,5 +526,54 @@ Requiere migration `0003_bot_state_overlays.sql` aplicada.
 
 ---
 
-*AlgoICT — SaaS Factory V4 | 20 Skills | 6 Intelligence Layers | 19-Point Confluence*
+## Session Snapshot (2026-04-22)
+
+### 7-year walk-forward (SB v8 trailing RTH Mode, 2019–2025)
+
+| Año | Trades | WR | P&L | PF | MaxDD | Resets |
+|-----|--------|-----|------|-----|-------|--------|
+| 2019 | 2,110 | 43.1% | +$70,028 | 1.68 | $3,030 | 10 |
+| 2020 | 2,049 | 43.7% | +$92,203 | 1.84 | $5,813 | 10 |
+| 2021 | 1,916 | 40.7% | +$110,598 | 2.06 | $5,790 | 12 |
+| 2022 | 2,101 | 44.8% | +$103,804 | 2.01 | $3,810 | 8 |
+| 2023 | 1,991 | 45.3% | +$91,062 | 1.88 | $4,261 | 8 |
+| 2024 | 2,067 | 44.1% | +$115,547 | 2.05 | $3,864 | 7 |
+| 2025 | 1,952 | 44.9% | +$89,759 | 1.86 | $3,032 | 9 |
+| **AGG** | **14,186** | **43.8%** | **+$673,000** | **1.91** | — | 64 |
+
+**Consistency** (what the docs used to miss):
+- **0 negative years** · mean $96,143 · median $92,203 · std dev $15,320
+- **Monthly hit rate 91.7%** — 77 of 84 months positive (~1 negative month/year)
+- **Daily hit rate 54.4%** — 983 of 1,808 trading days positive
+- **DLL breach rate 0.61%** — only 11 days (≤-$1000) in 1,808 trading days
+- **KZ contribution** (agg): London 64.9% · NY AM 24.4% · NY PM 10.7%
+  - London is the **workhorse in every single year** — not a Q1 anomaly
+
+**Full 2024**: 2,067 trades · 44.1% WR · **+$115,547 · PF 2.05** (corrected from "1.47" which was Q1 PF mis-propagated) · max DD $3,864 · 7 combine resets · only Sept negative month.
+
+### Tests + infra
+- Tests: 1,477 passing (engine) · dashboard build ✓
+- Combine Simulator: 72.4% pass rate (210 random-start attempts)
+
+### Key bug fixes 2026-04-22
+- **Phantom fill bug** in `_poll_position_status` — bot reported +$2,154 "win" when entry never filled. Fix: branch on `entry_order.filled_price is None` → cancel remaining orders + rollback KZ counter + clean state.
+- **MAX_MNQ_TRADES_PER_DAY**: 3 → 15 (was silently blocking NY AM after London filled the 3-trade global cap).
+- **1-min FVG + 5-min structure** now detect in live (was only 5-min FVG / 15-min structure — SB never saw the setups it's wired to consume).
+- **end_of_day()** now called in `_reset_for_new_day` (Topstep MLL trailing peak never advanced before).
+
+### A/B tests rejected (features stay OFF)
+- **equal_levels_refresh** (Q1 2024) — flat-to-neg (−$1,283; London regresses −$2,064). NY-only hybrid positive (+$780) but not worth the complexity until post-Combine validation. Kept OFF.
+- **Risk ladder 250/200/150/100/50 + London 2L cap** (Q1 2024) — survives better (−71% combine resets, −28% max DD) BUT cuts P&L 82% ($14,768 → $2,638, PF 1.47 → 1.15). **Critical insight**: London cap would have cut the KZ that produces 64.9% of 7-year P&L. Rejected — V8 flat $250 retained.
+
+### Current feature decisions
+- **`RISK_LADDER_ENABLED` = False** (code in place, default off; ready if ever needed)
+- **`KZ_LOSS_CAPS` = {}** (no per-KZ loss caps)
+- **`equal_levels_refresh` OFF** (code in detectors/liquidity.py, wired only in backtester)
+- **SB confluence gate** — removed (scoring was noise for SB; structural gates handle filtering)
+- **`TRADE_MANAGEMENT` = "trailing"** (matches live + backtest)
+- **Silver Bullet v4 RTH Mode** — active; wider KZ coverage (London 01-04 / NY AM 08:30-12 / NY PM 13:30-15 CT)
+
+---
+
+*AlgoICT — SaaS Factory V4 | 20 Skills | 6 Intelligence Layers | 19-Point Confluence (SB sub: 10)*
 *"ICT ve velas. SWC ve contexto. GEX ve fuerzas. VPIN ve smart money. Strategy Lab evoluciona. Post-Mortem aprende."*

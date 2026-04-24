@@ -48,13 +48,18 @@ from detectors.fair_value_gap import FairValueGapDetector
 logger = logging.getLogger(__name__)
 
 OB_MAX_HISTORY = getattr(config, "OB_MAX_HISTORY", 100)
-OB_ATR_MULTIPLIER = getattr(config, "OB_ATR_MULTIPLIER", 1.5)
+OB_ATR_MULTIPLIER = getattr(config, "OB_ATR_MULTIPLIER", 1.5)  # legacy — no longer used for displacement
 OB_ATR_PERIOD = getattr(config, "OB_ATR_PERIOD", 14)
 OB_MAX_AGE_BARS = getattr(config, "OB_MAX_AGE_BARS", 500)
 # How many bars back to look for a nearby sweep
 OB_SWEEP_LOOKBACK = getattr(config, "OB_SWEEP_LOOKBACK", 5)
 # How many bars forward to look for an FVG after the OB candle
 OB_FVG_LOOKFORWARD = getattr(config, "OB_FVG_LOOKFORWARD", 3)
+# ICT canonical rules
+OB_REQUIRE_FVG = getattr(config, "OB_REQUIRE_FVG", True)
+OB_DISPLACEMENT_BODY_RATIO = getattr(config, "OB_DISPLACEMENT_BODY_RATIO", 2.0)
+OB_DISPLACEMENT_ATR_FLOOR = getattr(config, "OB_DISPLACEMENT_ATR_FLOOR", 1.0)
+OB_MEAN_THRESHOLD_RATIO = getattr(config, "OB_MEAN_THRESHOLD_RATIO", 0.50)
 
 
 @dataclass
@@ -67,7 +72,14 @@ class OrderBlock:
     timeframe: str
     candle_index: int   # index in the original DataFrame
     timestamp: pd.Timestamp
-    validated: bool = False   # True when near sweep + FVG
+    # open_price / close_price default to NaN sentinel when not supplied
+    # (e.g. legacy callers constructing OBs directly in tests). The
+    # mean_threshold property falls back to the distal edge in that case,
+    # preserving the pre-2026-04-20 `close < ob.low` mitigation behavior.
+    # Detector-emitted OBs always populate these fields from real candle data.
+    open_price: float = float("nan")
+    close_price: float = float("nan")
+    validated: bool = False   # True when sweep is present (FVG is already guaranteed by OB_REQUIRE_FVG)
     mitigated: bool = False
 
     @property
@@ -79,6 +91,28 @@ class OrderBlock:
     def distal(self) -> float:
         """Furthest edge: bottom for bullish OB, top for bearish OB."""
         return self.low if self.direction == "bullish" else self.high
+
+    @property
+    def mean_threshold(self) -> float:
+        """ICT Mean Threshold — 50% of OB BODY (open-to-close midpoint).
+        Ignores wicks. Used to judge mitigation / retrace depth.
+        Not to be confused with FVG 'Consequent Encroachment' (50% of gap).
+
+        Fallback: if open/close were not supplied (legacy construction),
+        return the distal edge so callers see the old close-vs-distal
+        mitigation behavior instead of NaN comparisons.
+        """
+        import math
+        if math.isnan(self.open_price) or math.isnan(self.close_price):
+            return self.low if self.direction == "bullish" else self.high
+        body_min = min(self.open_price, self.close_price)
+        body_max = max(self.open_price, self.close_price)
+        return body_min + OB_MEAN_THRESHOLD_RATIO * (body_max - body_min)
+
+    @property
+    def body_size(self) -> float:
+        """Absolute open-close body size of the OB candle."""
+        return abs(self.close_price - self.open_price)
 
     def __repr__(self) -> str:
         v = "validated" if self.validated else "unvalidated"
@@ -116,23 +150,34 @@ class OrderBlockDetector:
         fvg_detector: Optional[FairValueGapDetector] = None,
     ) -> list[OrderBlock]:
         """
-        Scan candles for new Order Blocks.
+        Scan candles for new Order Blocks (ICT methodology).
 
         An Order Block is the LAST candle in the opposite direction
         immediately before a displacement candle.
+
+        ICT rules enforced here (2026-04-20):
+          1. Displacement body must be >= OB_DISPLACEMENT_BODY_RATIO × OB body
+             (ICT: "two to three times that as a rally away"). ATR-based
+             thresholds are NOT used — ICT measures proportionally to the OB.
+          2. An FVG in the same direction must exist within OB_FVG_LOOKFORWARD
+             bars after the OB candle (ICT hard rule: "without the imbalance
+             there is no order block"). Controlled by OB_REQUIRE_FVG.
+          3. A liquidity sweep nearby is OPTIONAL — its presence sets
+             `validated=True` (A+ tier = Institutional Orderflow Entry Drill).
 
         Parameters
         ----------
         candles      : pd.DataFrame — OHLCV with DatetimeIndex
         timeframe    : str
-        swing_points : SwingPointDetector, optional — used for validation
-        fvg_detector : FairValueGapDetector, optional — used for validation
+        swing_points : SwingPointDetector, optional — used for sweep check
+        fvg_detector : FairValueGapDetector, optional — REQUIRED when
+                       OB_REQUIRE_FVG is True
 
         Returns
         -------
         list[OrderBlock] — newly detected OBs
         """
-        if len(candles) < OB_ATR_PERIOD + 2:
+        if len(candles) < 3:
             return []
 
         existing_keys = {(ob.timestamp, ob.timeframe) for ob in self.order_blocks}
@@ -144,41 +189,73 @@ class OrderBlockDetector:
         closes = candles["close"].values
         timestamps = candles.index
 
-        # Rolling ATR (true range simplified)
+        # ATR for the displacement noise-floor check (v3b). Using the same
+        # rolling-TR implementation that _compute_atr exposes for tests.
         atr = self._compute_atr(highs, lows, closes)
 
         for i in range(1, len(candles)):
-            # Check if candle[i] is a displacement candle
-            displacement_dir = self._is_displacement(
-                opens, closes, i, atr,
-            )
-            if displacement_dir is None:
+            # 1. Candidate displacement candle: directional, non-zero body.
+            body_i = abs(closes[i] - opens[i])
+            if body_i == 0:
+                continue
+            if closes[i] > opens[i]:
+                displacement_dir = "bullish"
+            elif closes[i] < opens[i]:
+                displacement_dir = "bearish"
+            else:
                 continue
 
-            # Find the last opposite-direction candle before i
+            # 2. Find the last opposite-direction candle before i.
             ob_idx = self._find_last_opposite_candle(
                 opens, closes, i, displacement_dir,
             )
             if ob_idx is None:
                 continue
 
+            # 3a. ICT displacement magnitude rule: 2-3× OB body.
+            ob_body = abs(closes[ob_idx] - opens[ob_idx])
+            if ob_body == 0:
+                continue  # doji OB is not a valid ICT OB
+            if body_i < OB_DISPLACEMENT_BODY_RATIO * ob_body:
+                continue  # displacement too weak relative to OB size
+
+            # 3b. Noise floor: displacement must also clear ATR threshold.
+            # Without this, 2pt OB × 2 = 4pt displacement passes in pure
+            # chop. v3a made trades 30% worse without this check.
+            if atr[i] > 0 and body_i < OB_DISPLACEMENT_ATR_FLOOR * atr[i]:
+                continue
+
             ts = timestamps[ob_idx]
             if (ts, timeframe) in existing_keys:
                 continue
 
+            # 4. ICT hard rule: OB requires an FVG in the displacement zone.
+            # Only enforced when a FairValueGapDetector is supplied — callers
+            # that do not provide one (e.g. unit tests isolating OB logic)
+            # skip this filter. Production wiring (main.py, backtester.py)
+            # always passes the FVG detector.
+            if OB_REQUIRE_FVG and fvg_detector is not None:
+                has_fvg = self._has_fvg_forward(
+                    ob_idx, timestamps, fvg_detector, displacement_dir, timeframe,
+                )
+                if not has_fvg:
+                    continue  # no FVG = no OB per ICT
+
+            # 5. Optional sweep check — promotes OB to "validated" (A+) tier.
+            has_sweep = self._has_sweep_back(
+                ob_idx, timestamps, swing_points, displacement_dir, timeframe,
+            ) if swing_points is not None else False
+
             ob = OrderBlock(
                 high=float(highs[ob_idx]),
                 low=float(lows[ob_idx]),
+                open_price=float(opens[ob_idx]),
+                close_price=float(closes[ob_idx]),
                 direction=displacement_dir,
                 timeframe=timeframe,
                 candle_index=ob_idx,
                 timestamp=ts,
-            )
-
-            # Validate against sweep + FVG
-            ob.validated = self._validate(
-                ob, ob_idx, timestamps,
-                swing_points, fvg_detector, timeframe,
+                validated=has_sweep,
             )
 
             new_obs.append(ob)
@@ -196,10 +273,20 @@ class OrderBlockDetector:
 
     def update_mitigation(self, candles: pd.DataFrame) -> list[OrderBlock]:
         """
-        Mark active OBs as mitigated when price trades through their distal end.
+        Mark active OBs as mitigated using ICT's Mean Threshold rule.
 
-        Bullish OB mitigated: close < ob.low
-        Bearish OB mitigated: close > ob.high
+        ICT canonical rule (2026-04-20 video): an OB loses probability when
+        price CLOSES past the Mean Threshold of the OB BODY. "measure the
+        open to the close on the down candle... do not use the wicks".
+
+        Bullish OB mitigated: close < mean_threshold (50% of body from distal)
+        Bearish OB mitigated: close > mean_threshold
+
+        This is STRICTER than the previous `close < ob.low` rule — the OB is
+        invalidated earlier, when the retrace penetrates halfway into the
+        body, not only when the full wick distal is breached. Reasoning:
+        ICT says "the best order blocks will not see price trade down below
+        the midway point of the entire body of the candle".
 
         Parameters
         ----------
@@ -216,14 +303,21 @@ class OrderBlockDetector:
         for ob in self.order_blocks:
             if ob.mitigated:
                 continue
-            if ob.direction == "bullish" and current_close < ob.low:
+            mt = ob.mean_threshold
+            if ob.direction == "bullish" and current_close < mt:
                 ob.mitigated = True
                 newly_mitigated.append(ob)
-                logger.debug("Bullish OB [%.2f–%.2f] mitigated", ob.low, ob.high)
-            elif ob.direction == "bearish" and current_close > ob.high:
+                logger.debug(
+                    "Bullish OB [%.2f-%.2f] mitigated at %.2f (MT=%.2f)",
+                    ob.low, ob.high, current_close, mt,
+                )
+            elif ob.direction == "bearish" and current_close > mt:
                 ob.mitigated = True
                 newly_mitigated.append(ob)
-                logger.debug("Bearish OB [%.2f–%.2f] mitigated", ob.low, ob.high)
+                logger.debug(
+                    "Bearish OB [%.2f-%.2f] mitigated at %.2f (MT=%.2f)",
+                    ob.low, ob.high, current_close, mt,
+                )
         return newly_mitigated
 
     def get_active(
@@ -433,51 +527,53 @@ class OrderBlockDetector:
         return None
 
     @staticmethod
-    def _validate(
-        ob: OrderBlock,
+    def _has_fvg_forward(
+        ob_idx: int,
+        timestamps,
+        fvg_detector: Optional[FairValueGapDetector],
+        direction: str,
+        timeframe: str,
+    ) -> bool:
+        """ICT hard rule: an OB is only valid if it produces an FVG in the
+        same direction within OB_FVG_LOOKFORWARD bars. Returns True when an
+        FVG is found, False otherwise (or when no FVG detector is passed)."""
+        if fvg_detector is None:
+            return False
+        ts_ob = timestamps[ob_idx]
+        fwd_idx = min(len(timestamps) - 1, ob_idx + OB_FVG_LOOKFORWARD)
+        ts_fwd = timestamps[fwd_idx]
+        for fvg in fvg_detector.fvgs:
+            if fvg.timeframe != timeframe:
+                continue
+            if fvg.direction == direction and ts_ob <= fvg.timestamp <= ts_fwd:
+                return True
+        return False
+
+    @staticmethod
+    def _has_sweep_back(
         ob_idx: int,
         timestamps,
         swing_points: Optional[SwingPointDetector],
-        fvg_detector: Optional[FairValueGapDetector],
+        direction: str,
         timeframe: str,
     ) -> bool:
-        """
-        Validate OB by checking for nearby sweep + FVG.
-
-        Sweep: a swing point with timestamp within OB_SWEEP_LOOKBACK bars
-               before the OB candle.
-        FVG:   an active FVG of the same direction with timestamp between
-               ob_idx and ob_idx + OB_FVG_LOOKFORWARD.
-        """
-        has_sweep = False
-        has_fvg = False
-
-        if swing_points is not None:
-            sweep_start_idx = max(0, ob_idx - OB_SWEEP_LOOKBACK)
-            ts_start = timestamps[sweep_start_idx]
-            ts_ob = timestamps[ob_idx]
-            for sp in swing_points.swing_points:
-                if sp.timeframe != timeframe:
-                    continue
-                if ts_start <= sp.timestamp <= ts_ob:
-                    # Bullish OB: sweep below a swing low
-                    if ob.direction == "bullish" and sp.type == "low":
-                        has_sweep = True
-                        break
-                    # Bearish OB: sweep above a swing high
-                    elif ob.direction == "bearish" and sp.type == "high":
-                        has_sweep = True
-                        break
-
-        if fvg_detector is not None:
-            ts_ob = timestamps[ob_idx]
-            fwd_idx = min(len(timestamps) - 1, ob_idx + OB_FVG_LOOKFORWARD)
-            ts_fwd = timestamps[fwd_idx]
-            for fvg in fvg_detector.fvgs:
-                if fvg.timeframe != timeframe:
-                    continue
-                if fvg.direction == ob.direction and ts_ob <= fvg.timestamp <= ts_fwd:
-                    has_fvg = True
-                    break
-
-        return has_sweep and has_fvg
+        """Optional sweep check: returns True when a swing point of the
+        appropriate type sits within OB_SWEEP_LOOKBACK bars before the OB.
+        Presence of a sweep upgrades the OB to the 'validated' (A+) tier
+        — the Institutional Orderflow Entry Drill setup per ICT."""
+        if swing_points is None:
+            return False
+        sweep_start_idx = max(0, ob_idx - OB_SWEEP_LOOKBACK)
+        ts_start = timestamps[sweep_start_idx]
+        ts_ob = timestamps[ob_idx]
+        for sp in swing_points.swing_points:
+            if sp.timeframe != timeframe:
+                continue
+            if ts_start <= sp.timestamp <= ts_ob:
+                # Bullish OB: sweep below a swing low
+                if direction == "bullish" and sp.type == "low":
+                    return True
+                # Bearish OB: sweep above a swing high
+                if direction == "bearish" and sp.type == "high":
+                    return True
+        return False

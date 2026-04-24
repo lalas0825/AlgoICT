@@ -82,25 +82,25 @@ class TestSilverBulletKillZone:
         self.sm = SessionManager()
 
     def test_inside_silver_bullet_start(self):
-        """10:00 CT is inside Silver Bullet."""
-        assert self.sm.is_kill_zone(_ts("10:00"), "silver_bullet") is True
+        """09:00 CT is inside Silver Bullet (AM window 09:00-10:00 CT = 10-11 ET)."""
+        assert self.sm.is_kill_zone(_ts("09:00"), "silver_bullet") is True
 
     def test_inside_silver_bullet_mid(self):
-        """10:30 CT is inside Silver Bullet."""
-        assert self.sm.is_kill_zone(_ts("10:30"), "silver_bullet") is True
+        """09:30 CT is inside Silver Bullet."""
+        assert self.sm.is_kill_zone(_ts("09:30"), "silver_bullet") is True
 
     def test_outside_silver_bullet_end(self):
-        """11:00 CT is NOT inside Silver Bullet (exclusive end)."""
-        assert self.sm.is_kill_zone(_ts("11:00"), "silver_bullet") is False
+        """10:00 CT is NOT inside Silver Bullet (exclusive end)."""
+        assert self.sm.is_kill_zone(_ts("10:00"), "silver_bullet") is False
 
     def test_outside_silver_bullet_before(self):
-        """09:59 CT is before Silver Bullet."""
-        assert self.sm.is_kill_zone(_ts("09:59"), "silver_bullet") is False
+        """08:59 CT is before Silver Bullet."""
+        assert self.sm.is_kill_zone(_ts("08:59"), "silver_bullet") is False
 
     def test_silver_bullet_inside_ny_am(self):
-        """10:30 CT is inside BOTH silver_bullet AND ny_am."""
-        assert self.sm.is_kill_zone(_ts("10:30"), "ny_am") is True
-        assert self.sm.is_kill_zone(_ts("10:30"), "silver_bullet") is True
+        """09:30 CT is inside BOTH silver_bullet AND ny_am."""
+        assert self.sm.is_kill_zone(_ts("09:30"), "ny_am") is True
+        assert self.sm.is_kill_zone(_ts("09:30"), "silver_bullet") is True
 
 
 # ─── Tests: is_kill_zone — Asian (20:00–00:00 CT, wraps midnight) ─────────────

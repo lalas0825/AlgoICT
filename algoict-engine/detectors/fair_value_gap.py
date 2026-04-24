@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 FVG_MAX_HISTORY = getattr(config, "FVG_MAX_HISTORY", 100)
 FVG_MITIGATION_RATIO = getattr(config, "FVG_MITIGATION_RATIO", 0.75)
+FVG_MITIGATION_MODE = getattr(config, "FVG_MITIGATION_MODE", "body_close")
 
 
 @dataclass
@@ -50,12 +51,30 @@ class FVG:
     timeframe: str
     candle_index: int   # index of the middle candle (i in the 3-candle pattern)
     timestamp: pd.Timestamp   # timestamp of the middle candle
+    # stop_reference: "outer wick" of candle 1 (pre-gap candle):
+    #   Bullish FVG: candle_1 low  (below FVG.bottom = candle_1 high)
+    #   Bearish FVG: candle_1 high (above FVG.top    = candle_1 low)
+    # ICT Silver Bullet places the stop 1 tick beyond this value
+    # (section 5.1: "the number one candle is where your stop loss is").
+    # NaN default preserves backward-compat for callers constructing FVGs
+    # directly in tests without the candle-1 OHLC context.
+    stop_reference: float = float("nan")
     mitigated: bool = False
     is_ifvg: bool = False  # True when this is an Inversed FVG
 
     @property
     def midpoint(self) -> float:
         return self.bottom + 0.5 * (self.top - self.bottom)
+
+    @property
+    def consequent_encroachment(self) -> float:
+        """ICT Consequent Encroachment — 50% of the FVG gap. Distinct from
+        the OB Mean Threshold (50% of OB body). Used as scale-in level per
+        ICT section 2.3 ('if it touches the consequent encroachment I'll
+        buy that too') and as invalidation threshold in some ICT-derivative
+        methodologies (though ICT himself only invalidates on body close
+        beyond the FVG distal)."""
+        return self.midpoint
 
     def __repr__(self) -> str:
         kind = "IFVG" if self.is_ifvg else "FVG"
@@ -125,6 +144,9 @@ class FairValueGapDetector:
                     timeframe=timeframe,
                     candle_index=i,
                     timestamp=ts,
+                    # Candle 1 (pre-gap) LOW is the stop reference — a tick
+                    # below this is where ICT anchors the Silver Bullet stop.
+                    stop_reference=float(lows[i - 1]),
                 )
                 new_fvgs.append(fvg)
                 existing_keys.add((ts, timeframe))
@@ -138,6 +160,8 @@ class FairValueGapDetector:
                     timeframe=timeframe,
                     candle_index=i,
                     timestamp=ts,
+                    # Candle 1 HIGH — one tick above = short stop per ICT.
+                    stop_reference=float(highs[i - 1]),
                 )
                 new_fvgs.append(fvg)
                 existing_keys.add((ts, timeframe))
@@ -162,26 +186,37 @@ class FairValueGapDetector:
         atr_14: Optional[float] = None,
     ) -> list[FVG]:
         """
-        Mark active FVGs as mitigated when price fills FVG_MITIGATION_RATIO
-        of the gap from the entry side (M17a, configurable; 0.75 default vs
-        ICT standard 0.50 — FVGs survive longer so post-sweep returns still
-        qualify). Also invalidate active IFVGs whose opposite extreme is
-        breached.
+        Update FVG mitigation state.
 
-        Bullish FVG: mitigated when price <= top   - ratio * (top - bottom)
-        Bearish FVG: mitigated when price >= bottom + ratio * (top - bottom)
+        Two modes, selected by config.FVG_MITIGATION_MODE:
 
-        IFVG conversion: a mitigated FVG is promoted to IFVG (inverted
-        direction) ONLY when the crossing candle shows displacement — i.e.
-        candle_body > 1.5 × ATR(14). Weak crosses just kill the FVG.
+        "body_close" (ICT canonical, default 2026-04-20)
+            An FVG is only INVALIDATED when the candle BODY closes beyond
+            the distal edge. Wicks through the gap do NOT count. 50-75%
+            fill is a normal retrace / add-position zone, not invalidation.
+            ICT quote: "we don't want to ever want to see the bodies close
+            above it".
+              Bullish FVG: mitigated when close < fvg.bottom (distal)
+              Bearish FVG: mitigated when close > fvg.top    (distal)
+            Every body-close invalidation produces an IFVG (polarity flip)
+            — no ATR displacement filter needed; ICT treats any body close
+            through the distal as the algorithmic trigger.
+
+        "ratio" (legacy, pre-ICT-alignment)
+            Mitigate at FVG_MITIGATION_RATIO fill of the gap. IFVG
+            conversion gated on candle_body > IFVG_ATR_MULTIPLIER × ATR(14).
+            Kept for A/B testing and backward compatibility only.
+
+        IFVG invalidation (both modes): bullish IFVG killed when close <
+        fvg.bottom, bearish IFVG killed when close > fvg.top.
 
         Parameters
         ----------
-        current_price : float — last traded price (close or bid/ask)
-        candle_body   : float, optional — abs(open - close) of the latest
-                        candle. Required for IFVG conversion.
+        current_price : float — CLOSE of the latest candle.
+        candle_body   : float, optional — |close - open| of latest candle.
+                        Only consulted in "ratio" mode.
         atr_14        : float, optional — 14-period ATR at the latest candle.
-                        Required for IFVG conversion.
+                        Only consulted in "ratio" mode.
 
         Returns
         -------
@@ -190,68 +225,89 @@ class FairValueGapDetector:
         newly_mitigated: list[FVG] = []
         new_ifvgs: list[FVG] = []
 
-        # Can we evaluate displacement for IFVG conversion?
-        has_displacement_data = (
-            candle_body is not None
-            and atr_14 is not None
-            and atr_14 > 0
-        )
-        is_displacement = (
-            has_displacement_data
-            and candle_body > self.IFVG_ATR_MULTIPLIER * atr_14
-        )
+        # Pre-compute displacement flag for legacy "ratio" mode only.
+        is_displacement = False
+        if FVG_MITIGATION_MODE == "ratio":
+            has_disp_data = (
+                candle_body is not None
+                and atr_14 is not None
+                and atr_14 > 0
+            )
+            is_displacement = (
+                has_disp_data
+                and candle_body > self.IFVG_ATR_MULTIPLIER * atr_14
+            )
 
         for fvg in self.fvgs:
             if fvg.mitigated:
                 continue
 
-            # ── Regular FVG mitigation (uses configurable ratio) ───────
-            if not fvg.is_ifvg:
-                gap = fvg.top - fvg.bottom
-                mitigated_now = False
-                if fvg.direction == "bullish":
-                    mitigation_level = fvg.top - FVG_MITIGATION_RATIO * gap
-                    if current_price <= mitigation_level:
-                        mitigated_now = True
-                elif fvg.direction == "bearish":
-                    mitigation_level = fvg.bottom + FVG_MITIGATION_RATIO * gap
-                    if current_price >= mitigation_level:
-                        mitigated_now = True
-
-                if mitigated_now:
-                    fvg.mitigated = True
-                    newly_mitigated.append(fvg)
-
-                    if is_displacement:
-                        inv_dir = "bearish" if fvg.direction == "bullish" else "bullish"
-                        new_ifvgs.append(FVG(
-                            top=fvg.top, bottom=fvg.bottom,
-                            direction=inv_dir, timeframe=fvg.timeframe,
-                            candle_index=fvg.candle_index, timestamp=fvg.timestamp,
-                            is_ifvg=True,
-                        ))
-                        logger.debug(
-                            "%s FVG mitigated (ratio=%.2f) with displacement "
-                            "(body=%.2f > %.1fx ATR=%.2f) -> %s IFVG [%.2f-%.2f]",
-                            fvg.direction.title(), FVG_MITIGATION_RATIO,
-                            candle_body, self.IFVG_ATR_MULTIPLIER, atr_14,
-                            inv_dir.title(), fvg.bottom, fvg.top,
-                        )
-                    else:
-                        logger.debug(
-                            "%s FVG mitigated (ratio=%.2f, weak cross, no IFVG) [%.2f-%.2f]",
-                            fvg.direction.title(), FVG_MITIGATION_RATIO,
-                            fvg.bottom, fvg.top,
-                        )
-
-            # ── IFVG invalidation: price breaches opposite extreme ─────
-            else:
+            # ── IFVG invalidation (common to both modes) ───────────────
+            if fvg.is_ifvg:
                 if fvg.direction == "bullish" and current_price < fvg.bottom:
                     fvg.mitigated = True
-                    logger.debug("Bullish IFVG [%.2f-%.2f] invalidated at %.2f", fvg.bottom, fvg.top, current_price)
+                    logger.debug(
+                        "Bullish IFVG [%.2f-%.2f] invalidated at %.2f",
+                        fvg.bottom, fvg.top, current_price,
+                    )
                 elif fvg.direction == "bearish" and current_price > fvg.top:
                     fvg.mitigated = True
-                    logger.debug("Bearish IFVG [%.2f-%.2f] invalidated at %.2f", fvg.bottom, fvg.top, current_price)
+                    logger.debug(
+                        "Bearish IFVG [%.2f-%.2f] invalidated at %.2f",
+                        fvg.bottom, fvg.top, current_price,
+                    )
+                continue
+
+            # ── Regular FVG mitigation ─────────────────────────────────
+            if FVG_MITIGATION_MODE == "body_close":
+                # ICT canonical: only body close beyond distal invalidates.
+                invalidate = False
+                if fvg.direction == "bullish" and current_price < fvg.bottom:
+                    invalidate = True
+                elif fvg.direction == "bearish" and current_price > fvg.top:
+                    invalidate = True
+
+                if invalidate:
+                    fvg.mitigated = True
+                    newly_mitigated.append(fvg)
+                    # Every body-close invalidation → IFVG (ICT polarity flip)
+                    inv_dir = "bearish" if fvg.direction == "bullish" else "bullish"
+                    new_ifvgs.append(FVG(
+                        top=fvg.top, bottom=fvg.bottom,
+                        direction=inv_dir, timeframe=fvg.timeframe,
+                        candle_index=fvg.candle_index, timestamp=fvg.timestamp,
+                        is_ifvg=True,
+                    ))
+                    logger.debug(
+                        "%s FVG body-closed through distal -> %s IFVG [%.2f-%.2f]",
+                        fvg.direction.title(), inv_dir.title(),
+                        fvg.bottom, fvg.top,
+                    )
+                continue
+
+            # ── Legacy "ratio" mode ────────────────────────────────────
+            gap = fvg.top - fvg.bottom
+            mitigated_now = False
+            if fvg.direction == "bullish":
+                mitigation_level = fvg.top - FVG_MITIGATION_RATIO * gap
+                if current_price <= mitigation_level:
+                    mitigated_now = True
+            elif fvg.direction == "bearish":
+                mitigation_level = fvg.bottom + FVG_MITIGATION_RATIO * gap
+                if current_price >= mitigation_level:
+                    mitigated_now = True
+
+            if mitigated_now:
+                fvg.mitigated = True
+                newly_mitigated.append(fvg)
+                if is_displacement:
+                    inv_dir = "bearish" if fvg.direction == "bullish" else "bullish"
+                    new_ifvgs.append(FVG(
+                        top=fvg.top, bottom=fvg.bottom,
+                        direction=inv_dir, timeframe=fvg.timeframe,
+                        candle_index=fvg.candle_index, timestamp=fvg.timestamp,
+                        is_ifvg=True,
+                    ))
 
         self.fvgs.extend(new_ifvgs)
         if len(self.fvgs) > FVG_MAX_HISTORY:

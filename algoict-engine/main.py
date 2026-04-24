@@ -250,6 +250,20 @@ class EngineState:
     # OR more than TRAILING_ALERT_MIN_INTERVAL seconds have passed.
     last_trailing_alert_time: Optional[datetime] = None
 
+    # Kill-zone transition tracking (2026-04-22 Telegram verbosity).
+    # active_kz: the KZ name currently in force (or None if between zones).
+    # kz_stats: aggregate counters for the CURRENT active KZ session;
+    #   gets flushed to Telegram on KZ close then reset.
+    active_kz: Optional[str] = None
+    kz_stats: Optional[dict] = None
+    kz_opened_at: Optional[Any] = None
+
+    # Queue of sweep alerts populated by the sync _update_detectors()
+    # to be drained + sent by the async caller (_on_new_bar). Each item is
+    # a dict with level_type, price, candle_high/low/close, ts — plus the
+    # kill zone string at the time the sweep was detected.
+    pending_sweep_alerts: Optional[list] = None
+
     def __post_init__(self):
         if self.bars_1min is None:
             self.bars_1min = pd.DataFrame(
@@ -261,6 +275,24 @@ class EngineState:
             self.open_positions = {}
         if self.executed_signals is None:
             self.executed_signals = set()
+        if self.kz_stats is None:
+            self.kz_stats = _fresh_kz_stats()
+        if self.pending_sweep_alerts is None:
+            self.pending_sweep_alerts = []
+
+
+def _fresh_kz_stats() -> dict:
+    """Initialize a fresh KZ-session stats dict (for use on KZ enter / reset)."""
+    return {
+        "fvgs_seen": 0,
+        "sweeps": 0,
+        "evaluations": 0,
+        "rejections": 0,
+        "reject_reasons": {},
+        "signals_fired": 0,
+        "trades_taken": 0,
+        "pnl": 0.0,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -578,18 +610,25 @@ async def _run_premarket_scan(components: Components, state: EngineState) -> Non
     # The NY AM strategy needs swept liquidity levels to fire — without
     # this seed, `tracked_levels` stays [] forever and every kill-zone
     # evaluation rejects on "no aligned liquidity sweep".
+    #
+    # CRITICAL (2026-04-23 fix): pass as_of_ts so build_key_levels can
+    # exclude the CURRENT forming daily + weekly bars. Without this, PDH/
+    # PWH are polluted by the running session/week high — e.g. on
+    # 2026-04-22 evening PWH read 27,138 (forming week high) instead of
+    # the real previous-week high of 26,883.
     try:
         if not state.bars_1min.empty:
             tf_mgr = components.tf_manager
             df_daily = tf_mgr.aggregate(state.bars_1min, "D")
             df_weekly = tf_mgr.aggregate(state.bars_1min, "W")
+            as_of = state.bars_1min.index[-1]
             levels = components.detectors["liquidity"].build_key_levels(
-                df_daily=df_daily, df_weekly=df_weekly,
+                df_daily=df_daily, df_weekly=df_weekly, as_of_ts=as_of,
             )
             components.detectors["tracked_levels"] = levels
             logger.info(
-                "tracked_levels seeded: %d levels (%s)",
-                len(levels),
+                "tracked_levels seeded (as_of=%s): %d levels (%s)",
+                as_of, len(levels),
                 ", ".join(f"{lvl.type}@{lvl.price:.2f}" for lvl in levels),
             )
         else:
@@ -890,6 +929,29 @@ def _update_detectors(
                         last_5_ts,
                         ", ".join(f"{lvl.type}@{lvl.price:.2f}" for lvl in newly_swept),
                     )
+                    # Tally each sweep into the active KZ stats for the
+                    # close-of-KZ summary, and enqueue a Telegram alert to
+                    # be drained by the async caller (_on_new_bar) — this
+                    # function is sync and can't await directly.
+                    try:
+                        state.kz_stats["sweeps"] += len(newly_swept)
+                    except Exception:
+                        pass
+                    last_row = df_5min.iloc[-1]
+                    _ts_str = (
+                        last_5_ts.strftime("%H:%M")
+                        if hasattr(last_5_ts, "strftime") else str(last_5_ts)
+                    )
+                    for lvl in newly_swept:
+                        state.pending_sweep_alerts.append({
+                            "level_type": lvl.type,
+                            "price": float(lvl.price),
+                            "kz": state.active_kz or "off-hours",
+                            "candle_high": float(last_row["high"]),
+                            "candle_low": float(last_row["low"]),
+                            "candle_close": float(last_row["close"]),
+                            "ts_str": _ts_str,
+                        })
         except Exception as exc:
             logger.warning("5min detector update failed: %s", exc)
         state.last_completed_tf_ts["5min"] = last_5_ts
@@ -926,6 +988,41 @@ def _update_detectors(
             logger.warning("15min structure update failed: %s", exc)
         state.last_completed_tf_ts["15min"] = last_15_ts
         updated["15min"] = True
+
+    # ── 1-min FVGs + 5-min structure for Silver Bullet v4 ────────────────
+    # Silver Bullet v4 RTH Mode (2026-04-21) consumes 1-min FVGs as the
+    # entry trigger and 5-min MSS/BOS as context. Prior wiring only ran
+    # FVG on 5-min and structure on 15-min, so SB.evaluate() saw zero
+    # 1-min FVGs and zero 5-min structure events → produced no signals.
+    # Runs every bar on 1-min (cheap, detector dedupes by timestamp).
+    try:
+        components.detectors["fvg"].detect(state.bars_1min, "1min")
+    except Exception as exc:
+        logger.debug("1min FVG detect failed: %s", exc)
+
+    # Structure on 5-min: re-run whenever a new 5-min bar completes.
+    if updated.get("5min"):
+        try:
+            swing = components.detectors["swing"]
+            # Swings on 5min are already primed by the 5min block above.
+            new_struct_5m = components.detectors["structure"].update(
+                df_5min, swing, "5min",
+            )
+            # Respect the same OB invalidation pattern as the 15-min path.
+            for _ev in new_struct_5m:
+                if _ev.type in ("BOS", "CHoCH", "MSS"):
+                    purged = components.detectors["ob"].invalidate_by_structure(
+                        _ev.direction,
+                        current_bar_count=len(df_5min),
+                    )
+                    if purged:
+                        logger.debug(
+                            "5min STRUCTURE %s %s: purged %d %s OBs",
+                            _ev.type, _ev.direction, len(purged),
+                            "bearish" if _ev.direction == "bullish" else "bullish",
+                        )
+        except Exception as exc:
+            logger.warning("5min structure update failed: %s", exc)
 
     return updated
 
@@ -1335,17 +1432,39 @@ async def _execute_signal(
             logger.warning("Telegram signal fired alert failed: %s", exc)
 
     # Telegram — trade opened (fill confirmation)
-    if components.telegram is not None:
+    # CRITICAL (2026-04-23 fix): only send TRADE OPENED alert if the
+    # broker confirmed a real fill. Previously this fired the moment
+    # entry_order was submitted, even when entry_order.filled_price was
+    # None — causing misleading "TRADE OPENED" notifications for limit
+    # entries that never actually filled. The 5 phantom fires on
+    # 2026-04-23 10:36-11:03 CT each generated a false "TRADE OPENED"
+    # alert even though broker never opened a position. Gate on
+    # filled_price being a real number now.
+    entry_filled = getattr(entry_order, "filled_price", None)
+    if (
+        components.telegram is not None
+        and entry_filled is not None
+        and entry_filled > 0
+    ):
         try:
-            fill = entry_order.filled_price or signal.entry_price
             await components.telegram.send_trade_opened(
                 symbol=signal.symbol,
                 direction=signal.direction,
                 contracts=signal.contracts,
-                fill_price=fill,
+                fill_price=float(entry_filled),
             )
         except Exception as exc:
             logger.warning("Telegram trade opened alert failed: %s", exc)
+    elif components.telegram is not None:
+        # Pending fill — log locally, don't spam Telegram. The poll-status
+        # path will either confirm fill and send send_trade_opened then,
+        # or detect NEVER FILLED and cancel silently.
+        logger.info(
+            "Telegram trade opened alert DEFERRED: entry limit not filled yet "
+            "(entry_id=%s, signal.entry=%.2f)",
+            getattr(entry_order, "order_id", "?"),
+            float(signal.entry_price),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1531,6 +1650,23 @@ async def _on_broker_fill(
             logger.info(
                 "ENTRY FILL confirmed for pos %s at %.2f", pos_key, fill_price,
             )
+            # 2026-04-23 fix: send "TRADE OPENED" alert NOW (on real fill
+            # confirmation) instead of at _execute_signal (which fires on
+            # order submission, not fill). Previously user got "TRADE OPENED"
+            # alerts for limit entries that never filled — misleading.
+            signal = pos.get("signal")
+            if signal is not None and components.telegram is not None:
+                try:
+                    await components.telegram.send_trade_opened(
+                        symbol=signal.symbol,
+                        direction=signal.direction,
+                        contracts=int(signal.contracts),
+                        fill_price=float(fill_price),
+                    )
+                except Exception as exc:
+                    logger.debug(
+                        "Telegram trade opened alert (post-fill) failed: %s", exc
+                    )
             continue
 
         is_stop = bool(stop_id and stop_id == order_id)
@@ -1625,9 +1761,9 @@ async def _on_trade_closed(
     """
     pnl = float(trade.get("pnl", 0.0))
 
-    # 1. risk accounting
+    # 1. risk accounting (kill_zone passed for per-KZ loss cap + ladder tracking)
     try:
-        components.risk.record_trade(pnl)
+        components.risk.record_trade(pnl, kill_zone=trade.get("kill_zone"))
     except Exception as exc:
         logger.warning("risk.record_trade failed: %s", exc)
 
@@ -1722,10 +1858,167 @@ async def _poll_position_status(components: Components, state: EngineState) -> N
         if _root(signal.symbol) in broker_symbols:
             continue  # still open — nothing to do
 
-        # Position is flat at broker. Infer exit from last close price.
-        if last_close is None:
+        # Broker says "no position" AND we locally track one. There are TWO
+        # very different cases we MUST distinguish, or we fabricate P&L:
+        #
+        # 1. ENTRY NEVER FILLED — the limit entry was submitted but price
+        #    never hit it (or it timed out). The broker never opened a
+        #    position in the first place. We must NOT infer an exit —
+        #    there was no trade. Cancel any remaining resting orders
+        #    (stop + target are still working against a phantom position)
+        #    and drop the position from local state with ZERO P&L.
+        #
+        # 2. POSITION OPENED + CLOSED between polls — entry filled, then
+        #    target or stop hit, all between two polling windows. Broker
+        #    cleaned up brackets automatically. In this case we only know
+        #    the exit was recent; the old heuristic of "infer exit from
+        #    current close + stop/target proximity" is the best we can do.
+        #
+        # The signal: entry_order.filled_price. If None at poll time, the
+        # entry never filled (case 1). If set, entry was filled (case 2).
+        #
+        # THE 2026-04-22 BUG: this code path unconditionally inferred an
+        # exit in case 1 — fabricating a +$2,154 "target fill" for an
+        # order that never filled. Stop/target limit orders were left
+        # orphaned on the broker with no protective stop. Fixed by
+        # branching explicitly on `filled_price is None`.
+        entry_order = pos.get("entry_order")
+        entry_filled_price = getattr(entry_order, "filled_price", None) if entry_order else None
+
+        if entry_filled_price is None:
+            # ── CASE 1: entry never filled ─────────────────────────────
+            # BUG B/C FIX (2026-04-23): the original logic cancelled the
+            # limit AT THE FIRST POLL where broker reported "no position".
+            # That's too aggressive — a RESTING limit order doesn't create
+            # a position until it fills, so "no position at broker" is the
+            # NORMAL state while the limit waits for retrace.
+            #
+            # Observed 2026-04-23 NY AM: fire #1 at 11:37 ET placed limit
+            # SELL @ 27,139.25. Bar 11:41 ET (4 bars later) had high
+            # 27,140.75 — limit WOULD HAVE FILLED. But the 11:38 ET poll
+            # already cancelled it after 1 bar. Missed ~$6K profit.
+            #
+            # Fix: respect LIMIT_ORDER_TTL_BARS (default 10) and ALSO keep
+            # the limit active while we're still inside the signal's KZ
+            # window (ICT expects the setup to remain valid for the whole
+            # 60-min window — retraces can take 40+ bars).
+            #
+            # The kz_end check uses SessionManager: if the bar ts is still
+            # inside the signal's kill_zone, keep waiting. Outside the KZ,
+            # fall back to the fixed TTL guard.
+            bars_pending = pos.get("bars_pending", 0)
+            ttl_bars = getattr(config, "LIMIT_ORDER_TTL_BARS", 10)
+
+            # KZ-aware extended TTL: if we're still inside the signal's
+            # KZ, keep the limit active (ICT allows full window for fill).
+            bar_ts = (
+                state.bars_1min.index[-1]
+                if not state.bars_1min.empty else None
+            )
+            sig_kz = getattr(signal, "kill_zone", None)
+            still_in_kz = False
+            if bar_ts is not None and sig_kz and hasattr(components, "session"):
+                try:
+                    still_in_kz = components.session.is_kill_zone(bar_ts, sig_kz)
+                except Exception:
+                    still_in_kz = False
+
+            if bars_pending < ttl_bars and still_in_kz:
+                # Limit still legitimately waiting — not phantom.
+                # DO NOT increment bars_pending here (TTL sweep at
+                # line ~2364 does the incrementing). Just skip cleanup.
+                logger.debug(
+                    "POLL: %s entry limit still pending (bars=%d/%d, kz=%s active) — NO cleanup",
+                    _root(signal.symbol), bars_pending, ttl_bars, sig_kz,
+                )
+                continue
+
+            # Either TTL expired OR we're outside KZ — actually clean up.
+            reason_str = (
+                f"TTL expired ({bars_pending} bars >= {ttl_bars})"
+                if bars_pending >= ttl_bars
+                else f"KZ {sig_kz} closed"
+            )
+            logger.warning(
+                "POLL: %s entry limit NEVER FILLED after %d bars (%s) — "
+                "cleaning phantom state and cancelling any remaining resting "
+                "orders (entry_id=%s)",
+                _root(signal.symbol), bars_pending, reason_str,
+                getattr(entry_order, "order_id", "?") if entry_order else "?",
+            )
+            # Cancel any stop/target orders that are still resting against
+            # a position the broker never opened.
+            for kind in ("stop_order", "target_order", "entry_order"):
+                o = pos.get(kind)
+                oid = getattr(o, "order_id", None) if o else None
+                if not oid:
+                    continue
+                try:
+                    await components.broker.cancel_order(str(oid))
+                except Exception as exc:
+                    logger.debug(
+                        "POLL cleanup: cancel %s (%s) failed: %s", oid, kind, exc,
+                    )
+            # Remove from local state — no P&L recorded, no risk counter
+            # advancement, no Telegram "WIN" alert. The KZ trade counter
+            # was already advanced optimistically in _execute_signal; roll
+            # it back so the zone budget isn't permanently consumed.
+            state.open_positions.pop(pos_key, None)
+            strat_name = getattr(signal, "strategy", "")
+            strat = None
+            if strat_name == "ny_am_reversal":
+                strat = getattr(components, "ny_am_strategy", None)
+            elif strat_name == "silver_bullet":
+                strat = getattr(components, "silver_bullet_strategy", None)
+            if strat is not None:
+                # Decrement the per-zone counter we bumped optimistically.
+                kz = getattr(signal, "kill_zone", "") or ""
+                try:
+                    zbz = getattr(strat, "_trades_by_zone", None)
+                    if isinstance(zbz, dict) and kz in zbz and zbz[kz] > 0:
+                        zbz[kz] -= 1
+                    if hasattr(strat, "trades_today") and strat.trades_today > 0:
+                        strat.trades_today -= 1
+                except Exception as exc:
+                    logger.debug("KZ counter rollback failed: %s", exc)
+                # Also release the dedup lock so a later bar can retry.
+                if hasattr(strat, "rollback_last_evaluated_bar"):
+                    try:
+                        strat.rollback_last_evaluated_bar(signal.timestamp)
+                    except Exception:
+                        pass
+                # Arm the phantom-cleanup cooldown so the next 5 bars
+                # won't immediately re-fire the same unfilled setup. This
+                # closes the 2026-04-23 re-fire loop where SB kept
+                # re-submitting orders that limit-entry would never reach.
+                # 5 bars matches SB KZ window size divided by expected
+                # setup density (~5-10 setups per 60-min window).
+                if hasattr(strat, "record_phantom_cleanup"):
+                    try:
+                        last_bar_ts = (
+                            state.bars_1min.index[-1]
+                            if not state.bars_1min.empty
+                            else signal.timestamp
+                        )
+                        strat.record_phantom_cleanup(last_bar_ts, cooldown_minutes=5)
+                    except Exception as exc:
+                        logger.debug("phantom cooldown arm failed: %s", exc)
+            # Alert the user that the phantom was cleaned up.
+            if components.telegram is not None:
+                try:
+                    await components.telegram.send_message(
+                        f"⚠️ {_root(signal.symbol)} {signal.direction} limit "
+                        f"@ {signal.entry_price:.2f} NEVER FILLED — phantom "
+                        f"cleaned, all resting orders cancelled. No trade, "
+                        f"no P&L."
+                    )
+                except Exception:
+                    pass
             continue
 
+        # ── CASE 2: position was open, now flat — infer recent exit ────
+        if last_close is None:
+            continue
         direction = signal.direction
         current_stop = pos.get("current_stop_price", float(signal.stop_price))
         target_price = float(getattr(signal, "target_price", 0) or 0)
@@ -1750,8 +2043,10 @@ async def _poll_position_status(components: Components, state: EngineState) -> N
             exit_price = _snap(last_close)
 
         logger.info(
-            "POLL: %s closed at broker — inferred exit %.2f (%s)",
-            _root(signal.symbol), exit_price, "stop" if is_stop else "target",
+            "POLL: %s closed at broker — inferred exit %.2f (%s) "
+            "[entry was filled at %.2f]",
+            _root(signal.symbol), exit_price,
+            "stop" if is_stop else "target", entry_filled_price,
         )
         synthetic_fill = {"orderId": inferred_id, "filledPrice": exit_price}
         await _on_broker_fill(synthetic_fill, components, state)
@@ -2070,11 +2365,30 @@ async def _on_new_bar(
         # Limit entries that were placed but never filled (entry_fill_confirmed=False)
         # are cancelled after LIMIT_ORDER_TTL_BARS 1-min bars. Without this,
         # a never-filled limit sits in open_positions forever, blocking new signals.
+        #
+        # BUG C FIX (2026-04-23): KZ-aware TTL extension. While the signal's
+        # kill zone is still active, the limit remains valid (ICT allows the
+        # full window for a retrace). Only after KZ closes does the
+        # LIMIT_ORDER_TTL_BARS counter start applying as the hard deadline.
         _ttl = getattr(config, "LIMIT_ORDER_TTL_BARS", 10)
         for _pos_key, _pos in list(state.open_positions.items()):
             if _pos.get("entry_fill_confirmed", True):
                 continue
             _pos["bars_pending"] = _pos.get("bars_pending", 0) + 1
+
+            _sig = _pos.get("signal")
+            _sig_kz = getattr(_sig, "kill_zone", None) if _sig else None
+            _still_in_kz = False
+            if _sig_kz and hasattr(components, "session"):
+                try:
+                    _still_in_kz = components.session.is_kill_zone(ts, _sig_kz)
+                except Exception:
+                    _still_in_kz = False
+
+            # While inside signal's KZ, the limit stays valid. After KZ
+            # closes, the _ttl counter enforces a hard deadline.
+            if _still_in_kz:
+                continue
             if _pos["bars_pending"] < _ttl:
                 continue
             # TTL expired — cancel all three orders and remove
@@ -2128,6 +2442,74 @@ async def _on_new_bar(
 
         sess = components.session
 
+        # ── 5a. KZ transition tracking (Telegram verbose alerts) ──────
+        # Determine which kill zone (if any) the current bar sits inside.
+        # We watch the union of zones that either strategy cares about.
+        # On transition (None -> KZ, KZ-A -> KZ-B, KZ -> None) we flush the
+        # stats for the outgoing KZ to Telegram and reset for the incoming.
+        _watched_kzs = ("london", "ny_am", "ny_pm")
+        current_kz = next(
+            (kz for kz in _watched_kzs if sess.is_kill_zone(ts, kz)),
+            None,
+        )
+        if current_kz != state.active_kz:
+            # Close out the previous KZ
+            if state.active_kz is not None and components.telegram is not None:
+                try:
+                    await components.telegram.send_kz_summary(
+                        kz=state.active_kz,
+                        ts_str=ts.strftime("%H:%M"),
+                        stats=dict(state.kz_stats or {}),
+                    )
+                except Exception as exc:
+                    logger.debug("KZ summary Telegram failed: %s", exc)
+            # Open the new KZ (if we're entering one, not just leaving)
+            state.kz_stats = _fresh_kz_stats()
+            state.active_kz = current_kz
+            state.kz_opened_at = ts
+            if current_kz is not None and components.telegram is not None:
+                try:
+                    vpin_snap = state.vpin_status
+                    vpin_val = getattr(vpin_snap, "vpin", None) if vpin_snap else None
+                    vpin_zone = getattr(vpin_snap, "toxicity_level", "n/a") if vpin_snap else "n/a"
+                    swc_snap = state.swc_snapshot
+                    swc_mood = getattr(swc_snap, "mood", None) if swc_snap else None
+                    # Coerce bias to a brief string
+                    bias_d = "n/a"
+                    bias_w = "n/a"
+                    try:
+                        bias = components.ny_am_strategy.htf_bias_fn(float(bars.iloc[-1]["close"]))
+                        bias_d = getattr(bias, "daily_bias", "n/a") or "n/a"
+                        bias_w = getattr(bias, "weekly_bias", "n/a") or "n/a"
+                    except Exception:
+                        pass
+                    await components.telegram.send_kz_enter(
+                        kz=current_kz,
+                        ts_str=ts.strftime("%H:%M"),
+                        daily_bias=bias_d,
+                        weekly_bias=bias_w,
+                        tracked_levels=list(components.detectors.get("tracked_levels", [])),
+                        vpin=vpin_val,
+                        vpin_zone=vpin_zone,
+                        swc_mood=swc_mood,
+                    )
+                except Exception as exc:
+                    logger.debug("KZ enter Telegram failed: %s", exc)
+
+        # ── 5b. Drain sweep-alert queue (populated by _update_detectors) ──
+        # _update_detectors is sync and cannot await, so it appends sweep
+        # alert specs to state.pending_sweep_alerts. Flush them here where
+        # we're in async context. The TelegramBot handles verbosity + its
+        # own throttle; this just drains whatever's queued since last bar.
+        if components.telegram is not None and state.pending_sweep_alerts:
+            queued = list(state.pending_sweep_alerts)
+            state.pending_sweep_alerts.clear()
+            for alert in queued:
+                try:
+                    await components.telegram.send_sweep_detected(**alert)
+                except Exception as exc:
+                    logger.debug("Queued sweep alert failed: %s", exc)
+
         # NY AM Reversal — evaluates in london + ny_am windows
         try:
             signal = components.ny_am_strategy.evaluate(df_5min, df_15min)
@@ -2139,18 +2521,33 @@ async def _on_new_bar(
                     "FIRE" if signal else "reject",
                 )
             if signal is not None:
-                allowed, reason = components.risk.can_trade()
-                if allowed:
-                    if state.pending_signal_ts is not None:
-                        logger.info("NY AM signal suppressed: pending execution at %s", state.pending_signal_ts)
-                    else:
-                        state.pending_signal_ts = signal.timestamp
-                        try:
-                            await _execute_signal(signal, components, state)
-                        finally:
-                            state.pending_signal_ts = None
+                # SINGLE-POSITION GUARD (2026-04-23 fix): do not fire a new
+                # signal while any position (pending or filled) is already
+                # open. `state.open_positions` is populated the moment
+                # orders are submitted and only cleared when (a) the
+                # position closes (stop/target/trailing/flatten), (b) the
+                # phantom cleanup removes an unfilled entry, or (c) the
+                # TTL cancels after 10 bars. This guard prevents stacking
+                # back-to-back signals on the same setup while a prior
+                # limit order is still pending fill.
+                if state.open_positions:
+                    logger.info(
+                        "NY AM signal suppressed: already %d open position(s) "
+                        "(single-position rule)", len(state.open_positions),
+                    )
                 else:
-                    logger.info("NY AM signal suppressed: %s", reason)
+                    allowed, reason = components.risk.can_trade()
+                    if allowed:
+                        if state.pending_signal_ts is not None:
+                            logger.info("NY AM signal suppressed: pending execution at %s", state.pending_signal_ts)
+                        else:
+                            state.pending_signal_ts = signal.timestamp
+                            try:
+                                await _execute_signal(signal, components, state)
+                            finally:
+                                state.pending_signal_ts = None
+                    else:
+                        logger.info("NY AM signal suppressed: %s", reason)
         except Exception as exc:
             logger.exception("NY AM strategy raised: %s", exc)
 
@@ -2158,25 +2555,80 @@ async def _on_new_bar(
         try:
             signal = components.silver_bullet_strategy.evaluate(bars, df_5min)
             sb_zones = getattr(components.silver_bullet_strategy, "KILL_ZONES", ("silver_bullet",))
-            if any(sess.is_kill_zone(ts, z) for z in sb_zones):
+            in_sb_zone = any(sess.is_kill_zone(ts, z) for z in sb_zones)
+            if in_sb_zone:
                 logger.info(
                     "EVAL silver_bullet [%s]: signal=%s",
                     ts.strftime("%H:%M"),
                     "FIRE" if signal else "reject",
                 )
+                # Tally into the active-KZ stats for the close-of-KZ summary.
+                try:
+                    state.kz_stats["evaluations"] += 1
+                except Exception:
+                    pass
             if signal is not None:
-                allowed, reason = components.risk.can_trade()
-                if allowed:
-                    if state.pending_signal_ts is not None:
-                        logger.info("Silver Bullet signal suppressed: pending execution at %s", state.pending_signal_ts)
-                    else:
-                        state.pending_signal_ts = signal.timestamp
-                        try:
-                            await _execute_signal(signal, components, state)
-                        finally:
-                            state.pending_signal_ts = None
+                # Track fire for summary
+                try:
+                    state.kz_stats["signals_fired"] += 1
+                except Exception:
+                    pass
+                # SINGLE-POSITION GUARD (2026-04-23 fix): see NY AM branch.
+                # Blocks new SB fires while a prior position is still in
+                # state.open_positions (pending fill, filled, or mid-close).
+                if state.open_positions:
+                    logger.info(
+                        "Silver Bullet signal suppressed: already %d open "
+                        "position(s) (single-position rule)",
+                        len(state.open_positions),
+                    )
                 else:
-                    logger.info("Silver Bullet signal suppressed: %s", reason)
+                    allowed, reason = components.risk.can_trade()
+                    if allowed:
+                        if state.pending_signal_ts is not None:
+                            logger.info("Silver Bullet signal suppressed: pending execution at %s", state.pending_signal_ts)
+                        else:
+                            state.pending_signal_ts = signal.timestamp
+                            try:
+                                await _execute_signal(signal, components, state)
+                                try:
+                                    state.kz_stats["trades_taken"] += 1
+                                except Exception:
+                                    pass
+                            finally:
+                                state.pending_signal_ts = None
+                    else:
+                        logger.info("Silver Bullet signal suppressed: %s", reason)
+            else:
+                # evaluate() returned None — inspect the rejection record set
+                # by the strategy. Only surface near-miss rejects (FVG present
+                # but no sweep, framework too small, etc.) to Telegram when
+                # verbosity == "verbose"; the _should_send() gate in the bot
+                # handles both the verbosity and the per-(kz, reason) throttle.
+                rej = getattr(components.silver_bullet_strategy, "last_rejection", None)
+                if in_sb_zone and rej is not None:
+                    try:
+                        state.kz_stats["rejections"] += 1
+                        rr = state.kz_stats["reject_reasons"]
+                        key = rej.get("reason", "unknown")
+                        rr[key] = rr.get(key, 0) + 1
+                    except Exception:
+                        pass
+                    if (rej.get("is_near_miss")
+                            and components.telegram is not None):
+                        try:
+                            await components.telegram.send_signal_near_miss(
+                                strategy="silver_bullet",
+                                kz=rej.get("kill_zone") or state.active_kz or "n/a",
+                                ts_str=ts.strftime("%H:%M"),
+                                reason=rej.get("reason", "unknown"),
+                                details=rej.get("details") or {},
+                            )
+                        except Exception as exc:
+                            logger.debug("Near-miss Telegram failed: %s", exc)
+                    # Clear after reading — prevents re-alerting the same
+                    # rejection on a later bar that happens not to set one.
+                    components.silver_bullet_strategy.last_rejection = None
         except Exception as exc:
             logger.exception("Silver Bullet strategy raised: %s", exc)
 
@@ -2357,6 +2809,16 @@ def _reset_for_new_day(components: Components, state: EngineState) -> None:
     logger.info("  NEW TRADING DAY: %s", datetime.now().strftime("%Y-%m-%d"))
     logger.info("=" * 60)
 
+    # Close out yesterday's Topstep tracking before resetting. end_of_day
+    # updates the EOD peak balance — without this call, the trailing MLL
+    # watermark would never advance past the starting balance, and a
+    # profitable week would still measure drawdown from $50K instead of
+    # the running peak. Safe no-op when topstep mode is off.
+    try:
+        components.risk.end_of_day()
+    except Exception as exc:
+        logger.debug("end_of_day failed (non-fatal): %s", exc)
+
     components.risk.reset_daily()
     components.ny_am_strategy.reset_daily()
     components.silver_bullet_strategy.reset_daily()
@@ -2373,19 +2835,23 @@ def _reset_for_new_day(components: Components, state: EngineState) -> None:
     # ── Seed tracked_levels immediately so London KZ (01:00-04:00 CT)
     # has PDH/PDL/PWH/PWL available before pre-market runs at 06:00 CT.
     # Pre-market will re-seed with fresher data later.
+    #
+    # CRITICAL (2026-04-23 fix): pass as_of_ts to exclude forming daily
+    # + weekly bars — see _run_premarket_scan for full rationale.
     try:
         bars = state.bars_1min
         if bars is not None and not bars.empty:
             tf_mgr = components.tf_manager
             df_daily = tf_mgr.aggregate(bars, "D")
             df_weekly = tf_mgr.aggregate(bars, "W")
+            as_of = bars.index[-1]
             levels = components.detectors["liquidity"].build_key_levels(
-                df_daily=df_daily, df_weekly=df_weekly,
+                df_daily=df_daily, df_weekly=df_weekly, as_of_ts=as_of,
             )
             components.detectors["tracked_levels"] = levels
             logger.info(
-                "tracked_levels seeded on daily reset: %d levels (%s)",
-                len(levels),
+                "tracked_levels seeded on daily reset (as_of=%s): %d levels (%s)",
+                as_of, len(levels),
                 ", ".join(f"{lvl.type}@{lvl.price:.2f}" for lvl in levels),
             )
         else:

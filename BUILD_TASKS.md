@@ -729,4 +729,185 @@ daily/weekly_bias, active_kz, mll_zone, min_confluence, bot_status).
 
 ---
 
+## MILESTONE 18: Silver Bullet v4 RTH + Live Ops Hardening (2026-04-20 → 2026-04-22)
+
+### M18a — Silver Bullet v4 RTH Mode rewrite (2026-04-20 → 2026-04-21)
+
+SB v1 was an OB-based copy of NY AM Reversal with the wrong AM window (10-11 CT instead of 9-10 CT). Full rewrite against ICT 2024 Mentorship video.
+
+**Changes to `strategies/silver_bullet.py`:**
+- Entry: `fvg.top + 1 tick` (long) / `fvg.bottom - 1 tick` (short). Was `ob.high/low`.
+- Stop: FVG `stop_reference` (candle 1 high/low) ± 1 tick buffer.
+- Target: nearest unswept BSL/SSL/PDH/PDL/PWH/PWL/equal_highs/equal_lows in direction, **framework ≥10pts** hard gate.
+- No HTF bias requirement (ICT explicit: "no es necesariamente el bias").
+- Kill zones: `("london", "ny_am", "ny_pm")` v4 RTH mode (wider than ICT-strict 3×60min windows).
+- Trade cap: `MAX_TRADES_PER_ZONE = 999` — effectively unlimited; kill-switch is the real guard.
+- `ENTRY_WAIT_MINUTES = 0`, `MIN_STOP_PTS = 0.0` — disabled (v2 hard filters over-filtered low-price years).
+- Confluence gate REMOVED — Q1 2024 analysis showed higher scores had lower WR (5pt → 37.8% WR, 6-9pt → 0-16% WR).
+
+**Per-KZ kill-switch reset** in `risk/risk_manager.py`:
+- `reset_kill_switch_only(reason)` — zeros the 3-consecutive-losses counter without touching daily P&L.
+- `SilverBulletStrategy` calls it whenever active KZ changes (`_last_active_zone` tracking). Losing 3 in London no longer locks NY AM/PM.
+
+**Config fixes:**
+- `silver_bullet` KZ: 10-11 CT → 9-10 CT (matches ICT 10-11 ET).
+- Added `pm_silver_bullet` 13-14 CT (= 14-15 ET).
+- `MAX_MNQ_TRADES_PER_DAY`: 3 → 15 (was silently blocking NY AM after London filled the 3-trade global cap — critical fix).
+
+**Validation**:
+- Full 2024 baseline (SB v8 trailing RTH): 2,067 trades · 44.1% WR · +$115,547 · PF 1.47 · max DD $3,864 · 7 combine resets.
+- 7-year walk-forward (2019-2025): all years positive, +$672K aggregate.
+- Combine Simulator 210 runs: 72.4% pass rate.
+
+**Done when:** All SB tests green, Q1 2024 backtest run, full 2024 run, validated against Combine Simulator.
+
+### M18b — Phantom Fill Bug Fix (2026-04-22)
+
+Paper bot reported `+$2,154 WIN` in Topstep UI showed OPEN orders without stops — entry had never filled but bot's polling fallback treated `filled_price is None` as "proceed".
+
+**Fix in `main._poll_position_status`** (~line 1787):
+```python
+entry_order = pos.get("entry_order")
+entry_filled_price = getattr(entry_order, "filled_price", None) if entry_order else None
+if entry_filled_price is None:
+    # CASE 1: entry never filled — cancel remaining orders + clean state
+    for kind in ("stop_order", "target_order", "entry_order"):
+        o = pos.get(kind)
+        oid = getattr(o, "order_id", None) if o else None
+        if oid:
+            try:
+                await components.broker.cancel_order(str(oid))
+            except Exception as exc:
+                logger.debug(...)
+    state.open_positions.pop(pos_key, None)
+    # Rollback KZ counter
+    ...
+    continue
+```
+
+**Also added in `main._update_detectors`:**
+- 1-min FVG detection (was only 5-min) — SB never saw its own trigger inputs.
+- 5-min structure detection (was only 15-min) — SB's MSS requirement never evaluated on the right TF.
+- `end_of_day()` now called in `_reset_for_new_day` (Topstep MLL trailing peak was never advancing).
+
+### M18c — Equal Levels A/B Test (2026-04-22) — DECISION: OFF
+
+**Hypothesis**: On days where PDH/PDL/PWH/PWL are out of reach, detecting intraday equal_highs/equal_lows would give SB more valid setups.
+
+**Implementation**:
+- `detectors/liquidity.py.refresh_equal_levels_into(tracked, swing_points, tf, threshold_pct, min_count, merge_tolerance_pct)` — static method that detects swing-point clusters and merges into `tracked_levels` with dedup.
+- `backtest/backtester.py` — new params `refresh_equal_levels`, `equal_levels_threshold_pct`, `equal_levels_min_count`; called in `_update_detectors` after swing detection.
+- `scripts/run_backtest.py` — CLI flags `--equal-levels`, `--equal-levels-threshold-pct`, `--equal-levels-min-count`.
+- `scripts/compare_eql_vs_v8.py` + `scripts/daily_eql_diff.py` — A/B comparison scripts.
+
+**Q1 2024 A/B results**:
+
+| Metric | V8 Baseline | V9 All-KZ | NY-only hybrid |
+|--------|-------------|-----------|----------------|
+| Trades | 538 | 537 | 540 |
+| Win rate | 41.4% | 43.4% | 43.3% |
+| P&L | +$14,768 | +$13,485 | +$15,548 |
+| Profit factor | 1.47 | 1.39 | 1.47 |
+
+- London KZ regressed −$2,064 (overnight equal-levels = algo noise, not institutional).
+- NY AM +$492, NY PM +$288 — modest improvement.
+- 14 drift days with same count but different trades (confluence re-scoring changed which signals fired).
+- 4 days v9 added trades (+$1,231), 4 days v9 dropped trades (-$2,035).
+
+**Decision**: keep equal_levels **OFF** in live. NY-only hybrid (+$780 vs baseline) shows promise but needs real sessions before gating. NO wiring to `main.py`.
+
+### M18d — Confluence Option B dual-display (2026-04-22)
+
+The 19-pt scoring table was calibrated for NY AM Reversal. SB uses only 8 of those 14 factors — 4 are structural gates (wouldn't score them even in an SB-specific schema), 2 never apply (OTE fib, HTF OB/FVG overlay). A `confluence=11/19` for SB was misleading: 7 pts were guaranteed structural.
+
+**Chosen: Option B (non-breaking display)** — keep the internal /19 scorer for historical comparability (backtest JSONs, Supabase signals column, post-mortem prompts all unchanged), but logs + Telegram show dual: `confluence=11/19 (SB: 4/10)`.
+
+**Implementation**:
+- `config.SB_APPLICABLE_FACTORS` set (8 SB-relevant weight keys) + `SB_APPLICABLE_MAX = 10`.
+- `strategies/silver_bullet.py.sb_applicable_score(breakdown)` helper → `(score, max)`.
+- `strategies/silver_bullet.py` EVAL fire line shows dual.
+- `alerts/telegram_bot.py.send_signal_fired` detects `strategy == "silver_bullet"` and appends `(SB: X/10)` to confluence line.
+
+**Rejected: Option A (full refactor)** — would have required schema migration, dashboard updates, post-mortem prompt changes, and 7 years of backtest JSONs would be incomparable.
+
+### M18e — Telegram Verbosity + 4 new alerts (2026-04-22)
+
+Three verbosity levels via `TELEGRAM_VERBOSITY` env (quiet | normal | verbose, default normal):
+
+**New in `alerts/telegram_bot.py`:**
+- `_should_send(alert_type, bucket_key, min_verbosity)` — unified gate (verbosity + per-bucket throttle).
+- `send_kz_enter(kz, ts, bias_d, bias_w, tracked_levels, vpin, swc_mood)` — KZ context at activation.
+- `send_kz_summary(kz, ts, stats)` — close-of-KZ tally (evaluations, sweeps, fvgs_seen, signals_fired, trades_taken, pnl, top reject reasons).
+- `send_sweep_detected(level_type, price, kz, candle, ts)` — when a level flips to swept.
+- `send_signal_near_miss(strategy, kz, ts, reason, details)` — verbose only, structural rejects with details.
+
+**Throttling (`config.TELEGRAM_THROTTLE_SEC`)**:
+- `near_miss`: 300s per `(kz, reason)` — 18 identical rejects = 3 alerts max
+- `sweep`: 0s (level.swept flag prevents re-alerting same level)
+- `kz_enter` / `kz_summary`: 0s (one per KZ transition)
+- `fvg`: 60s per `(kz, direction)` — verbose only
+
+**Strategy exposure in `strategies/silver_bullet.py`:**
+- `self.last_rejection: Optional[dict]` — set by `_set_rejection(ts, reason, kz, is_near_miss, **details)` at each `return None` site.
+- 5 near-miss sites flagged: `no_fvg_in_window`, `no_opposite_sweep`, `no_5min_struct`, `no_liquidity_target`, `framework_lt_10pts`.
+- Routine rejects (outside_kz, max_trades, past_cancel_time, risk_blocked) set `is_near_miss=False`.
+
+**Main.py wiring:**
+- `EngineState` new fields: `active_kz`, `kz_stats`, `kz_opened_at`, `pending_sweep_alerts`.
+- `_fresh_kz_stats()` factory.
+- `_update_detectors` sync path enqueues sweep alerts (no await); drained in `_on_new_bar` async context.
+- `_evaluate_strategies` detects KZ transitions (None → KZ, KZ-A → KZ-B, KZ → None) and fires enter/summary.
+- After SB `evaluate()` returns None, reads `last_rejection` and fires near-miss alert if `is_near_miss` + verbose.
+
+**Validation**: Throttle semantics unit-tested (6/6 pass). 1,477 full test suite green.
+
+### Status snapshot @ 2026-04-22 (updated evening)
+
+**Tests + infra**
+- Tests: 1,477 passing (engine), dashboard build ✓ (was 1,442 after M17c)
+- Combine pass rate: 72.4% (210 random-start attempts)
+
+**7-year walk-forward (2019–2025 SB v8 trailing RTH) — REAL numbers after detailed_report.py extraction**
+
+| Año | Trades | WR | P&L | PF | MaxDD | Resets | DLL>-$1K days |
+|-----|--------|-----|------|-----|-------|--------|---------------|
+| 2019 | 2,110 | 43.1% | +$70,028 | 1.68 | $3,030 | 10 | 0 |
+| 2020 | 2,049 | 43.7% | +$92,203 | 1.84 | $5,813 | 10 | 2 |
+| 2021 | 1,916 | 40.7% | +$110,598 | 2.06 | $5,790 | 12 | 1 |
+| 2022 | 2,101 | 44.8% | +$103,804 | 2.01 | $3,810 | 8 | 1 |
+| 2023 | 1,991 | 45.3% | +$91,062 | 1.88 | $4,261 | 8 | 3 |
+| 2024 | 2,067 | 44.1% | +$115,547 | 2.05 | $3,864 | 7 | 2 |
+| 2025 | 1,952 | 44.9% | +$89,759 | 1.86 | $3,032 | 9 | 2 |
+| **AGG** | **14,186** | **43.8%** | **+$673,000** | **1.91** | — | 64 | 11 |
+
+**Consistency (was missing from prior docs):**
+- **0 negative years** · mean annual $96,143 · median $92,203 · std dev $15,320
+- **Monthly hit rate 91.7%** (77/84 positive months; ~1 negative month/year)
+- **Daily hit rate 54.4%** (983/1,808 positive trading days)
+- **DLL breach rate 0.61%** (only 11 days ≤ −$1,000 across 7 years)
+
+**Corrections propagated**:
+- Full 2024 PF was published as 1.47 in all docs — that's Q1 PF mis-propagated. Real full-year PF is **2.05**. All 4 docs + guide corrected.
+- London narrative corrected: London = $436,600 aggregate = **64.9% of 7-year P&L**, workhorse in every single year. Q1 2024 London weakness was anomaly, not trend. Any "London cap" filter would cut the primary P&L source.
+
+**Paper bot status**
+- Restarted 20:58 ET with today's code (verbosity=normal → 4 new Telegram alerts, SB sub-score display, ladder infra default OFF).
+- Warm-up complete: 10,000 historical bars seeded, trading enabled.
+- Ready for London KZ at 01:00 CT (2026-04-23).
+
+**M18 series — feature decisions (all NQ-only tests)**
+
+| Feature | A/B result | Status |
+|---------|-----------|--------|
+| equal_levels refresh (Q1 2024) | Flat-to-neg (-$1,283; London regresses −$2,064). NY-only hybrid +$780 but needs real validation. | **OFF** in live; available via `--equal-levels` in backtester |
+| Risk ladder 250/200/150/100/50 + London 2L cap (Q1 2024) | Survives better (-71% resets, -28% max DD) but **cuts P&L 82%** ($14,768 → $2,638, PF 1.47 → 1.15). London cap would have cut 64.9% of 7-year P&L. | **REJECTED**; flat $250 V8 retained. Code available via `--risk-ladder` + `--kz-loss-cap` flags if ever needed |
+
+**Next planned (cross-instrument validation, NQ first then ES/YM)**
+- ES Q1 2024 V8 (running tonight) — first out-of-sample test on ES
+- If ES Q1 positive → full year ES 2024
+- If ES 2024 positive → YM 2024 → full 7-year walk on both
+- Strategy Lab Gate 5 (cross-instrument) requires 2/3 of NQ/ES/YM positive
+
+---
+
 *"Follow the tasks. Trust the process. Build the machine."*
