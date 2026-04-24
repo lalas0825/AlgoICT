@@ -695,10 +695,30 @@ Sharpe: {sharpe:.2f}
         Parameters
         ----------
         vpin : float (0.0-1.0)
-        toxicity_level : "calm", "normal", "elevated", "high", "extreme"
+        toxicity_level : "calm", "normal", "elevated", "high", "extreme",
+            "normalized"
 
         Returns True on success.
+
+        2026-04-24 Bug H4: respect TELEGRAM_VERBOSITY. Previously ALL
+        VPIN transitions fired an alert regardless of verbosity, so
+        `quiet` mode still got 5-10 VPIN chatter alerts/day. Now:
+          - extreme  → always fires (critical, bypasses verbosity)
+          - normalized → always fires (recovery from halt)
+          - high / elevated → normal verbosity + (kz, level) throttle
+          - calm / normal → verbose only
         """
+        # Critical levels bypass verbosity + throttle.
+        critical = toxicity_level in ("extreme", "normalized")
+        if not critical:
+            if toxicity_level in ("high", "elevated"):
+                if not self._should_send("vpin", (toxicity_level,), min_verbosity="normal"):
+                    return False
+            else:
+                # calm / normal — only verbose users want these.
+                if not self._should_send("vpin", (toxicity_level,), min_verbosity="verbose"):
+                    return False
+
         try:
             if toxicity_level == "extreme":
                 emoji = "🚨"

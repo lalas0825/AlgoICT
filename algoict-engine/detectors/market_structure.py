@@ -250,7 +250,16 @@ class MarketStructureDetector:
     ) -> Optional[SwingPoint]:
         """
         Most recent swing of *swing_type* on *timeframe* whose timestamp is
-        strictly less than *before_ts* and not yet consumed.
+        strictly less than *before_ts* and not yet consumed, AND still
+        active (not broken).
+
+        2026-04-24 Bug H10: previously this filter did not check
+        ``sp.broken`` — so a swing high that price had already closed
+        above (marking it `broken=True` in the swing detector) could
+        still be returned as a candidate for a new BOS. The resulting
+        BOS event would fire against an already-broken level, producing
+        a spurious "structure event" that strategy gates would consume
+        as confirmation. Only active (unbroken) swings count.
         """
         candidates = [
             sp for sp in swing_points.swing_points
@@ -258,6 +267,7 @@ class MarketStructureDetector:
             and sp.timeframe == timeframe
             and sp.timestamp < before_ts
             and sp.timestamp not in consumed_ts
+            and not getattr(sp, "broken", False)
         ]
         if not candidates:
             return None

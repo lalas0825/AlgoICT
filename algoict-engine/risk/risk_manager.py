@@ -123,6 +123,15 @@ class RiskManager:
         self._kz_loss_caps: dict = dict(getattr(config, "KZ_LOSS_CAPS", {}) or {})
         self._kz_losing_trades: dict = {}
 
+        # ── Idempotency (2026-04-24 Bug C6) ─────────────────────────────
+        # record_trade may be called by: (a) User Hub fill event,
+        # (b) _poll_position_status inferred exit, (c) reconciler orphan
+        # cleanup, (d) flatten_all synthesized events. Without a dedup
+        # key, the same order can get its P&L booked 2-3x — daily_pnl
+        # drifts, kill switch trips early, MLL zone jumps artificially.
+        # Set is cleared at reset_daily().
+        self._recorded_order_ids: set = set()
+
     # ------------------------------------------------------------------ #
     # Public API — Topstep Combine mode                                    #
     # ------------------------------------------------------------------ #
@@ -248,7 +257,12 @@ class RiskManager:
     # Public API — state updates                                           #
     # ------------------------------------------------------------------ #
 
-    def record_trade(self, pnl: float, kill_zone: str = None) -> None:
+    def record_trade(
+        self,
+        pnl: float,
+        kill_zone: str = None,
+        order_id: str = None,
+    ) -> dict:
         """
         Record a completed trade P&L and update all risk counters.
 
@@ -257,7 +271,61 @@ class RiskManager:
         pnl : float — profit (+) or loss (-) in dollars
         kill_zone : str, optional — KZ the trade was taken in. Required
             for per-KZ loss cap tracking; ignored when no caps set.
+            In Topstep mode without a KZ the call is logged at WARNING
+            because it means per-KZ accounting silently skipped this trade.
+        order_id : str, optional — broker order id used for idempotency.
+            If this id was already recorded, the call is a no-op (returns
+            ``skipped=True``). Prevents User Hub + poll path + reconciler
+            from triple-booking the same exit (Bug C6).
+
+        Returns
+        -------
+        dict with state-transition flags (used by main.py to escalate
+        alerts to Telegram without recomputing):
+            {
+              "recorded": bool,                  # False if duplicate skip
+              "kill_switch_triggered": bool,     # transitioned False→True
+              "kill_switch_reason": str | None,  # "consecutive"|"dll"|"ladder"
+              "profit_cap_triggered": bool,      # transitioned False→True
+              "mll_zone_changed": bool,          # zone differs post-update
+              "mll_zone_prev": str, "mll_zone_now": str,
+            }
         """
+        # ── Idempotency guard (Bug C6) ──────────────────────────────────
+        if order_id is not None:
+            oid_key = str(order_id)
+            if oid_key in self._recorded_order_ids:
+                logger.info(
+                    "record_trade: order_id=%s already recorded — skipping duplicate (pnl=%.2f)",
+                    oid_key, pnl,
+                )
+                return {
+                    "recorded": False,
+                    "kill_switch_triggered": False,
+                    "kill_switch_reason": None,
+                    "profit_cap_triggered": False,
+                    "mll_zone_changed": False,
+                    "mll_zone_prev": self._mll_zone,
+                    "mll_zone_now": self._mll_zone,
+                }
+            self._recorded_order_ids.add(oid_key)
+
+        # ── kill_zone=None warn (Bug H8) ────────────────────────────────
+        # Per-KZ caps silently miss this trade if kill_zone is falsy in
+        # Topstep mode. The caller likely forgot to thread it through.
+        if self._topstep_mode and not kill_zone:
+            logger.warning(
+                "record_trade: kill_zone is empty/None in Topstep mode "
+                "— per-KZ loss caps will miss this trade (pnl=%.2f, "
+                "order_id=%s). Thread kill_zone from signal.kill_zone.",
+                pnl, order_id or "?",
+            )
+
+        # Snapshot prior state for transition detection.
+        kill_prev = self.kill_switch_active
+        cap_prev = self.profit_cap_active
+        zone_prev = self._mll_zone
+
         self.daily_pnl += pnl
         self.trades_today += 1
 
@@ -273,6 +341,8 @@ class RiskManager:
         else:
             self.consecutive_losses = 0
 
+        kill_reason: str | None = None
+
         # ── Kill switch: 3 consecutive losses ──────────────────────────
         # When the risk ladder is enabled, the 3-consecutive-loss kill
         # switch is SUPPRESSED — the ladder (5 shots at step-down risk)
@@ -284,6 +354,8 @@ class RiskManager:
             not self._ladder_enabled
             and self.consecutive_losses >= config.KILL_SWITCH_LOSSES
         ):
+            if not self.kill_switch_active:
+                kill_reason = "consecutive_losses"
             self.kill_switch_active = True
             logger.warning(
                 "KILL SWITCH: %d consecutive losses (daily_pnl=%.2f)",
@@ -292,6 +364,8 @@ class RiskManager:
 
         # ── Kill switch: daily loss exceeds $750 ────────────────────────
         if self.daily_pnl <= -config.KILL_SWITCH_AMOUNT:
+            if not self.kill_switch_active:
+                kill_reason = "daily_loss_limit"
             self.kill_switch_active = True
             logger.warning(
                 "KILL SWITCH: daily loss limit hit (daily_pnl=%.2f)",
@@ -303,6 +377,8 @@ class RiskManager:
             self._ladder_enabled
             and self._losses_today >= len(self._ladder_schedule)
         ):
+            if not self.kill_switch_active:
+                kill_reason = "ladder_exhausted"
             self.kill_switch_active = True
             logger.warning(
                 "KILL SWITCH: risk ladder exhausted (%d losses, schedule=%s, daily_pnl=%.2f)",
@@ -348,6 +424,16 @@ class RiskManager:
             "Trade recorded: pnl=%.2f | daily=%.2f | losses=%d | trades=%d",
             pnl, self.daily_pnl, self.consecutive_losses, self.trades_today,
         )
+
+        return {
+            "recorded": True,
+            "kill_switch_triggered": (not kill_prev) and self.kill_switch_active,
+            "kill_switch_reason": kill_reason,
+            "profit_cap_triggered": (not cap_prev) and self.profit_cap_active,
+            "mll_zone_changed": zone_prev != self._mll_zone,
+            "mll_zone_prev": zone_prev,
+            "mll_zone_now": self._mll_zone,
+        }
 
     def can_trade(self) -> tuple[bool, str]:
         """
@@ -620,6 +706,10 @@ class RiskManager:
         # each morning. The ladder schedule + caps themselves persist.
         self._losses_today = 0
         self._kz_losing_trades = {}
+        # Clear dedup set so the same order_id could theoretically be
+        # recorded across days (paranoid — order_ids are unique from
+        # TopstepX, but resetting keeps memory bounded).
+        self._recorded_order_ids = set()
 
         # MLL zone recalc at day start (the "stop" zone resets because
         # a new day gives the trader a fresh chance, but the drawdown

@@ -87,6 +87,10 @@ TELEGRAM_THROTTLE_SEC = {
     "fvg":           60,    # 1/min per (kz, direction) — verbose only
     "near_miss":    300,    # 5 min per (kz, reason) — prevents reject-storm
     "mss":          180,    # 3 min per (tf, direction) — verbose only
+    # 2026-04-24 Bug H4: VPIN state chatter — 10 min per level so we
+    # don't flood on oscillation around 0.55/0.70. "extreme" +
+    # "normalized" bypass this entirely (critical, see send_vpin_alert).
+    "vpin":         600,
 }
 
 # ---------------------------------------------------------------------------

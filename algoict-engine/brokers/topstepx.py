@@ -580,41 +580,77 @@ class TopstepXClient:
     async def get_positions(self) -> list[Position]:
         """
         Return all open positions for the current account.
-        Positions with zero contracts are excluded.
-        A 404 response means the account has no position record yet — treated
-        as an empty list (INFO), not an error.
+
+        2026-04-24 CRITICAL FIX (Bug J): the previous endpoint
+        ``GET /Position/account/{id}`` returns 404 unconditionally on
+        TopstepX ProjectX — it is not a valid endpoint. That meant
+        `get_positions()` returned `[]` even when the account held a
+        real position, which:
+          1) made the reconciler mark the live local position as an
+             "orphan" and wipe it from internal state,
+          2) made every `flatten_all()` a no-op ("no open positions"),
+          3) made VPIN-extreme shield flatten pointlessly.
+        The 2026-04-24 NY AM phantom fire filled a real SHORT 3 x MNQ
+        that ran unprotected until the user closed it manually, because
+        we trusted a 404 to mean "flat".
+
+        The canonical ProjectX endpoint is POST /Position/searchOpen
+        with body ``{"accountId": <id>}``. Response shape:
+            {"positions": [{id, accountId, contractId, creationTimestamp,
+                             type, size, averagePrice}, ...],
+             "success": bool, "errorCode": int, "errorMessage": str}
+
+        ``type`` is 1=LONG, 2=SHORT in ProjectX convention, so we sign
+        the contract count accordingly (long positive, short negative)
+        to match the `Position` dataclass contract.
+
+        Positions with zero size are excluded.
         """
-        try:
-            data = await self._get(f"/Position/account/{self._account_id}")
-        except aiohttp.ClientResponseError as exc:
-            if exc.status == 404:
-                logger.info(
-                    "get_positions: no open positions (404 — account has no position record)"
-                )
-                return []
-            raise
-
-        # API may return a list directly or wrap it in a key
-        if isinstance(data, dict):
-            rows = data.get("positions") or data.get("data") or []
-        else:
-            rows = data or []
-
-        positions = []
+        data = await self._post(
+            "/Position/searchOpen",
+            {"accountId": int(self._account_id)},
+        )
+        if not isinstance(data, dict):
+            logger.error("get_positions: unexpected response shape: %r", data)
+            return []
+        if not data.get("success", True):
+            logger.error(
+                "get_positions: ProjectX error code=%s msg=%s",
+                data.get("errorCode"), data.get("errorMessage"),
+            )
+            return []
+        rows = data.get("positions") or []
+        positions: list[Position] = []
         for row in rows:
-            contracts = int(row.get("size") or row.get("contracts") or 0)
-            if contracts == 0:
+            size = int(row.get("size") or 0)
+            if size == 0:
                 continue
+            # ProjectX type: 1=long, 2=short. Dataclass `contracts` is
+            # signed (long positive, short negative).
+            ptype = int(row.get("type") or 0)
+            if ptype == 2:
+                signed = -abs(size)
+            else:
+                # Default to long for type=1 or unknown (safer than
+                # treating an unknown type as short).
+                signed = abs(size)
             pos = Position(
-                symbol=str(row.get("symbol") or row.get("contractId") or ""),
-                contracts=contracts,
-                avg_price=float(row.get("avgPrice") or row.get("averagePrice") or 0.0),
+                symbol=str(row.get("contractId") or row.get("symbol") or ""),
+                contracts=signed,
+                avg_price=float(row.get("averagePrice") or row.get("avgPrice") or 0.0),
                 unrealized_pnl=float(row.get("unrealizedPnl") or row.get("pnl") or 0.0),
                 account_id=self._account_id,
             )
             positions.append(pos)
 
-        logger.debug("get_positions: %d open", len(positions))
+        if positions:
+            logger.info(
+                "get_positions: %d open — %s",
+                len(positions),
+                ", ".join(f"{p.symbol} {p.contracts:+d}@{p.avg_price:.2f}" for p in positions),
+            )
+        else:
+            logger.debug("get_positions: 0 open")
         return positions
 
     async def flatten_all(self) -> list[OrderResult]:
@@ -832,11 +868,47 @@ class TopstepXClient:
                 logger.exception("User hub order handler error: %s", exc)
 
         def _on_open() -> None:
+            # 2026-04-24 Bug K fix: the ProjectX User Hub spec requires
+            # SEPARATE subscribe calls per feed. Previous code called
+            # ``SubscribeAccounts(accountId)`` with an argument — but
+            # the server-side signature is ``SubscribeAccounts()``
+            # (no args) and the accountId call path is
+            # ``SubscribeOrders(int accountId)`` for order/fill events.
+            #
+            # Wrong signature → CompletionMessage with error → 3 retries
+            # → "stopping reconnect" → fallback to `get_positions()`
+            # polling, which also returned 404 (Bug J) — so the engine
+            # has been invisible to fills since at least 2026-04-22.
+            #
+            # Canonical ProjectX subscribe sequence:
+            #   SubscribeAccounts()                  # account updates
+            #   SubscribeOrders(int accountId)       # GatewayUserOrder
+            #   SubscribePositions(int accountId)    # GatewayUserPosition
+            #   SubscribeTrades(int accountId)       # GatewayUserTrade
             logger.info(
                 "User hub: connected, subscribing account %s", self._account_id
             )
             self.user_hub_alive = True
-            conn.send("SubscribeAccounts", [self._account_id])
+            try:
+                account_id_int = int(self._account_id)
+            except (TypeError, ValueError):
+                logger.error(
+                    "User hub: account_id %r not castable to int — "
+                    "cannot subscribe to orders/positions/trades",
+                    self._account_id,
+                )
+                return
+            try:
+                conn.send("SubscribeAccounts", [])
+                conn.send("SubscribeOrders", [account_id_int])
+                conn.send("SubscribePositions", [account_id_int])
+                conn.send("SubscribeTrades", [account_id_int])
+                logger.info(
+                    "User hub: subscribed to Accounts/Orders/Positions/Trades "
+                    "for account %d", account_id_int,
+                )
+            except Exception as exc:
+                logger.error("User hub: subscribe failed: %s", exc)
 
         # Capture whether the disconnect came from an error or a clean
         # close — the outer retry loop needs this to decide whether to
@@ -854,7 +926,25 @@ class TopstepXClient:
         def _on_error(err: Exception) -> None:
             nonlocal had_error
             had_error = True
-            logger.error("User hub: error — %s", err)
+            # signalrcore sometimes hands us a CompletionMessage here;
+            # its default repr is useless (object id only). Extract the
+            # actual server-side error / result for log forensics.
+            detail = ""
+            try:
+                error_attr = getattr(err, "error", None)
+                result_attr = getattr(err, "result", None)
+                inv_id = getattr(err, "invocation_id", None)
+                if error_attr or result_attr is not None or inv_id is not None:
+                    detail = (
+                        f"invocation_id={inv_id} error={error_attr!r} "
+                        f"result={result_attr!r}"
+                    )
+            except Exception:
+                detail = ""
+            if detail:
+                logger.error("User hub: error — %s [%s]", err, detail)
+            else:
+                logger.error("User hub: error — %s", err)
             loop.call_soon_threadsafe(disconnected.set)
 
         conn.on("GatewayUserOrder", _on_order_update)

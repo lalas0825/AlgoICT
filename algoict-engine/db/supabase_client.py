@@ -140,9 +140,19 @@ class SupabaseClient:
         """
         Write a trading signal.
 
-        Expected keys:
-            timestamp, symbol, signal_type, price, confluence_score,
-            liquidity_grab, fair_value_gap, order_block, etc.
+        Expected keys (per supabase/migrations/0001_init.sql `signals` table):
+            timestamp, symbol, direction, price, confluence_score,
+            strategy, level, kill_zone, liquidity_grab, fair_value_gap,
+            order_block, market_structure, vpin, gex_regime, ict_concepts.
+
+        2026-04-24 Bug C1 fix: caller used `signal_type` but the schema's
+        NOT NULL column is named `direction`. Every signal insert was
+        failing with PGRST23502 (`null value in column "direction"
+        violates not-null constraint`) and the retry path stripped
+        `signal_type` as "missing column" — so signals were NEVER
+        persisted to Supabase. Dashboard `/signals` page was blank
+        permanently. The caller side accepts both keys (`direction`
+        canonical + `signal_type` legacy alias) during the rollout.
 
         On PGRST204 ("column X not found"), the offending column is cached
         and future writes strip it silently, mirroring update_bot_state.
@@ -151,19 +161,24 @@ class SupabaseClient:
         Returns True on success.
         """
         signal_id = f"{signal.get('symbol')}_{signal.get('timestamp')}"
+        direction = signal.get("direction") or signal.get("signal_type")
         payload: dict = {
             "id": signal_id,
             "timestamp": signal.get("timestamp"),
             "symbol": signal.get("symbol"),
-            "signal_type": signal.get("signal_type"),
+            "strategy": signal.get("strategy"),
+            "direction": direction,                    # NOT NULL in schema
+            "level": signal.get("level"),
             "price": signal.get("price"),
             "confluence_score": signal.get("confluence_score"),
+            "ict_concepts": signal.get("ict_concepts") or [],
             "liquidity_grab": signal.get("liquidity_grab"),
             "fair_value_gap": signal.get("fair_value_gap"),
             "order_block": signal.get("order_block"),
             "market_structure": signal.get("market_structure"),
             "vpin": signal.get("vpin"),
             "gex_regime": signal.get("gex_regime"),
+            "kill_zone": signal.get("kill_zone"),
         }
         # Strip known-missing columns up front
         for col in self._missing_signals_cols:

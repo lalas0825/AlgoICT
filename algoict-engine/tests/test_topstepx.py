@@ -401,44 +401,115 @@ class TestCancelOrder:
 # ---------------------------------------------------------------------------
 
 class TestGetPositions:
+    """
+    2026-04-24: Bug J fix — endpoint moved from GET /Position/account/{id}
+    (always 404) to POST /Position/searchOpen (ProjectX canonical).
+    Response shape is now {"positions": [...], "success": bool, ...}.
+    Position type is 1=long, 2=short per ProjectX convention.
+    """
+
     @pytest.mark.asyncio
     async def test_returns_open_positions(self):
         client = _mock_client_with_token()
+        client._account_id = "21551987"
 
         mock_resp = AsyncMock()
-        mock_resp.json = AsyncMock(return_value=[
-            {"symbol": "MNQ", "size": 2, "avgPrice": 19500.0, "unrealizedPnl": 100.0},
-            {"symbol": "NQ",  "size": -1, "avgPrice": 19600.0, "unrealizedPnl": -50.0},
-        ])
+        mock_resp.json = AsyncMock(return_value={
+            "positions": [
+                {"contractId": "CON.F.US.MNQ.M26", "type": 1, "size": 2,
+                 "averagePrice": 19500.0, "unrealizedPnl": 100.0},
+                {"contractId": "CON.F.US.NQ.M26", "type": 2, "size": 1,
+                 "averagePrice": 19600.0, "unrealizedPnl": -50.0},
+            ],
+            "success": True,
+            "errorCode": 0,
+            "errorMessage": None,
+        })
         mock_resp.raise_for_status = MagicMock()
         mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
         mock_resp.__aexit__ = AsyncMock(return_value=False)
 
         mock_session = MagicMock()
-        mock_session.get = MagicMock(return_value=mock_resp)
+        mock_session.post = MagicMock(return_value=mock_resp)
         client._session = mock_session
 
         positions = await client.get_positions()
         assert len(positions) == 2
-        assert positions[0].symbol == "MNQ"
+        # type=1 → positive contracts (long)
+        assert positions[0].symbol == "CON.F.US.MNQ.M26"
         assert positions[0].contracts == 2
         assert positions[0].is_long is True
+        # type=2 → negative contracts (short)
+        assert positions[1].contracts == -1
         assert positions[1].is_short is True
+
+        # POST payload should include accountId
+        call_args = mock_session.post.call_args
+        assert "/Position/searchOpen" in call_args.args[0]
+        assert call_args.kwargs["json"] == {"accountId": 21551987}
 
     @pytest.mark.asyncio
     async def test_excludes_zero_size(self):
         client = _mock_client_with_token()
 
         mock_resp = AsyncMock()
-        mock_resp.json = AsyncMock(return_value=[
-            {"symbol": "MNQ", "size": 0, "avgPrice": 0.0, "unrealizedPnl": 0.0},
-        ])
+        mock_resp.json = AsyncMock(return_value={
+            "positions": [
+                {"contractId": "CON.F.US.MNQ.M26", "type": 1, "size": 0,
+                 "averagePrice": 0.0, "unrealizedPnl": 0.0},
+            ],
+            "success": True,
+        })
         mock_resp.raise_for_status = MagicMock()
         mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
         mock_resp.__aexit__ = AsyncMock(return_value=False)
 
         mock_session = MagicMock()
-        mock_session.get = MagicMock(return_value=mock_resp)
+        mock_session.post = MagicMock(return_value=mock_resp)
+        client._session = mock_session
+
+        positions = await client.get_positions()
+        assert positions == []
+
+    @pytest.mark.asyncio
+    async def test_empty_positions_list(self):
+        """Flat account — ProjectX returns {"positions": [], "success": true}."""
+        client = _mock_client_with_token()
+
+        mock_resp = AsyncMock()
+        mock_resp.json = AsyncMock(return_value={
+            "positions": [],
+            "success": True,
+        })
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_resp.__aexit__ = AsyncMock(return_value=False)
+
+        mock_session = MagicMock()
+        mock_session.post = MagicMock(return_value=mock_resp)
+        client._session = mock_session
+
+        positions = await client.get_positions()
+        assert positions == []
+
+    @pytest.mark.asyncio
+    async def test_api_error_logged_returns_empty(self):
+        """success=False from ProjectX — log error, return []."""
+        client = _mock_client_with_token()
+
+        mock_resp = AsyncMock()
+        mock_resp.json = AsyncMock(return_value={
+            "positions": None,
+            "success": False,
+            "errorCode": 42,
+            "errorMessage": "Account not found",
+        })
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_resp.__aexit__ = AsyncMock(return_value=False)
+
+        mock_session = MagicMock()
+        mock_session.post = MagicMock(return_value=mock_resp)
         client._session = mock_session
 
         positions = await client.get_positions()

@@ -31,6 +31,12 @@ def _make_bot() -> tuple[TelegramBot, MockTelegramBot]:
     mock_bot = MockTelegramBot("token")
     tb._bot = mock_bot
     tb._chat_id = "123"
+    # 2026-04-24: tests bypass __init__ via __new__; attrs added by the
+    # verbosity/throttle refactor must be set manually so `_should_send`
+    # works. Default to "verbose" + empty throttle state (alerts fire once
+    # then throttle based on config.TELEGRAM_THROTTLE_SEC).
+    tb._verbosity = "verbose"
+    tb._last_alert_ts = {}
     return tb, mock_bot
 
 
@@ -40,6 +46,8 @@ def _make_bot_err() -> TelegramBot:
     mock_bot.send_message.side_effect = Exception("Connection error")
     tb._bot = mock_bot
     tb._chat_id = "123"
+    tb._verbosity = "verbose"
+    tb._last_alert_ts = {}
     return tb
 
 

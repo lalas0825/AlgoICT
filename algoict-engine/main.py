@@ -1344,21 +1344,41 @@ async def _execute_signal(
                 signal.target_price, effective_fill, adjusted_target, target_pts,
             )
 
-    try:
-        # Pass reference_price so the broker client rejects any target that
-        # would fall outside the allowed deviation band BEFORE a round-trip
-        # to TopstepX (which would silently reject with errorCode=2
-        # "Invalid price outside allowed range" as it did 6× on 2026-04-17).
-        target_order = await broker.submit_limit_order(
-            symbol=signal.symbol,
-            side=exit_side,
-            contracts=signal.contracts,
-            limit_price=_snap(adjusted_target),
-            reference_price=effective_fill,
+    # ── Bug H fix (2026-04-24): skip target order in trailing mode ────
+    # SB uses ICT trailing methodology: NO fixed target, the trailing
+    # stop handles the exit. Submitting a target limit is at best wasted
+    # API call, at worst silently rejected for exceeding broker
+    # deviation limits (e.g. SB short NY AM 2026-04-24 target=PDL@26680
+    # was 697pts / 2.51% away — broker capped at 2% → rejected →
+    # noisy error log + no fallback).
+    #
+    # For FIXED mode (signal.target_price is honoured), still submit.
+    # For TRAILING / PARTIALS_BE — skip; exits come from trail logic.
+    mode = getattr(config, "TRADE_MANAGEMENT", "fixed")
+    target_order = None
+    if mode == "fixed":
+        try:
+            # Pass reference_price so the broker client rejects any
+            # target that would fall outside the allowed deviation band
+            # BEFORE a round-trip to TopstepX (which would silently
+            # reject with errorCode=2 "Invalid price outside allowed
+            # range" as it did 6× on 2026-04-17).
+            target_order = await broker.submit_limit_order(
+                symbol=signal.symbol,
+                side=exit_side,
+                contracts=signal.contracts,
+                limit_price=_snap(adjusted_target),
+                reference_price=effective_fill,
+            )
+        except Exception as exc:
+            logger.error("Target order failed: %s", exc)
+            target_order = None
+    else:
+        logger.info(
+            "Target order skipped (TRADE_MANAGEMENT=%s): trailing stop "
+            "handles exit, target=%.2f kept only for telemetry",
+            mode, adjusted_target,
         )
-    except Exception as exc:
-        logger.error("Target order failed: %s", exc)
-        target_order = None
 
     # Track the position. Limit entries start as "pending" until a fill
     # callback confirms the actual fill price. A TTL sweep in _on_new_bar
@@ -1382,13 +1402,24 @@ async def _execute_signal(
     # swallowed the trade log. Breakdown is kept out of DB until a JSONB
     # migration lands; the raw score is still persisted.
     if components.supabase is not None:
+        # 2026-04-24 Bug C1: was writing `signal_type` (doesn't exist in schema)
+        # instead of `direction` (NOT NULL). Every signal was dropped by DB.
         try:
+            breakdown = getattr(signal, "confluence_breakdown", {}) or {}
             components.supabase.write_signal({
                 "timestamp": str(signal.timestamp),
                 "symbol": signal.symbol,
-                "signal_type": signal.direction,
+                "strategy": signal.strategy,
+                "direction": signal.direction,
                 "price": signal.entry_price,
                 "confluence_score": signal.confluence_score,
+                "kill_zone": getattr(signal, "kill_zone", None),
+                "liquidity_grab": bool(breakdown.get("liquidity_grab")),
+                "fair_value_gap": bool(breakdown.get("fair_value_gap")),
+                "order_block": bool(breakdown.get("order_block")),
+                "market_structure": bool(breakdown.get("market_structure_shift")),
+                "vpin": breakdown.get("vpin_value") or None,
+                "gex_regime": breakdown.get("gex_regime") or None,
             })
         except Exception as exc:
             logger.warning("Supabase signal write failed: %s", exc)
@@ -1645,8 +1676,19 @@ async def _on_broker_fill(
         target_id = str(target_order.order_id) if target_order else ""
 
         # Entry fill: mark position as confirmed so TTL sweep won't cancel it.
+        # 2026-04-24 Bug H2: also stamp the real fill price on the
+        # entry_order so downstream trail logic (which gates on
+        # `entry_order.filled_price is None`) knows the entry landed.
+        # Previously User Hub path updated the FLAG but not the PRICE,
+        # and if User Hub fired before the poll path, the trail was
+        # still blocked thinking the entry never filled.
         if entry_id and entry_id == order_id and not pos.get("entry_fill_confirmed"):
             pos["entry_fill_confirmed"] = True
+            if entry_order is not None and getattr(entry_order, "filled_price", None) is None:
+                try:
+                    entry_order.filled_price = float(fill_price)  # type: ignore[attr-defined]
+                except Exception:
+                    pass
             logger.info(
                 "ENTRY FILL confirmed for pos %s at %.2f", pos_key, fill_price,
             )
@@ -1717,18 +1759,50 @@ async def _on_broker_fill(
         await _on_trade_closed(components, state, trade_dict)
         del state.open_positions[pos_key]
 
-        # Cancel the surviving counter-order
+        # Cancel the surviving counter-order.
+        # Bug C8: `broker.cancel_order` returns bool (True success / False
+        # rejected-or-not-found). Previously the result was ignored —
+        # a failed cancel left a live order at the broker with no trace
+        # in our logs (only the try/except catches exceptions, not
+        # bool-false). Now we log loud + Telegram-escalate on failure
+        # because the counter-order could still fill AFTER the trade is
+        # "closed" locally, opening a reverse position.
         try:
+            ok = True
+            survivor_id = ""
+            survivor_kind = ""
             if is_stop and target_order:
-                await components.broker.cancel_order(str(target_order.order_id))
+                survivor_id = str(target_order.order_id)
+                survivor_kind = "target"
+                ok = await components.broker.cancel_order(survivor_id)
                 logger.info(
-                    "Cancelled target order %s after stop fill", target_order.order_id
+                    "Cancelled target order %s after stop fill (ok=%s)",
+                    survivor_id, ok,
                 )
             elif is_target and stop_order:
-                await components.broker.cancel_order(str(stop_order.order_id))
+                survivor_id = str(stop_order.order_id)
+                survivor_kind = "stop"
+                ok = await components.broker.cancel_order(survivor_id)
                 logger.info(
-                    "Cancelled stop order %s after target fill", stop_order.order_id
+                    "Cancelled stop order %s after target fill (ok=%s)",
+                    survivor_id, ok,
                 )
+            if not ok and survivor_id:
+                logger.error(
+                    "Counter-order cancel REJECTED: %s order %s still "
+                    "working at broker — may fill and open reverse position.",
+                    survivor_kind, survivor_id,
+                )
+                if components.telegram is not None:
+                    try:
+                        await components.telegram.send_emergency_alert(
+                            f"Counter-order cancel REJECTED: {survivor_kind} "
+                            f"{survivor_id} still live at broker after opposite "
+                            f"leg filled. Check broker GUI — a REVERSE position "
+                            f"may open if it fills.",
+                        )
+                    except Exception:
+                        pass
         except Exception as exc:
             logger.warning("Counter-order cancel failed: %s", exc)
 
@@ -1761,11 +1835,36 @@ async def _on_trade_closed(
     """
     pnl = float(trade.get("pnl", 0.0))
 
-    # 1. risk accounting (kill_zone passed for per-KZ loss cap + ladder tracking)
+    # 1. risk accounting (kill_zone + order_id passed for per-KZ loss
+    # cap + ladder tracking + dedup). `order_id` is the BROKER exit
+    # order id (stop/target/market-flatten); fall back to a synthetic
+    # key so at least same-tick duplicates are deduped.
+    order_id = (
+        trade.get("exit_order_id")
+        or trade.get("order_id")
+        or trade.get("id")
+        or f"{trade.get('symbol','MNQ')}_{trade.get('exit_time','?')}"
+    )
+    risk_status: dict = {}
     try:
-        components.risk.record_trade(pnl, kill_zone=trade.get("kill_zone"))
+        risk_status = components.risk.record_trade(
+            pnl,
+            kill_zone=trade.get("kill_zone"),
+            order_id=str(order_id),
+        ) or {}
     except Exception as exc:
         logger.warning("risk.record_trade failed: %s", exc)
+
+    # Bug C6 dedup: risk_status["recorded"] is False on duplicate —
+    # skip the rest of this handler so we don't double-Telegram or
+    # double-Supabase an already-booked exit.
+    if risk_status.get("recorded") is False:
+        logger.info(
+            "_on_trade_closed: skipping downstream (Supabase + Telegram + "
+            "post-mortem) for duplicate order_id=%s pnl=%.2f",
+            order_id, pnl,
+        )
+        return
 
     # 2. supabase persistence
     if components.supabase is not None:
@@ -1785,6 +1884,32 @@ async def _on_trade_closed(
             )
         except Exception as exc:
             logger.warning("Telegram trade closed alert failed: %s", exc)
+
+    # 3b. Bug C3: kill switch Telegram alert on transition False → True.
+    # Previously `send_kill_switch_alert` existed but had zero callers —
+    # user only found out from the absence of new fires that trading had
+    # halted. Now we escalate whenever record_trade reports the transition.
+    if risk_status.get("kill_switch_triggered") and components.telegram is not None:
+        reason = risk_status.get("kill_switch_reason") or "kill_switch"
+        try:
+            await components.telegram.send_kill_switch_alert(reason)
+        except Exception as exc:
+            logger.warning("Telegram kill switch alert failed: %s", exc)
+
+    # 3c. MLL zone escalation — user wants to know when the bot switches
+    # to warning / caution / stop sizing so they can sanity-check.
+    if (
+        risk_status.get("mll_zone_changed")
+        and components.telegram is not None
+    ):
+        try:
+            await components.telegram.send_emergency_alert(
+                f"MLL zone changed: {risk_status.get('mll_zone_prev')} → "
+                f"{risk_status.get('mll_zone_now')} "
+                f"(daily_pnl=${components.risk.daily_pnl:,.2f})",
+            )
+        except Exception as exc:
+            logger.debug("Telegram MLL zone alert failed: %s", exc)
 
     # 5. post-mortem on losses
     if pnl < 0 and components.post_mortem is not None:
@@ -1827,8 +1952,18 @@ async def _poll_position_status(components: Components, state: EngineState) -> N
         return
     try:
         broker_positions = await components.broker.get_positions()
-    except Exception:
-        return  # silent — don't disrupt bar loop on poll failure
+    except Exception as exc:
+        # 2026-04-24 Bug H3: previously this swallowed at `return`. If
+        # get_positions fails silently (network / auth / broker API),
+        # fills go undetected, stops go unmanaged, positions run naked
+        # — and the only trace was the downstream symptoms days later.
+        # Log loud so ops can see the outage in the stream.
+        logger.warning(
+            "_poll_position_status: broker.get_positions failed (%d local "
+            "positions tracked, possible fill-detection blackout): %s",
+            len(state.open_positions), exc,
+        )
+        return
 
     def _root(sym: str) -> str:
         if not sym:
@@ -1856,7 +1991,56 @@ async def _poll_position_status(components: Components, state: EngineState) -> N
         if signal is None:
             continue
         if _root(signal.symbol) in broker_symbols:
-            continue  # still open — nothing to do
+            # Position exists at broker. 2026-04-24 Bug L fix: if local
+            # state still says entry_fill_confirmed=False, the fill just
+            # landed (either User Hub was down or fill event was lost).
+            # Mark confirmed + send "Trade Opened" Telegram alert NOW.
+            # Without this, the user only gets FIRE + trail alerts and
+            # no indication the position actually opened — exactly what
+            # happened to the 3-contract phantom on 2026-04-24 NY AM.
+            if not pos.get("entry_fill_confirmed"):
+                # Match broker-reported avgPrice if available, else
+                # use last close as proxy.
+                matched_pos = next(
+                    (p for p in broker_positions
+                     if _root(getattr(p, "symbol", "")) == _root(signal.symbol)),
+                    None,
+                )
+                avg_price = (
+                    float(getattr(matched_pos, "avg_price", 0.0) or 0.0)
+                    if matched_pos is not None else 0.0
+                )
+                if avg_price <= 0.0 and last_close is not None:
+                    avg_price = float(last_close)
+                pos["entry_fill_confirmed"] = True
+                # Stamp filled_price on entry_order so downstream trail /
+                # close logic can use it (previously only set by the
+                # User Hub fill event path).
+                entry_order = pos.get("entry_order")
+                if entry_order is not None and getattr(entry_order, "filled_price", None) is None:
+                    try:
+                        entry_order.filled_price = avg_price  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
+                logger.info(
+                    "POLL: %s entry fill detected (avg=%.2f) — marking confirmed "
+                    "and sending Telegram trade opened alert",
+                    _root(signal.symbol), avg_price,
+                )
+                if components.telegram is not None:
+                    try:
+                        await components.telegram.send_trade_opened(
+                            symbol=signal.symbol,
+                            direction=signal.direction,
+                            contracts=int(signal.contracts),
+                            fill_price=float(avg_price),
+                        )
+                    except Exception as exc:
+                        logger.debug(
+                            "Telegram trade opened alert (poll-path) failed: %s",
+                            exc,
+                        )
+            continue  # still open — nothing more to do
 
         # Broker says "no position" AND we locally track one. There are TWO
         # very different cases we MUST distinguish, or we fabricate P&L:
@@ -1948,13 +2132,21 @@ async def _poll_position_status(components: Components, state: EngineState) -> N
             )
             # Cancel any stop/target orders that are still resting against
             # a position the broker never opened.
+            # Bug C8: log loud if cancel returns False (broker rejected)
+            # so we can chase down ghost orders post-session.
             for kind in ("stop_order", "target_order", "entry_order"):
                 o = pos.get(kind)
                 oid = getattr(o, "order_id", None) if o else None
                 if not oid:
                     continue
                 try:
-                    await components.broker.cancel_order(str(oid))
+                    ok = await components.broker.cancel_order(str(oid))
+                    if not ok:
+                        logger.warning(
+                            "POLL cleanup: cancel %s (%s) returned False "
+                            "— order may still be working at broker",
+                            oid, kind,
+                        )
                 except Exception as exc:
                     logger.debug(
                         "POLL cleanup: cancel %s (%s) failed: %s", oid, kind, exc,
@@ -2113,30 +2305,96 @@ async def _reconcile_positions(components: Components, state: EngineState) -> No
         # Cancel all pending stop/target orders for each orphaned position
         # then remove from local state. We do NOT record a P&L event because
         # the position was never confirmed at the broker.
-        orphan_keys = [
-            key for key, pos in state.open_positions.items()
-            if _root((pos.get("signal") and pos["signal"].symbol) or "") in orphans
-        ]
+        #
+        # 2026-04-24 Bug H1 — RECONCILER TIMING GUARD: skip orphan cleanup
+        # for positions opened in the last 5 seconds. Broker's internal
+        # position-record update after a fill can lag the fill event
+        # itself by ~100-500ms (sometimes more). If the reconciler runs
+        # in that gap, it sees "no position at broker + local tracking"
+        # → marks as orphan → cancels the REAL position's brackets + wipes
+        # local state → when the fill finally propagates to the broker's
+        # position API, the bot has no memory of it and the position
+        # runs NAKED. Grace period prevents this.
+        _RECONCILE_GRACE_SEC = 5.0
+        now = datetime.now(timezone.utc)
+        orphan_keys = []
+        for key, pos in state.open_positions.items():
+            if _root((pos.get("signal") and pos["signal"].symbol) or "") not in orphans:
+                continue
+            opened_at = pos.get("opened_at")
+            if opened_at is not None:
+                try:
+                    age = (now - opened_at).total_seconds()
+                except Exception:
+                    age = _RECONCILE_GRACE_SEC + 1  # treat as old on error
+                if age < _RECONCILE_GRACE_SEC:
+                    logger.debug(
+                        "Reconcile: position %s too young (%.1fs < %.1fs grace) "
+                        "— deferring orphan check",
+                        key, age, _RECONCILE_GRACE_SEC,
+                    )
+                    continue
+            orphan_keys.append(key)
         for key in orphan_keys:
             pos = state.open_positions.pop(key, None)
             if pos is None:
                 continue
-            for order_field in ("stop_order", "target_order"):
+            # 2026-04-24: include entry_order — a limit entry that never
+            # filled AND leaked an orphan still needs to be cancelled at
+            # the broker, otherwise it can fill late and create a real
+            # position after the bot has moved on.
+            # Bug C8: check cancel return. If broker rejects the cancel,
+            # the order is still live → real exposure possible.
+            cancel_failures: list[tuple[str, str]] = []
+            for order_field in ("entry_order", "stop_order", "target_order"):
                 order = pos.get(order_field)
                 oid = getattr(order, "order_id", None) if order else None
                 if oid:
                     try:
-                        await components.broker.cancel_order(oid)
+                        ok = await components.broker.cancel_order(oid)
+                        if not ok:
+                            cancel_failures.append((order_field, str(oid)))
                     except Exception as exc:
+                        cancel_failures.append((order_field, str(oid)))
                         logger.debug(
                             "Reconcile: cancel %s order %s failed: %s",
                             order_field, oid, exc,
                         )
+            if cancel_failures:
+                logger.error(
+                    "Reconcile ORPHAN cleanup: broker refused cancel on %d "
+                    "order(s): %s — these may still be working!",
+                    len(cancel_failures),
+                    ", ".join(f"{k}={i}" for k, i in cancel_failures),
+                )
             sym = (pos.get("signal") and pos["signal"].symbol) or key
-            logger.info(
-                "ORPHAN resolved: removed local position %s, cancelled pending orders",
-                sym,
+            entry_ord = pos.get("entry_order")
+            entry_never_filled = (
+                getattr(entry_ord, "filled_price", None) is None
+                if entry_ord else True
             )
+            logger.info(
+                "ORPHAN resolved: removed local position %s, cancelled "
+                "entry+stop+target orders (entry_filled=%s)",
+                sym, "NO" if entry_never_filled else "yes",
+            )
+            # ── 2026-04-24: Telegram alert on orphan cleanup ─────────────
+            # Without this alert, the user saw fire + trail alerts but no
+            # close/cancel notification, creating a false impression the
+            # trade was still running. Now the user gets a clear signal
+            # that the phantom/orphan was purged.
+            if components.telegram is not None:
+                direction = (pos.get("signal") and pos["signal"].direction) or "?"
+                try:
+                    await components.telegram.send_emergency_alert(
+                        f"Phantom/orphan resolved — {sym} {direction.upper()} "
+                        f"local position removed "
+                        f"(entry_filled={'NO' if entry_never_filled else 'yes'}). "
+                        "All pending orders cancelled at broker. "
+                        "NO OPEN POSITION.",
+                    )
+                except Exception:
+                    pass
 
 
 async def _manage_open_positions(
@@ -2163,12 +2421,32 @@ async def _manage_open_positions(
 
     broker = components.broker
 
+    # Current market reference — used to validate stop placement before
+    # cancelling the existing bracket stop (Bug F fix 2026-04-24).
+    try:
+        last_close = float(state.bars_1min["close"].iloc[-1])
+    except Exception:
+        last_close = None
+
     for pos in list(state.open_positions.values()):
         signal = pos["signal"]
         direction = signal.direction
         symbol = signal.symbol
         contracts = signal.contracts
         current_stop = pos.get("current_stop_price", float(signal.stop_price))
+
+        # ── Bug E fix (2026-04-24): gate trail on fill status ─────────────
+        # The limit entry may still be unfilled (pending). Trailing the
+        # protective stop on a phantom position cancels the initial stop
+        # and replaces it with an invalid one (broker rejects) — while
+        # Telegram screams "trail moved" to the user. Classic phantom.
+        entry_order = pos.get("entry_order")
+        entry_filled_price = getattr(entry_order, "filled_price", None) if entry_order else None
+        if entry_filled_price is None:
+            # Entry not yet filled — nothing to protect with a stop yet.
+            # Initial bracket stop stays in place until entry fills (at
+            # which point the position becomes real).
+            continue
 
         if direction == "long":
             sp = swing.get_latest_swing_low()
@@ -2181,12 +2459,49 @@ async def _manage_open_positions(
                 continue
             new_stop = sp.price
 
+        # ── Bug F fix (2026-04-24): stop must be on correct side of price ─
+        # For SHORT: stop BUY must be ABOVE current price (triggered when
+        #   market rises into it).
+        # For LONG: stop SELL must be BELOW current price (triggered when
+        #   market falls into it).
+        # The swing detector can return levels on the wrong side of price
+        # (e.g. old swing high now below market). Placing a stop there
+        # causes the broker to reject with errorCode=2 'Order price is
+        # outside allowed range'. Ticker-level guard:
+        if last_close is not None:
+            buffer_pts = 0.25  # 1 MNQ tick — safety margin
+            if direction == "long" and new_stop >= last_close - buffer_pts:
+                logger.warning(
+                    "TRAILING STOP: skipped — long new_stop %.2f not safely below "
+                    "price %.2f (swing detector stale)",
+                    new_stop, last_close,
+                )
+                continue
+            if direction == "short" and new_stop <= last_close + buffer_pts:
+                logger.warning(
+                    "TRAILING STOP: skipped — short new_stop %.2f not safely above "
+                    "price %.2f (swing detector stale)",
+                    new_stop, last_close,
+                )
+                continue
+
         old_stop_order = pos.get("stop_order")
         old_order_id = old_stop_order.order_id if old_stop_order else None
 
         if old_order_id:
             try:
-                await broker.cancel_order(old_order_id)
+                # Bug C8: if cancel returns False the OLD stop may have
+                # already been filled (race) — DO NOT replace or we end
+                # up with two stops. False = stop is gone from broker's
+                # book → trail is moot, position is already closing.
+                ok = await broker.cancel_order(old_order_id)
+                if not ok:
+                    logger.warning(
+                        "TRAILING STOP: cancel order %s returned False — "
+                        "stop may have filled concurrently, skipping replace",
+                        old_order_id,
+                    )
+                    continue
             except Exception as exc:
                 logger.warning(
                     "TRAILING STOP: cancel order %s failed (may already be filled): %s",
@@ -2204,6 +2519,34 @@ async def _manage_open_positions(
             )
         except Exception as exc:
             logger.error("TRAILING STOP: failed to submit new stop: %s", exc)
+            continue
+
+        # ── Bug I fix (2026-04-24): honour broker rejection ──────────────
+        # broker.submit_stop_order returns OrderResult with status in
+        # {"submitted", "rejected"}. If rejected, the position is now
+        # UNPROTECTED (old stop was just cancelled, new stop rejected).
+        # Escalate: log loud, do NOT update internal stop state, do NOT
+        # send Telegram "trail moved" alert. Caller / operator needs to
+        # see the position is naked.
+        new_status = (getattr(new_stop_order, "status", "") or "").lower()
+        if new_status == "rejected":
+            logger.error(
+                "TRAILING STOP: broker REJECTED replacement stop (%s %s @ %.2f, "
+                "reason=%s). Old stop already cancelled — POSITION UNPROTECTED.",
+                direction, symbol, new_stop, getattr(new_stop_order, "message", "?"),
+            )
+            # Leave current_stop_price unchanged so dashboard still shows
+            # the last-known stop level (misleading but less bad than
+            # reporting a stop that doesn't exist). Escalate to Telegram.
+            if components.telegram is not None:
+                try:
+                    await components.telegram.send_emergency_alert(
+                        f"Trail stop REJECTED — {symbol} {direction.upper()} @ "
+                        f"{new_stop:.2f} rejected by broker. "
+                        f"OLD STOP CANCELLED. POSITION IS NAKED.",
+                    )
+                except Exception:
+                    pass
             continue
 
         diff = new_stop - current_stop if direction == "long" else current_stop - new_stop
@@ -2319,8 +2662,36 @@ async def _on_new_bar(
                 and (ts.hour > HARD_CLOSE_HOUR
                      or (ts.hour == HARD_CLOSE_HOUR and ts.minute >= HARD_CLOSE_MIN))):
             logger.warning("HARD CLOSE reached at %s CT — flattening all", ts)
+            # Bug H11 (2026-04-24): Telegram alert pro-activo. Antes el
+            # usuario veía las alertas individuales de WIN/LOSS de cada
+            # posición pero no un "session closed" consolidado.
+            if components.telegram is not None:
+                try:
+                    await components.telegram.send_emergency_alert(
+                        f"HARD CLOSE @ 3:00 PM CT — flattening all positions "
+                        f"({len(state.open_positions)} open). No more entries "
+                        f"today.",
+                    )
+                except Exception:
+                    pass
             await _flatten_all(components, state, reason="hard_close")
             state.hard_close_done = True
+            # Bug C7: advance Topstep MLL trailing peak NOW that the
+            # session is realized. Previously end_of_day() was only
+            # called during next-morning reset — if the bot crashed
+            # overnight between hard close and morning boot, the peak
+            # was never ratcheted (session's wins were forgotten from
+            # MLL's perspective, shrinking headroom for the next day).
+            try:
+                components.risk.end_of_day()
+                logger.info(
+                    "Topstep end_of_day advanced post hard-close: "
+                    "peak=$%.2f, balance=$%.2f",
+                    components.risk._peak_balance_eod,
+                    components.risk._current_balance,
+                )
+            except Exception as exc:
+                logger.debug("end_of_day post hard-close failed (non-fatal): %s", exc)
             return
 
         if state.hard_close_done:
@@ -2401,7 +2772,16 @@ async def _on_new_bar(
                 _oid = getattr(_ord, "order_id", None)
                 if _oid:
                     try:
-                        await components.broker.cancel_order(str(_oid))
+                        _ok = await components.broker.cancel_order(str(_oid))
+                        if not _ok:
+                            # Bug C8: cancel rejected — order may have
+                            # filled between the last poll and this TTL
+                            # sweep, or the order is already gone.
+                            logger.warning(
+                                "TTL cancel: %s order %s returned False "
+                                "(may have filled or already cancelled)",
+                                _field, _oid,
+                            )
                     except Exception as _exc:
                         logger.debug("TTL cancel %s order %s failed: %s", _field, _oid, _exc)
             del state.open_positions[_pos_key]
@@ -2683,12 +3063,21 @@ async def _flatten_all(
         if signal is None:
             continue
 
-        # Pre-cancel bracket to prevent post-flatten ghost fills
+        # Pre-cancel bracket to prevent post-flatten ghost fills.
+        # Bug C8: escalate on failed cancel — flatten_all will hit broker
+        # with a market order immediately after, so a surviving bracket
+        # could fire concurrently and open a reverse position.
         for order_attr in ("stop_order", "target_order"):
             ord_obj = pos.get(order_attr)
             if ord_obj is not None:
                 try:
-                    await components.broker.cancel_order(str(ord_obj.order_id))
+                    ok = await components.broker.cancel_order(str(ord_obj.order_id))
+                    if not ok:
+                        logger.warning(
+                            "Pre-flatten cancel of %s %s returned False "
+                            "— bracket may fire concurrently with flatten",
+                            order_attr, ord_obj.order_id,
+                        )
                 except Exception as exc:
                     logger.debug(
                         "Pre-flatten cancel of %s %s failed (continuing): %s",
@@ -2823,6 +3212,37 @@ def _reset_for_new_day(components: Components, state: EngineState) -> None:
     components.ny_am_strategy.reset_daily()
     components.silver_bullet_strategy.reset_daily()
     components.detectors["tracked_levels"] = []
+
+    # 2026-04-24 Bug C2: CLEAR detector state at day boundary. Structure
+    # events, FVGs, OBs, swings, and displacements accumulated during
+    # yesterday's session can linger and "satisfy" today's strategy
+    # gates. Session-recency filters (Bug A + C5) cover most of this,
+    # but a restart mid-day + pre-existing detector cache is still a
+    # risk. Clearing here plus rebuild from warmup is safer.
+    #
+    # Each detector exposes clear() or reset(); guard each with try in
+    # case a new detector is added without a clear method.
+    for det_name, clear_method in (
+        ("structure", "reset"),
+        ("fvg", "clear"),
+        ("ob", "clear"),
+        ("swing", "clear"),
+        ("displacement", "clear"),
+    ):
+        detector = components.detectors.get(det_name)
+        if detector is None:
+            continue
+        method = getattr(detector, clear_method, None)
+        if method is None:
+            continue
+        try:
+            method()
+            logger.debug("Detector %s cleared at day reset", det_name)
+        except Exception as exc:
+            logger.warning(
+                "Detector %s clear failed at day reset: %s", det_name, exc,
+            )
+
     state.premarket_done = False
     state.hard_close_done = False
     state.daily_summary_sent = False

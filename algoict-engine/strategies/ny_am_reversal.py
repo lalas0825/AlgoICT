@@ -248,6 +248,9 @@ class NYAMReversalStrategy:
             e for e in structure_events
             if e.timestamp >= session_start
         ]
+        # 2026-04-24 Bug C4 (revised): keep CHoCH in aligned but include
+        # CHoCH in invalidator (symmetric). See silver_bullet.py for
+        # the full rationale.
         aligned = [
             e for e in fresh_events
             if e.type in ("MSS", "BOS", "CHoCH") and e.direction == bias_dir
@@ -261,6 +264,31 @@ class NYAMReversalStrategy:
             )
             return None
         last_struct = aligned[-1]
+
+        # Bug G fix (2026-04-24): structure invalidation — a 15-min MSS/BOS
+        # is invalidated by a subsequent opposite-direction MSS/BOS. See
+        # silver_bullet.py for the full rationale (NY AM phantom fire
+        # where 2h+ old bearish MSS "satisfied" a short setup in a
+        # 7-consecutive-bull-BOS trend).
+        opposite_dir = "bullish" if bias_dir == "bearish" else "bearish"
+        invalidators = [
+            e for e in fresh_events
+            if e.type in ("MSS", "BOS", "CHoCH")  # Bug C4: symmetric
+            and e.direction == opposite_dir
+            and e.timestamp > last_struct.timestamp
+        ]
+        if invalidators:
+            most_recent = invalidators[-1]
+            logger.info(
+                "EVAL ny_am [%s]: confluence=N/A, signal=reject, "
+                "reason=no_valid_setup (15min_struct_invalidated: last %s "
+                "%s @ %s superseded by %d %s event(s), most recent %s @ %s)",
+                _ts_hm(ts),
+                last_struct.type, bias_dir, _ts_hm(last_struct.timestamp),
+                len(invalidators), opposite_dir,
+                most_recent.type, _ts_hm(most_recent.timestamp),
+            )
+            return None
 
         # ── 4. 5min entry: FVG (or IFVG) + OB + Displacement + Sweep ──
         fvgs = self.detectors["fvg"].get_active(
@@ -314,13 +342,21 @@ class NYAMReversalStrategy:
                 )
                 return None
 
-        displacements = self.detectors["displacement"].get_recent(
-            n=5, timeframe="5min", direction=bias_dir,
+        # 2026-04-24 Bug C5: session recency filter for displacement
+        # events. Same family as Bug A (structure) — the detector holds
+        # cross-session events from warm-up / prior days. A stale bull
+        # displacement from yesterday 17:45 CT could "satisfy" today's
+        # NY AM long setup.
+        all_disps = self.detectors["displacement"].get_recent(
+            n=20, timeframe="5min", direction=bias_dir,
         )
+        displacements = [d for d in all_disps if d.timestamp >= session_start][:5]
         if not displacements:
             logger.info(
-                "EVAL ny_am [%s]: confluence=N/A, signal=reject, reason=no_valid_setup (no_displacement)",
-                _ts_hm(ts),
+                "EVAL ny_am [%s]: confluence=N/A, signal=reject, "
+                "reason=no_valid_setup (no_displacement — %d total, "
+                "%d from today)",
+                _ts_hm(ts), len(all_disps), len(displacements),
             )
             return None
 

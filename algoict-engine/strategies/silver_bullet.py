@@ -450,6 +450,15 @@ class SilverBulletStrategy:
             e for e in structure_events
             if e.timestamp >= session_start
         ]
+        # 2026-04-24 Bug C4 (revised): keep CHoCH in the aligned gate
+        # (the 7-year $673K backtest was run WITH CHoCH; removing it
+        # would change the strategy rather than just fix a bug). But
+        # the invalidator filter below was only checking MSS/BOS — so
+        # a stale CHoCH aligned event was asymmetrically protected from
+        # invalidation by opposite CHoCH events. Symmetric fix: include
+        # CHoCH in the invalidator too (see below). Strategy behavior
+        # is unchanged except that a bear CHoCH followed by a bull
+        # CHoCH now correctly invalidates the bear.
         aligned = [
             e for e in fresh_events
             if e.type in ("MSS", "BOS", "CHoCH") and e.direction == bias_dir
@@ -473,6 +482,49 @@ class SilverBulletStrategy:
             )
             return None
         last_struct = aligned[-1]
+
+        # ── Bug G fix (2026-04-24): structure invalidation rule ───────
+        # A 5-min bear MSS/BOS is INVALIDATED once a subsequent bullish
+        # MSS/BOS breaks through the swing high it identified (and
+        # symmetrically for bull events).
+        #
+        # Without this check: the 2026-04-24 NY AM phantom fire — at
+        # 11:08 CT the bot shorted in a strong bull trend using MSS
+        # bear from 08:55 CT that had been wiped out by 7 subsequent
+        # bull BOS events (10:00, 10:05, 10:35, 10:50, 10:55, 11:00,
+        # 11:05 CT). Session recency (Bug A) kept the stale bear event
+        # alive because it's still "today"; this rule finishes the job.
+        # 2026-04-24 Bug C4: include CHoCH in invalidators so CHoCH in
+        # aligned doesn't get protected from CHoCH inversion. Keeps
+        # aligned + invalidator symmetric.
+        opposite_dir = "bullish" if bias_dir == "bearish" else "bearish"
+        invalidators = [
+            e for e in fresh_events
+            if e.type in ("MSS", "BOS", "CHoCH")
+            and e.direction == opposite_dir
+            and e.timestamp > last_struct.timestamp
+        ]
+        if invalidators:
+            most_recent = invalidators[-1]
+            logger.info(
+                "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, "
+                "reason=no_valid_setup (5min_struct_invalidated: last %s "
+                "%s @ %s superseded by %d %s event(s), most recent %s @ %s)",
+                _ts_hm(ts),
+                last_struct.type, bias_dir, _ts_hm(last_struct.timestamp),
+                len(invalidators), opposite_dir,
+                most_recent.type, _ts_hm(most_recent.timestamp),
+            )
+            self._set_rejection(
+                ts, "5min_struct_invalidated", active_zone, is_near_miss=True,
+                fvg_direction=bias_dir,
+                last_aligned_type=last_struct.type,
+                last_aligned_ts=_ts_hm(last_struct.timestamp),
+                invalidator_count=len(invalidators),
+                most_recent_invalidator_type=most_recent.type,
+                most_recent_invalidator_ts=_ts_hm(most_recent.timestamp),
+            )
+            return None
 
         # ── 5. Entry, Stop, Target (ICT canonical) ─────────────────────
         import math

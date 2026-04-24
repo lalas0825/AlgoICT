@@ -316,9 +316,16 @@ class TestReconcileSymbolNormalization:
         components.broker.get_positions = AsyncMock(return_value=[])
         with caplog.at_level(logging.WARNING, logger="algoict.main"):
             await engine_main._reconcile_positions(components, state)
-        orphans = [r for r in caplog.records if "ORPHAN" in r.message]
-        assert len(orphans) == 1
-        assert "MNQ" in orphans[0].message
+        # 2026-04-24 Bug C8 adds a second "ORPHAN cleanup" ERROR log when
+        # cancel returns False (happens here because mock broker.cancel_order
+        # also returns a falsy value). Filter to the initial detection
+        # warning, not the post-cleanup cancellation failure log.
+        detection_logs = [
+            r for r in caplog.records
+            if "Position reconcile: ORPHAN" in r.message
+        ]
+        assert len(detection_logs) == 1
+        assert "MNQ" in detection_logs[0].message
 
     @pytest.mark.asyncio
     async def test_both_forms_on_broker_still_normalise_to_root(self, caplog):
