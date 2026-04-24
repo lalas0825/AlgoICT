@@ -5,6 +5,15 @@
   <em>Powered by SaaS Factory V4</em>
 </p>
 
+<p align="center">
+  <a href="https://github.com/lalas0825/AlgoICT/actions/workflows/ci.yml">
+    <img src="https://github.com/lalas0825/AlgoICT/actions/workflows/ci.yml/badge.svg" alt="CI status" />
+  </a>
+  <a href="INCIDENTS.md">
+    <img src="https://img.shields.io/badge/incidents-31%20closed-success" alt="Incidents closed" />
+  </a>
+</p>
+
 ---
 
 ## What is AlgoICT
