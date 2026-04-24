@@ -3,9 +3,13 @@ AlgoICT Configuration — ALL constants, risk rules, kill zones, timeframes.
 Sensei Rule: These values are HARDCODED. No dynamic overrides in production.
 """
 
+import logging
 import os
+import sys
 from pathlib import Path
 from dotenv import load_dotenv
+
+_log = logging.getLogger("algoict.config")
 
 # ---------------------------------------------------------------------------
 # Environment
@@ -15,6 +19,49 @@ PROJECT_ROOT = BASE_DIR.parent
 DATA_DIR = PROJECT_ROOT / "data"
 
 load_dotenv(BASE_DIR / ".env", override=True)
+
+
+# ---------------------------------------------------------------------------
+# Fail-loud config accessor (2026-04-24 Batch 4 hardening)
+# ---------------------------------------------------------------------------
+# Silent config defaults have bitten us multiple times: a renamed key
+# (TRADE_MANAGEMENT → TRADE_MGMT) or a deleted key silently reverts to
+# the hardcoded default at the call site, and the bot looks fine for
+# weeks until you audit backtest P&L and realize it's been running on
+# stale logic.
+#
+# `cfg(name, default)` is a drop-in replacement for
+# `getattr(config, name, default)` that WARNS the first time a default
+# is used for a given name. It deduplicates so the log doesn't spam.
+#
+# Usage:
+#     from config import cfg
+#     ttl = cfg("LIMIT_ORDER_TTL_BARS", 10)
+#
+# Migration path: replace `getattr(config, X, D)` with `config.cfg(X, D)`
+# incrementally. Existing getattr calls keep working (cfg is additive).
+_missing_cfg_keys_warned: set[str] = set()
+
+
+def cfg(name: str, default):
+    """
+    Return config attribute ``name`` if present, else ``default`` + WARN once.
+
+    The warning surfaces the first call stack that hit a missing key so
+    ops can see WHICH module silently fell back to a hardcoded default.
+    """
+    this_module = sys.modules[__name__]
+    if hasattr(this_module, name):
+        return getattr(this_module, name)
+    if name not in _missing_cfg_keys_warned:
+        _missing_cfg_keys_warned.add(name)
+        _log.warning(
+            "config: key %r not defined in config.py — falling back to "
+            "default %r. If this is intentional, add %s = %r to config.py "
+            "to silence this warning.",
+            name, default, name, default,
+        )
+    return default
 
 # ---------------------------------------------------------------------------
 # Broker — TopstepX (MNQ Intraday)
@@ -403,6 +450,9 @@ GEX_REFRESH_INTERVAL_MIN = 30  # Refresh GEX data every 30 minutes
 # ---------------------------------------------------------------------------
 FVG_MITIGATION_MODE = "body_close"   # "body_close" (ICT) | "ratio" (legacy)
 FVG_MITIGATION_RATIO = 0.75          # only used when FVG_MITIGATION_MODE == "ratio"
+# 2026-04-24 Batch 4: made explicit (was silent default in detectors/fair_value_gap.py).
+# Maximum FVG history per timeframe before oldest are pruned.
+FVG_MAX_HISTORY = 100
 
 # ---------------------------------------------------------------------------
 # OB Proximity Gate
@@ -413,6 +463,13 @@ FVG_MITIGATION_RATIO = 0.75          # only used when FVG_MITIGATION_MODE == "ra
 # need for this gate — market orders that far from the OB are not OB entries.
 # ---------------------------------------------------------------------------
 OB_PROXIMITY_TOLERANCE = 3.0      # pts — max gap from OB edge to current price
+
+# 2026-04-24 Batch 4: made explicit (were silent defaults in detectors/order_block.py).
+OB_MAX_HISTORY = 100          # max OBs retained per timeframe
+OB_ATR_MULTIPLIER = 1.5       # LEGACY — no longer used for displacement (v3b uses ATR_FLOOR)
+OB_ATR_PERIOD = 14            # ATR window for OB_DISPLACEMENT_ATR_FLOOR
+OB_SWEEP_LOOKBACK = 5         # bars before OB candle to search for liquidity sweep
+OB_FVG_LOOKFORWARD = 3        # bars after OB candle to find the confirming FVG
 
 # ---------------------------------------------------------------------------
 # Limit Order TTL

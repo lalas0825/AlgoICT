@@ -172,7 +172,7 @@ class Backtester:
         # 2026-04-17 flagged every backtest this week ran fixed exits
         # while live ran trailing. Explicit arg still wins.
         if trade_management is None:
-            trade_management = getattr(config, "TRADE_MANAGEMENT", "fixed")
+            trade_management = config.cfg("TRADE_MANAGEMENT", "fixed")
         if trade_management not in VALID_TRADE_MGMT:
             raise ValueError(
                 f"trade_management must be one of {VALID_TRADE_MGMT}, got {trade_management!r}"
@@ -258,7 +258,7 @@ class Backtester:
         last_entry_idx: int = -1
         current_session_date: Optional[datetime.date] = None
         daily_pnl: dict = {}
-        _limit_ttl = getattr(config, "LIMIT_ORDER_TTL_BARS", 10)
+        _limit_ttl = config.cfg("LIMIT_ORDER_TTL_BARS", 10)
 
         n = len(df)
         for i in range(n):

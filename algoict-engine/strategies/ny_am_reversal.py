@@ -138,7 +138,7 @@ class NYAMReversalStrategy:
         # toggle for ablation runs; scripts/run_backtest.py's --no-ifvg
         # flag flips this to False explicitly in tests that want to
         # double-guarantee the fallback is off regardless of config.
-        self._ifvg_enabled: bool = getattr(config, "IFVG_ENABLED", False)
+        self._ifvg_enabled: bool = config.cfg("IFVG_ENABLED", False)
         # Phantom-cleanup cooldown (2026-04-23 parity with SB). See
         # silver_bullet.SilverBulletStrategy for full rationale.
         self._phantom_cooldown_until: Optional[pd.Timestamp] = None
@@ -291,6 +291,15 @@ class NYAMReversalStrategy:
             return None
 
         # ── 4. 5min entry: FVG (or IFVG) + OB + Displacement + Sweep ──
+        # DESIGN: FVGs and OBs are INTENTIONALLY not session-filtered here.
+        # Per ICT, FVG/OB are price MEMORY — they remain valid until
+        # mitigated (FVG) or invalidated (OB mitigation by close through
+        # mean threshold). A clean FVG from overnight session (e.g. 04:00
+        # CT during London) is still a valid target in NY AM today. The
+        # mitigation + age-decay + price-proximity filters handle staleness
+        # without needing a session cutoff. Session-recency is applied to
+        # STRUCTURE events (regime change) and DISPLACEMENT (momentum
+        # events) only — see Bug A (2026-04-23) and C5 (2026-04-24).
         fvgs = self.detectors["fvg"].get_active(
             timeframe="5min", direction=bias_dir,
         )

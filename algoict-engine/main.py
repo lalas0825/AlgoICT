@@ -1354,7 +1354,7 @@ async def _execute_signal(
     #
     # For FIXED mode (signal.target_price is honoured), still submit.
     # For TRAILING / PARTIALS_BE — skip; exits come from trail logic.
-    mode = getattr(config, "TRADE_MANAGEMENT", "fixed")
+    mode = config.cfg("TRADE_MANAGEMENT", "fixed")
     target_order = None
     if mode == "fixed":
         try:
@@ -2091,7 +2091,7 @@ async def _poll_position_status(components: Components, state: EngineState) -> N
             # inside the signal's kill_zone, keep waiting. Outside the KZ,
             # fall back to the fixed TTL guard.
             bars_pending = pos.get("bars_pending", 0)
-            ttl_bars = getattr(config, "LIMIT_ORDER_TTL_BARS", 10)
+            ttl_bars = config.cfg("LIMIT_ORDER_TTL_BARS", 10)
 
             # KZ-aware extended TTL: if we're still inside the signal's
             # KZ, keep the limit active (ICT allows full window for fill).
@@ -2172,7 +2172,10 @@ async def _poll_position_status(components: Components, state: EngineState) -> N
                     if hasattr(strat, "trades_today") and strat.trades_today > 0:
                         strat.trades_today -= 1
                 except Exception as exc:
-                    logger.debug("KZ counter rollback failed: %s", exc)
+                    # Batch 4 D: a failed KZ-counter rollback leaks a
+                    # phantom trade slot — the KZ budget permanently
+                    # loses one shot until next day reset. Warn loud.
+                    logger.warning("KZ counter rollback failed: %s", exc)
                 # Also release the dedup lock so a later bar can retry.
                 if hasattr(strat, "rollback_last_evaluated_bar"):
                     try:
@@ -2260,7 +2263,16 @@ async def _reconcile_positions(components: Components, state: EngineState) -> No
     try:
         broker_positions = await components.broker.get_positions()
     except Exception as exc:
-        logger.debug("Reconcile: get_positions failed: %s", exc)
+        # 2026-04-24 Batch 4 D: escalated from .debug → .warning. If
+        # reconcile can't fetch positions, ghost/orphan detection is
+        # silently skipped — we saw this for days during Bug J (404
+        # endpoint) and the downstream symptom was undetected naked
+        # positions. Loud log so ops can see blackouts.
+        logger.warning(
+            "Reconcile: get_positions failed (%d local positions "
+            "tracked, cannot detect ghosts/orphans this pass): %s",
+            len(state.open_positions), exc,
+        )
         return
 
     # Normalize both sides to a root-symbol set. Broker can return either
@@ -2699,7 +2711,7 @@ async def _on_new_bar(
 
         # ── 4b. Trade management (trailing stop / partials) ──────────
         if state.open_positions:
-            mode = getattr(config, "TRADE_MANAGEMENT", "fixed")
+            mode = config.cfg("TRADE_MANAGEMENT", "fixed")
             if mode == "trailing":
                 await _manage_open_positions(components, state)
             elif mode == "partials_be":
@@ -2741,7 +2753,7 @@ async def _on_new_bar(
         # kill zone is still active, the limit remains valid (ICT allows the
         # full window for a retrace). Only after KZ closes does the
         # LIMIT_ORDER_TTL_BARS counter start applying as the hard deadline.
-        _ttl = getattr(config, "LIMIT_ORDER_TTL_BARS", 10)
+        _ttl = config.cfg("LIMIT_ORDER_TTL_BARS", 10)
         for _pos_key, _pos in list(state.open_positions.items()):
             if _pos.get("entry_fill_confirmed", True):
                 continue
@@ -3676,6 +3688,18 @@ async def run(
             logger.info("BotStateSync started — dashboard will show RUNNING")
         except Exception as exc:
             logger.warning("BotStateSync start failed: %s", exc)
+
+    # ── 3c. Health writer — external-monitor-visible JSON every 10s ────
+    # 2026-04-24 Batch 4 E: gives systemd / crontab / dashboards a way
+    # to check "is the bot actually trading, not just alive" without
+    # grepping logs. Writes .health.json atomically.
+    try:
+        from core.health import HealthWriter
+        health_writer = HealthWriter(state, components, interval_s=10.0)
+        health_task = asyncio.create_task(health_writer.run_forever())
+        logger.info("HealthWriter started — .health.json updates every 10s")
+    except Exception as exc:
+        logger.warning("HealthWriter start failed: %s", exc)
 
     # ── 4. Warm-up: preload historical bars so detectors start primed ─
     seeded = await _warmup_historical_bars(components, state)

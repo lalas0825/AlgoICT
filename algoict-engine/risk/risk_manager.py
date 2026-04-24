@@ -114,13 +114,13 @@ class RiskManager:
         # instead of 3 inside the same $750-$1,000 DLL budget. DIFFERENT
         # from consecutive_losses (which resets on win + can be reset per
         # KZ) — losses_today only increments, never resets intraday.
-        self._ladder_enabled: bool = bool(getattr(config, "RISK_LADDER_ENABLED", False))
-        self._ladder_schedule: tuple = tuple(getattr(config, "RISK_LADDER", (250, 200, 150, 100, 50)))
+        self._ladder_enabled: bool = bool(config.cfg("RISK_LADDER_ENABLED", False))
+        self._ladder_schedule: tuple = tuple(config.cfg("RISK_LADDER", (250, 200, 150, 100, 50)))
         self._losses_today: int = 0     # count of LOSING trades today; only increments
         # Per-kill-zone losing-trade caps. Zones not listed have no cap.
         # Mutated via set_kz_loss_caps(). Stats in _kz_losing_trades mirror
         # the dict keys (plus any zone we see losses on). Both reset at EOD.
-        self._kz_loss_caps: dict = dict(getattr(config, "KZ_LOSS_CAPS", {}) or {})
+        self._kz_loss_caps: dict = dict(config.cfg("KZ_LOSS_CAPS", {}) or {})
         self._kz_losing_trades: dict = {}
 
         # ── Idempotency (2026-04-24 Bug C6) ─────────────────────────────
