@@ -27,6 +27,8 @@
 
 param(
     [switch]$Uninstall,
+    [switch]$Enable,
+    [switch]$Disable,
     [string]$TaskName = "AlgoICT-Monitor",
     [string]$EngineRoot = "C:\AI Projects\AlgoICT\algoict-engine"
 )
@@ -41,6 +43,38 @@ if ($Uninstall) {
         Write-Host "OK: task '$TaskName' removed."
     } catch {
         Write-Host "INFO: task '$TaskName' was not registered (nothing to remove)."
+    }
+    exit 0
+}
+
+if ($Disable) {
+    # Convenience: stop monitor without uninstalling. Use this when you
+    # intentionally take the bot offline (weekends, maintenance) so the
+    # monitor doesn't fill your Telegram with "bot dead" alerts.
+    # Re-enable with `-Enable` when you relaunch the bot.
+    try {
+        Disable-ScheduledTask -TaskName $TaskName -ErrorAction Stop | Out-Null
+        # Also clear stale state so the next enable starts fresh.
+        $stateFile = Join-Path $EngineRoot ".monitor_state.json"
+        if (Test-Path $stateFile) { Remove-Item $stateFile -Force }
+        Write-Host "OK: monitor DISABLED. State cleared."
+        Write-Host "Re-enable with:"
+        Write-Host "   powershell -ExecutionPolicy Bypass -File scripts\install_monitor.ps1 -Enable"
+    } catch {
+        Write-Error "Failed to disable: $_"
+        exit 1
+    }
+    exit 0
+}
+
+if ($Enable) {
+    try {
+        Enable-ScheduledTask -TaskName $TaskName -ErrorAction Stop | Out-Null
+        Write-Host "OK: monitor ENABLED. Will run every 60s."
+        Write-Host "Tail alerts: Get-Content '$EngineRoot\.monitor_alerts.log' -Tail 20 -Wait"
+    } catch {
+        Write-Error "Failed to enable: $_"
+        exit 1
     }
     exit 0
 }
@@ -101,5 +135,11 @@ Write-Host ""
 Write-Host "Tail the alert log:"
 Write-Host "   Get-Content '$EngineRoot\.monitor_alerts.log' -Tail 20 -Wait"
 Write-Host ""
-Write-Host "Uninstall:"
+Write-Host "Pause monitor while bot is off (no Telegram flood during weekends):"
+Write-Host "   powershell -ExecutionPolicy Bypass -File scripts\install_monitor.ps1 -Disable"
+Write-Host ""
+Write-Host "Resume monitor after relaunching bot:"
+Write-Host "   powershell -ExecutionPolicy Bypass -File scripts\install_monitor.ps1 -Enable"
+Write-Host ""
+Write-Host "Uninstall completely:"
 Write-Host "   powershell -ExecutionPolicy Bypass -File scripts\install_monitor.ps1 -Uninstall"

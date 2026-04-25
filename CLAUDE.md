@@ -629,9 +629,12 @@ Requiere migration `0003_bot_state_overlays.sql` aplicada.
   * **position_divergence** (local vs broker — the Bug J check)
   * **kill_switch** + **mll_danger** (re-alert in case bot's own alert never delivered)
   * Dedup: same alert re-fires at most every 15 min. Resolve: fires `[OK] RESOLVED` when condition clears.
+  * Auto-quiet after **3 consecutive alerts** of the same code without resolution (so a weekend off doesn't flood Telegram every 15 min). Resumes alerting on resolve.
   * Install: `powershell -ExecutionPolicy Bypass -File scripts\install_monitor.ps1`
   * Verify: `Get-ScheduledTask -TaskName AlgoICT-Monitor`
   * Tail live: `Get-Content .monitor_alerts.log -Tail 20 -Wait`
+  * **Pause during bot-off windows** (weekend, maintenance): `scripts\install_monitor.ps1 -Disable` (stops + clears state)
+  * **Resume when bot relaunches**: `scripts\install_monitor.ps1 -Enable`
   * Uninstall: `scripts\install_monitor.ps1 -Uninstall`
 - **Reconciler 5s grace period** — no false-orphan during broker fill propagation
 - **`record_trade(order_id=)` idempotency** — triple-path dedup (User Hub + poll + reconcile)

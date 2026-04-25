@@ -31,7 +31,12 @@ param(
                                         # 20 min is conservative -- won't false-fire during
                                         # CME daily break (16-17 ET) or overnight quiet
                                         # but catches a real dropped SignalR feed
-    [int]$AlertDedupMin = 15            # don't re-alert same condition more than once per N min
+    [int]$AlertDedupMin = 15,           # don't re-alert same condition more than once per N min
+    [int]$MaxConsecutiveAlerts = 3      # 2026-04-24 post-weekend-flood: after N alerts of the
+                                        # same code without resolution, go quiet (assume the
+                                        # operator is aware / shutdown is intentional) and
+                                        # only re-alert when the condition resolves and re-fires.
+                                        # 3 alerts at 15 min dedup = ~45 min total noise then silence.
 )
 
 $ErrorActionPreference = 'Continue'
@@ -76,8 +81,50 @@ function Get-MonitorState {
     }
     return [pscustomobject]@{
         last_alerts       = @{}
+        # 2026-04-24: alert_counts[code] = number of CONSECUTIVE alerts
+        # fired for that code without an intervening resolve. Used to
+        # throttle long-running conditions (e.g. bot off all weekend)
+        # so the user isn't flooded every 15 min with the same alert.
+        alert_counts      = @{}
         active_conditions = @()
         last_check_ts     = $null
+    }
+}
+
+function Get-AlertProp {
+    # Helper: read a property from PSCustomObject or hashtable (state files
+    # come back as PSCustomObject after ConvertFrom-Json).
+    param($Container, [string]$Key)
+    if ($null -eq $Container) { return $null }
+    if ($Container -is [hashtable]) {
+        if ($Container.ContainsKey($Key)) { return $Container[$Key] }
+        return $null
+    }
+    if ($Container.PSObject.Properties[$Key]) {
+        return $Container.$Key
+    }
+    return $null
+}
+
+function Set-AlertProp {
+    param($Container, [string]$Key, $Value)
+    if ($Container -is [hashtable]) {
+        $Container[$Key] = $Value
+    } else {
+        if ($Container.PSObject.Properties[$Key]) {
+            $Container.$Key = $Value
+        } else {
+            $Container | Add-Member -NotePropertyName $Key -NotePropertyValue $Value -Force
+        }
+    }
+}
+
+function Remove-AlertProp {
+    param($Container, [string]$Key)
+    if ($Container -is [hashtable]) {
+        $Container.Remove($Key) | Out-Null
+    } elseif ($Container.PSObject.Properties[$Key]) {
+        $Container.PSObject.Properties.Remove($Key)
     }
 }
 
@@ -126,13 +173,26 @@ function Fire-Alert {
     $now = Get-Date
     $nowIso = $now.ToString('o')
 
-    # Dedup: don't re-fire same code more than once per $AlertDedupMin
-    $last = $null
-    if ($State.last_alerts.PSObject.Properties[$Code]) {
-        $last = $State.last_alerts.$Code
-    } elseif ($State.last_alerts -is [hashtable] -and $State.last_alerts.ContainsKey($Code)) {
-        $last = $State.last_alerts[$Code]
+    # Ensure alert_counts container exists (back-compat with old state files).
+    if ($null -eq $State.alert_counts) {
+        $State | Add-Member -NotePropertyName alert_counts -NotePropertyValue @{} -Force
     }
+
+    # 2026-04-24 post-weekend-flood: cap consecutive alerts. After
+    # $MaxConsecutiveAlerts notifications without resolution, go quiet
+    # for this code. The local log keeps recording silently. The user
+    # gets a final "going quiet" message on the Nth+1 attempt so they
+    # know suppression is active.
+    $count = [int](Get-AlertProp -Container $State.alert_counts -Key $Code)
+    if ($count -ge $MaxConsecutiveAlerts) {
+        # Silently update the log (no Telegram) so we still have evidence.
+        Write-LocalAlert -Text "$Code | tg=false (suppressed: count=$count >= $MaxConsecutiveAlerts) | $Message"
+        Set-AlertProp -Container $State.alert_counts -Key $Code -Value ($count + 1)
+        return
+    }
+
+    # Dedup: don't re-fire same code more than once per $AlertDedupMin
+    $last = Get-AlertProp -Container $State.last_alerts -Key $Code
     if ($last) {
         try {
             $lastDt = [datetime]::Parse($last)
@@ -142,20 +202,18 @@ function Fire-Alert {
         } catch { }
     }
 
-    $sent = Send-TelegramAlert -Text $Message
-    Write-LocalAlert -Text "$Code | tg=$sent | $Message"
-
-    # Persist timestamp
-    if ($State.last_alerts -is [hashtable]) {
-        $State.last_alerts[$Code] = $nowIso
-    } else {
-        # PSCustomObject from ConvertFrom-Json -- add property if missing
-        if ($State.last_alerts.PSObject.Properties[$Code]) {
-            $State.last_alerts.$Code = $nowIso
-        } else {
-            $State.last_alerts | Add-Member -NotePropertyName $Code -NotePropertyValue $nowIso -Force
-        }
+    # If this is the alert that crosses the threshold, append a hint so
+    # the user knows we'll be silent until resolution.
+    $finalMessage = $Message
+    if (($count + 1) -ge $MaxConsecutiveAlerts) {
+        $finalMessage += "`n[note] Going quiet on '$Code' until resolved (max=$MaxConsecutiveAlerts consecutive)."
     }
+
+    $sent = Send-TelegramAlert -Text $finalMessage
+    Write-LocalAlert -Text "$Code | tg=$sent | count=$($count + 1) | $Message"
+
+    Set-AlertProp -Container $State.last_alerts -Key $Code -Value $nowIso
+    Set-AlertProp -Container $State.alert_counts -Key $Code -Value ($count + 1)
 }
 
 function Fire-Resolve {
@@ -163,11 +221,11 @@ function Fire-Resolve {
     $text = "[OK] RESOLVED -- $Message"
     $sent = Send-TelegramAlert -Text $text
     Write-LocalAlert -Text "resolve:$Code | tg=$sent | $Message"
-    # Clear last-alert timestamp so a future recurrence fires immediately
-    if ($State.last_alerts -is [hashtable]) {
-        $State.last_alerts.Remove($Code) | Out-Null
-    } elseif ($State.last_alerts.PSObject.Properties[$Code]) {
-        $State.last_alerts.PSObject.Properties.Remove($Code)
+    # Clear last-alert timestamp + consecutive count so a future
+    # recurrence alerts immediately AND gets the full N alerts again.
+    Remove-AlertProp -Container $State.last_alerts -Key $Code
+    if ($null -ne $State.alert_counts) {
+        Remove-AlertProp -Container $State.alert_counts -Key $Code
     }
 }
 
