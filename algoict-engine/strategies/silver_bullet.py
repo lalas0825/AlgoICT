@@ -483,48 +483,55 @@ class SilverBulletStrategy:
             return None
         last_struct = aligned[-1]
 
-        # ── Bug G fix (2026-04-24): structure invalidation rule ───────
-        # A 5-min bear MSS/BOS is INVALIDATED once a subsequent bullish
-        # MSS/BOS breaks through the swing high it identified (and
-        # symmetrically for bull events).
+        # ── Bug G structure invalidation — DISABLED for v11 bisect ────
+        # 2026-04-25: Q1 2025 v10 backtest (with this gate) collapsed:
+        #   WR 21% (gate ≥40%), PF 0.84 (gate ≥1.5), -$3.8K, 5 RESETs.
+        # vs V8 historical Q1 average: ~44% WR, PF ~2.0, +$15K profit.
         #
-        # Without this check: the 2026-04-24 NY AM phantom fire — at
-        # 11:08 CT the bot shorted in a strong bull trend using MSS
-        # bear from 08:55 CT that had been wiped out by 7 subsequent
-        # bull BOS events (10:00, 10:05, 10:35, 10:50, 10:55, 11:00,
-        # 11:05 CT). Session recency (Bug A) kept the stale bear event
-        # alive because it's still "today"; this rule finishes the job.
-        # 2026-04-24 Bug C4: include CHoCH in invalidators so CHoCH in
-        # aligned doesn't get protected from CHoCH inversion. Keeps
-        # aligned + invalidator symmetric.
-        opposite_dir = "bullish" if bias_dir == "bearish" else "bearish"
-        invalidators = [
-            e for e in fresh_events
-            if e.type in ("MSS", "BOS", "CHoCH")
-            and e.direction == opposite_dir
-            and e.timestamp > last_struct.timestamp
-        ]
-        if invalidators:
-            most_recent = invalidators[-1]
-            logger.info(
-                "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, "
-                "reason=no_valid_setup (5min_struct_invalidated: last %s "
-                "%s @ %s superseded by %d %s event(s), most recent %s @ %s)",
-                _ts_hm(ts),
-                last_struct.type, bias_dir, _ts_hm(last_struct.timestamp),
-                len(invalidators), opposite_dir,
-                most_recent.type, _ts_hm(most_recent.timestamp),
-            )
-            self._set_rejection(
-                ts, "5min_struct_invalidated", active_zone, is_near_miss=True,
-                fvg_direction=bias_dir,
-                last_aligned_type=last_struct.type,
-                last_aligned_ts=_ts_hm(last_struct.timestamp),
-                invalidator_count=len(invalidators),
-                most_recent_invalidator_type=most_recent.type,
-                most_recent_invalidator_ts=_ts_hm(most_recent.timestamp),
-            )
-            return None
+        # Hypothesis: this gate is too aggressive. ICT canonical says a
+        # bear MSS is invalidated only when price CLOSES ABOVE the swing
+        # high that caused it — not by any subsequent opposite event.
+        # My implementation rejects on any bull BOS/CHoCH/MSS posterior
+        # to last_struct, killing valid bear setups during normal
+        # counter-rallies in choppy markets like Q1 2025.
+        #
+        # Disabling for the v11 backtest. If WR/PF return to historical
+        # ranges, confirms this gate as the regression cause and we
+        # refine to the price-level-aware version. If not, look at
+        # Bug F backtester or session recency.
+        #
+        # CONTROL FLAG (kept off in production until ICT-canonical
+        # rewrite lands).
+        _BUG_G_ENABLED = False
+        if _BUG_G_ENABLED:
+            opposite_dir = "bullish" if bias_dir == "bearish" else "bearish"
+            invalidators = [
+                e for e in fresh_events
+                if e.type in ("MSS", "BOS", "CHoCH")
+                and e.direction == opposite_dir
+                and e.timestamp > last_struct.timestamp
+            ]
+            if invalidators:
+                most_recent = invalidators[-1]
+                logger.info(
+                    "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, "
+                    "reason=no_valid_setup (5min_struct_invalidated: last %s "
+                    "%s @ %s superseded by %d %s event(s), most recent %s @ %s)",
+                    _ts_hm(ts),
+                    last_struct.type, bias_dir, _ts_hm(last_struct.timestamp),
+                    len(invalidators), opposite_dir,
+                    most_recent.type, _ts_hm(most_recent.timestamp),
+                )
+                self._set_rejection(
+                    ts, "5min_struct_invalidated", active_zone, is_near_miss=True,
+                    fvg_direction=bias_dir,
+                    last_aligned_type=last_struct.type,
+                    last_aligned_ts=_ts_hm(last_struct.timestamp),
+                    invalidator_count=len(invalidators),
+                    most_recent_invalidator_type=most_recent.type,
+                    most_recent_invalidator_ts=_ts_hm(most_recent.timestamp),
+                )
+                return None
 
         # ── 5. Entry, Stop, Target (ICT canonical) ─────────────────────
         import math

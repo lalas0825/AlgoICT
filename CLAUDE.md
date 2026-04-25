@@ -645,6 +645,35 @@ Requiere migration `0003_bot_state_overlays.sql` aplicada.
 - C9 confluence-scorer missing-data flag (nice-to-have, deferred)
 - C10 `OrderResult` frozen-refactor wrapper (defensive, not urgent)
 - H6 flatten exit price accuracy via broker fill-query (workaround: last 1-min close, ~1pt off)
+- Bug G ICT-canonical refinement (currently OFF — see v12 below)
+
+### v12 backtest validation (2026-04-25)
+
+After Q1 2025 v10 disaster (-$3,836, WR 21%) revealed regression vs V9 hist
+(+$22K, WR 50%), bisected to root cause:
+
+**Bug F backtester `bar_close` validation** mirrored live broker constraint
+into backtester where it was inappropriate. Rejected ~30% of valid trail
+tightenings → losers stayed at original stop instead of trailing to BE
+→ WR collapsed.
+
+Fix: reverted `_update_trailing_stop` in `backtest/backtester.py` to V9
+behavior (no `bar_close` check). Live `_manage_open_positions` keeps its
+broker-side validation (correct for live execution).
+
+**v12 = V8/V9 historical match**:
+- Q1 2025: 377 trades · WR 50.1% · +$22,508 · PF 2.21
+- Full 2025: 1,758 trades · WR 48.6% · +$80,134 · PF 1.95 · 0 negative months
+- **Identical to V9 hist 2025 to the dollar** ($80,134)
+
+**Bug G left disabled** (`_BUG_G_ENABLED = False` in silver_bullet.py).
+Bisect showed Bug G filters trades essentially randomly w.r.t. outcome.
+Future work: refine to ICT-canonical version (only invalidate if price
+crosses swing level that caused last_struct).
+
+**`STRATEGIES_ENABLED = ("silver_bullet",)`** in config.py — NY AM
+Reversal held offline in live (still wired in main.py but evaluate()
+skipped). Re-enable: add `"ny_am_reversal"` to the tuple.
 
 ---
 

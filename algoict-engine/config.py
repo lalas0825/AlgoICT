@@ -448,6 +448,13 @@ GEX_REFRESH_INTERVAL_MIN = 30  # Refresh GEX data every 30 minutes
 #   "ratio"      — legacy: FVG marked mitigated at FVG_MITIGATION_RATIO fill.
 #                  Kept for backward-compat and A/B testing only.
 # ---------------------------------------------------------------------------
+# 2026-04-25: which strategies are allowed to fire signals in live mode.
+# Backtester ignores this flag (it takes --strategy from CLI). Set this to
+# the tuple of strategies to ENABLE — anything not listed gets skipped in
+# main._evaluate_strategies. Default: SB only while we focus live trading
+# on Silver Bullet. To re-enable NY AM Reversal: add "ny_am_reversal".
+STRATEGIES_ENABLED = ("silver_bullet",)
+
 FVG_MITIGATION_MODE = "body_close"   # "body_close" (ICT) | "ratio" (legacy)
 FVG_MITIGATION_RATIO = 0.75          # only used when FVG_MITIGATION_MODE == "ratio"
 # 2026-04-24 Batch 4: made explicit (was silent default in detectors/fair_value_gap.py).

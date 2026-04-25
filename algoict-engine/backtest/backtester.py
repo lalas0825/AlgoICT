@@ -629,33 +629,31 @@ class Backtester:
         swing high (short) detected by swing_entry, if it improves the stop.
         Only tightens — never widens.
 
-        2026-04-24 post-audit: mirror live Bug F direction validation.
-        For LONG, new stop must be below current price (would-be SELL
-        stop). For SHORT, new stop must be above current price. Without
-        this, the backtester would accept a stale swing level on the
-        wrong side of price — which live broker would reject with
-        errorCode=2. Keeping backtester strict here preserves parity so
-        backtest P&L matches what live can actually execute.
+        2026-04-25: REVERTED Bug F bar_close validation (`buffer_pts=0.25`).
+        That validation was added 2026-04-24 to mirror live Bug F
+        (broker rejects stops on wrong side of price). But in BACKTESTER
+        the broker constraint doesn't exist — bar_close validation
+        rejected ~30% of valid trail-tightenings, keeping stops loose
+        on losing trades and collapsing WR from 50% (v9) to 21% (v10/v11).
+        Q1 2025 v9 vs v10:
+            v9 :  377 trades · WR 50.1% · P&L +$21,956 · PF 2.18
+            v10:  258 trades · WR 20.9% · P&L -$3,836  · PF 0.84
+        The bar_close param is preserved in the signature for API
+        compatibility but ignored. Live trail in main.py keeps its
+        broker-side validation (that's correct for live execution).
         """
         swing = self.detectors.get("swing_entry")
         if swing is None:
             return
         direction = pos["direction"]
         current_stop = pos["stop_price"]
-        buffer_pts = 0.25  # 1 MNQ tick — mirrors main.py:_manage_open_positions
         if direction == "long":
             sp = swing.get_latest_swing_low()
             if sp is not None and sp.price > current_stop:
-                # Bug F parity: new long stop must be safely BELOW price
-                if bar_close is not None and sp.price >= bar_close - buffer_pts:
-                    return
                 pos["stop_price"] = sp.price
         else:
             sp = swing.get_latest_swing_high()
             if sp is not None and sp.price < current_stop:
-                # Bug F parity: new short stop must be safely ABOVE price
-                if bar_close is not None and sp.price <= bar_close + buffer_pts:
-                    return
                 pos["stop_price"] = sp.price
 
     # ------------------------------------------------------------------ #

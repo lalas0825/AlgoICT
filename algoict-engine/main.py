@@ -2949,11 +2949,20 @@ async def _on_new_bar(
                 except Exception as exc:
                     logger.debug("Queued sweep alert failed: %s", exc)
 
-        # NY AM Reversal — evaluates in london + ny_am windows
+        # NY AM Reversal — evaluates in london + ny_am windows.
+        # 2026-04-25: gated by config.STRATEGIES_ENABLED. When NY AM is
+        # not in the enabled list, evaluate() is skipped (signal=None)
+        # and the existing `if signal is not None:` guard turns the
+        # whole block into a no-op. No re-indentation, low-risk patch.
+        _strategies_enabled = config.cfg("STRATEGIES_ENABLED", ("silver_bullet",))
+        ny_am_enabled = "ny_am_reversal" in _strategies_enabled
         try:
-            signal = components.ny_am_strategy.evaluate(df_5min, df_15min)
+            signal = (
+                components.ny_am_strategy.evaluate(df_5min, df_15min)
+                if ny_am_enabled else None
+            )
             ny_zones = getattr(components.ny_am_strategy, "KILL_ZONES", ("ny_am",))
-            if any(sess.is_kill_zone(ts, z) for z in ny_zones):
+            if ny_am_enabled and any(sess.is_kill_zone(ts, z) for z in ny_zones):
                 logger.info(
                     "EVAL ny_am [%s]: signal=%s",
                     ts.strftime("%H:%M"),
