@@ -90,9 +90,9 @@ jobs:
           SUPABASE_URL: https://example.invalid
           SUPABASE_KEY: ci-dummy
           ANTHROPIC_API_KEY: ci-dummy
-        # Capture full pytest output to a file we can upload as an artifact
-        # (so we can diagnose failures from the GitHub API without needing
-        # authenticated access to the run logs page).
+        # Capture full pytest output. On failure, dump the failed test
+        # summary into GITHUB_STEP_SUMMARY (publicly readable via API)
+        # so we can diagnose without needing artifact download auth.
         run: |
           set -o pipefail
           python -m pytest tests/ -v \
@@ -102,6 +102,30 @@ jobs:
             --maxfail=10 \
             --junit-xml=test-results.xml 2>&1 | tee pytest_output.txt
 
+      - name: Surface pytest failures (artifact + step summary + annotations)
+        if: always()
+        working-directory: algoict-engine
+        run: |
+          if [ -f pytest_output.txt ]; then
+            # The "FAILURES" section of pytest output lists every failed
+            # test with its traceback. Extract it (everything from the
+            # FAILURES header to the short test summary) and emit:
+            #   1) ::error:: annotations (visible on the run summary page)
+            #   2) full block into GITHUB_STEP_SUMMARY (markdown, public)
+            echo "## CI test diagnostics" >> "$GITHUB_STEP_SUMMARY"
+            echo '' >> "$GITHUB_STEP_SUMMARY"
+            echo '### Last 200 lines of pytest output' >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            tail -n 200 pytest_output.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            # Annotations: anything starting with FAILED or "E "
+            grep -E "^(FAILED|E   |E     |____+)" pytest_output.txt | head -50 | while IFS= read -r line; do
+              # GitHub Actions ::error:: turns each into a top-level annotation
+              echo "::error::$line"
+            done
+          else
+            echo "::warning::pytest_output.txt not produced — pytest crashed before writing"
+          fi
       - name: Upload pytest output (always)
         if: always()
         uses: actions/upload-artifact@v4
