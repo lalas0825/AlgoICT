@@ -54,15 +54,14 @@ jobs:
           cache-dependency-path: 'algoict-engine/requirements.txt'
 
       - name: Install system deps (TA-Lib C library)
-        # TA-Lib Python wrapper needs the C library installed first.
-        # Using the prebuilt .deb package keeps CI fast (~10s vs ~2min compile).
+        # 2026-04-24: switched from building v0.4.0 source (which broke on
+        # Ubuntu 24.04 runners — autoconf chain failures, opaque error)
+        # to the official prebuilt v0.6.4 .deb package. Faster (~3s vs
+        # ~2min compile) AND deterministic — the deb is signed.
+        # Reference: https://github.com/ta-lib/ta-lib/releases
         run: |
-          wget -q https://github.com/ta-lib/ta-lib/releases/download/v0.4.0/ta-lib-0.4.0-src.tar.gz
-          tar -xzf ta-lib-0.4.0-src.tar.gz
-          cd ta-lib/
-          ./configure --prefix=/usr
-          make -j$(nproc)
-          sudo make install
+          wget -q https://github.com/ta-lib/ta-lib/releases/download/v0.6.4/ta-lib_0.6.4_amd64.deb
+          sudo dpkg -i ta-lib_0.6.4_amd64.deb
           sudo ldconfig
         working-directory: /tmp
 
