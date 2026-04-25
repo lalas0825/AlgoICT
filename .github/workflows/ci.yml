@@ -90,11 +90,27 @@ jobs:
           SUPABASE_URL: https://example.invalid
           SUPABASE_KEY: ci-dummy
           ANTHROPIC_API_KEY: ci-dummy
+        # Capture full pytest output to a file we can upload as an artifact
+        # (so we can diagnose failures from the GitHub API without needing
+        # authenticated access to the run logs page).
         run: |
+          set -o pipefail
           python -m pytest tests/ -v \
             --ignore=tests/test_strategy_lab.py \
             --ignore=tests/test_topstepx_live_contract.py \
-            --maxfail=5
+            --tb=short \
+            --maxfail=10 \
+            --junit-xml=test-results.xml 2>&1 | tee pytest_output.txt
+
+      - name: Upload pytest output (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-output
+          path: |
+            algoict-engine/pytest_output.txt
+            algoict-engine/test-results.xml
+          retention-days: 7
 
       - name: Smoke-import main + key modules
         # Catches syntax errors / missing imports that tests might miss
