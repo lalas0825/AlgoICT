@@ -90,10 +90,20 @@ if (-not (Test-Path $envFile)) {
     Write-Warning ".env not found at $envFile -- monitor will log alerts locally only (no Telegram)."
 }
 
-# Build the scheduled task
+# Build the scheduled task.
+# 2026-04-26: switched from direct powershell.exe to a VBScript wrapper
+# (run_monitor_silent.vbs) because Task Scheduler's `-WindowStyle Hidden`
+# still flashes a black PowerShell window for ~100ms on launch (known
+# Windows quirk). The VBS wrapper uses WSHShell.Run with windowStyle=0
+# which hides the window completely.
+$vbsPath = Join-Path $EngineRoot "scripts\run_monitor_silent.vbs"
+if (-not (Test-Path $vbsPath)) {
+    Write-Error "run_monitor_silent.vbs not found at $vbsPath"
+    exit 1
+}
 $action = New-ScheduledTaskAction `
-    -Execute "powershell.exe" `
-    -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$scriptPath`""
+    -Execute "wscript.exe" `
+    -Argument "`"$vbsPath`""
 
 # Trigger: start now, repeat every 1 minute, for up to 10 years.
 # (Task Scheduler rejects [TimeSpan]::MaxValue as out-of-range.)
