@@ -1111,6 +1111,24 @@ def _update_detectors(
     except Exception as exc:
         logger.debug("1min FVG detect failed: %s", exc)
 
+    # 2026-04-27 BUG FIX — 1-min FVGs must be mitigated by 1-min closes.
+    # Previous wiring only called update_mitigation with the 5-min close
+    # (line 1022 above), so 1-min FVGs whose top was crossed by a 1-min
+    # close stayed "active" indefinitely if the parent 5-min bar's CLOSE
+    # didn't also cross the top. Today's case: bear FVG top=27393.00 was
+    # crossed by 1-min closes 27398 (08:37 CT) and 27403 (08:38 CT), but
+    # the 5-min [08:35-08:39] bar closed at 27392.75 — 0.25 below top —
+    # so the bot kept firing SHORT on that mitigated FVG all morning.
+    # Backtester always used the entry-TF close (i.e. 1-min for SB), so
+    # this also closes the largest live/backtest asymmetry currently
+    # present. ICT canonical: each FVG mitigates on a body close beyond
+    # its distal edge AT THE FVG'S OWN TIMEFRAME.
+    try:
+        last_1m_close = float(state.bars_1min.iloc[-1]["close"])
+        components.detectors["fvg"].update_mitigation(last_1m_close)
+    except Exception as exc:
+        logger.debug("1min FVG update_mitigation failed: %s", exc)
+
     # Structure on 5-min: re-run whenever a new 5-min bar completes.
     if updated.get("5min"):
         try:
@@ -2236,21 +2254,34 @@ async def _poll_position_status(components: Components, state: EngineState) -> N
                 except Exception:
                     still_in_kz = False
 
-            if bars_pending < ttl_bars and still_in_kz:
+            # 2026-04-27 OPTION C — ICT canonical: keep limit alive for the
+            # ENTIRE KZ window (regardless of TTL). The previous
+            # `bars < ttl AND still_in_kz` formulation imposed a 10-bar
+            # hard cap even mid-KZ — but the comment block above
+            # explicitly says "ICT expects the setup to remain valid for
+            # the whole 60-min window — retraces can take 40+ bars". The
+            # AND was contradicting that intent. Now: if we're inside KZ,
+            # keep alive (no TTL); once outside KZ, fall back to a 10-bar
+            # post-KZ grace before cancelling. NY AM 08:30-12:00 CT (210min)
+            # → limit can wait the full session. London 01-04 CT (180min)
+            # likewise. ICT-aligned + matches ICT 60-min SB window math.
+            if still_in_kz or bars_pending < ttl_bars:
                 # Limit still legitimately waiting — not phantom.
                 # DO NOT increment bars_pending here (TTL sweep at
                 # line ~2364 does the incrementing). Just skip cleanup.
                 logger.debug(
-                    "POLL: %s entry limit still pending (bars=%d/%d, kz=%s active) — NO cleanup",
+                    "POLL: %s entry limit still pending (bars=%d/%d, kz=%s, "
+                    "in_kz=%s) — NO cleanup",
                     _root(signal.symbol), bars_pending, ttl_bars, sig_kz,
+                    still_in_kz,
                 )
                 continue
 
-            # Either TTL expired OR we're outside KZ — actually clean up.
+            # Both conditions hold: we're OUTSIDE the KZ AND beyond the
+            # post-KZ TTL grace. Actually clean up.
             reason_str = (
-                f"TTL expired ({bars_pending} bars >= {ttl_bars})"
-                if bars_pending >= ttl_bars
-                else f"KZ {sig_kz} closed"
+                f"KZ {sig_kz} closed + TTL post-KZ exhausted "
+                f"({bars_pending} bars >= {ttl_bars})"
             )
             logger.warning(
                 "POLL: %s entry limit NEVER FILLED after %d bars (%s) — "
@@ -2462,6 +2493,35 @@ async def _reconcile_positions(components: Components, state: EngineState) -> No
         for key, pos in state.open_positions.items():
             if _root((pos.get("signal") and pos["signal"].symbol) or "") not in orphans:
                 continue
+
+            # ── 2026-04-27 BUG FIX — DO NOT orphan unfilled limits ────────
+            # Broker's `searchOpen` returns ONLY OPEN POSITIONS, not resting
+            # limit orders. So between fire and fill, the bot's local pos
+            # (filled_price=None) appears "orphan" to every reconciler tick
+            # (every 5min). Pre-fix, this killed the limit at minute %5
+            # after the fire (~5-10 min) even when the poll-path's KZ-aware
+            # TTL (LIMIT_ORDER_TTL_BARS=10 bars + KZ-active extension) would
+            # have legitimately kept it alive for the full 60-min KZ window.
+            # ICT canonical: limit orders wait the entire setup window for
+            # the retrace. Trades #3 and #4 today were both killed by this
+            # premature reconciler at exactly minute %5 even though the
+            # limits were ICT-valid pending fills.
+            #
+            # Fix: if the entry limit has not been filled yet, skip orphan
+            # detection here — the poll-path (`_poll_position_status`)
+            # owns TTL/KZ-aware cleanup for unfilled limits.
+            entry_ord = pos.get("entry_order")
+            entry_unfilled = (
+                entry_ord is not None
+                and getattr(entry_ord, "filled_price", None) is None
+            )
+            if entry_unfilled:
+                logger.debug(
+                    "Reconcile: position %s has unfilled limit — skipping "
+                    "orphan check (poll-path owns TTL)", key,
+                )
+                continue
+
             opened_at = pos.get("opened_at")
             if opened_at is not None:
                 # 2026-04-24 post-audit: tz-aware safety. opened_at

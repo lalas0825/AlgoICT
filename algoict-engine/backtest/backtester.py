@@ -368,11 +368,35 @@ class Backtester:
                     pending_entry = None
                 else:
                     pending_entry["bars_waiting"] = pending_entry.get("bars_waiting", 0) + 1
-                    if pending_entry["bars_waiting"] >= _limit_ttl:
+                    # 2026-04-27 OPTION C — KZ-canonical TTL parity with main.py.
+                    # Mirrors `still_in_kz OR bars < ttl` from poll-path. Keep
+                    # the limit alive while we're inside the signal's kill
+                    # zone (ICT canonical: full window allowed for retrace);
+                    # only after we've left the KZ does the TTL grace start
+                    # ticking down. Closes the live↔backtester asymmetry where
+                    # backtester killed limits after 10 bars even mid-KZ while
+                    # live now keeps them alive for the whole NY AM / London
+                    # / NY PM window.
+                    sig_kz = pending_entry.get("kill_zone")
+                    still_in_kz = False
+                    if sig_kz and self.session is not None:
+                        try:
+                            still_in_kz = self.session.is_kill_zone(
+                                current_ts, sig_kz,
+                            )
+                        except Exception:
+                            still_in_kz = False
+                    keep_alive = (
+                        still_in_kz
+                        or pending_entry["bars_waiting"] < _limit_ttl
+                    )
+                    if not keep_alive:
                         logger.debug(
-                            "LIMIT TTL: %s %s limit @ %.2f expired after %d bars",
+                            "LIMIT TTL: %s %s limit @ %.2f expired (KZ %s closed + "
+                            "%d bars >= %d TTL)",
                             pending_entry["strategy"], pending_entry["direction"],
-                            pending_entry["limit_price"], _limit_ttl,
+                            pending_entry["limit_price"], sig_kz,
+                            pending_entry["bars_waiting"], _limit_ttl,
                         )
                         pending_entry = None
 
