@@ -2566,6 +2566,145 @@ async def _reconcile_positions(components: Components, state: EngineState) -> No
             pos = state.open_positions.pop(key, None)
             if pos is None:
                 continue
+
+            # ── 2026-04-27 AUDIT FIX — recover P&L from silent close ──────
+            # Pre-fix, when broker closed a position silently (stop hit
+            # without User Hub fill event delivered to the bot), the
+            # reconciler marked the position "orphan, entry_filled=NO" and
+            # removed local state WITHOUT recording P&L. Today's audit
+            # found 6 of 8 trades silently lost this way (~$540 net).
+            #
+            # Fix: BEFORE declaring orphan, query broker /Trade/search for
+            # fills on this position's order IDs. If we find a closing
+            # fill, compute real P&L and route through _on_trade_closed
+            # (full risk + Supabase + Telegram accounting). Then proceed
+            # with normal cleanup of any still-resting orders.
+            #
+            # The query is intentionally a positional check, not a full
+            # ledger query — we look at trades since the position was
+            # opened and match by order_id (entry / stop / target). If
+            # there are unrelated trades on the same contract from a
+            # parallel position they'll have different order IDs and be
+            # filtered out.
+            recovered_pnl: Optional[float] = None
+            recovered_trade_dict: Optional[dict] = None
+            entry_ord = pos.get("entry_order")
+            stop_ord = pos.get("stop_order")
+            target_ord = pos.get("target_order")
+            entry_oid = str(getattr(entry_ord, "order_id", "")) if entry_ord else ""
+            stop_oid = str(getattr(stop_ord, "order_id", "")) if stop_ord else ""
+            target_oid = str(getattr(target_ord, "order_id", "")) if target_ord else ""
+            opened_at_for_search = pos.get("opened_at")
+            if opened_at_for_search is None:
+                opened_at_for_search = datetime.now(timezone.utc) - timedelta(hours=2)
+            try:
+                # Pad start by 30s (clock skew) and pull all trades since.
+                start = opened_at_for_search - timedelta(seconds=30)
+                if hasattr(components.broker, "search_trades"):
+                    fills = await components.broker.search_trades(start)
+                else:
+                    fills = []
+            except Exception as exc:
+                logger.warning(
+                    "Reconcile fill recovery: search_trades failed: %s", exc,
+                )
+                fills = []
+            # Filter by order IDs we own.
+            our_ids = {oid for oid in (entry_oid, stop_oid, target_oid) if oid}
+            our_fills = [
+                t for t in fills
+                if str(t.get("orderId") or "") in our_ids
+            ] if our_ids else []
+            if our_fills:
+                # Has fills → was REAL trade, not orphan. Stamp filled_price
+                # on entry_order if missing (so downstream logic sees the
+                # fill landed) and synthesize trade_dict for accounting.
+                signal = pos.get("signal")
+                if signal is not None:
+                    direction = signal.direction
+                    contracts = int(signal.contracts)
+                    # Find the entry fill and the closing fill(s).
+                    entry_fill = next(
+                        (t for t in our_fills if str(t.get("orderId")) == entry_oid),
+                        None,
+                    )
+                    close_fills = [
+                        t for t in our_fills if str(t.get("orderId")) != entry_oid
+                    ]
+                    entry_fill_price = (
+                        float(entry_fill.get("price")) if entry_fill else None
+                    )
+                    if entry_fill_price is not None and entry_ord is not None:
+                        try:
+                            if getattr(entry_ord, "filled_price", None) is None:
+                                entry_ord.filled_price = entry_fill_price  # type: ignore[attr-defined]
+                        except Exception:
+                            pass
+                    # Sum P&L across all of our fills (entry P&L is 0,
+                    # closer carries the round-trip P&L).
+                    total_pnl = sum(
+                        float(t.get("profitAndLoss") or 0) for t in our_fills
+                    )
+                    # Pick the latest close-side fill for exit timestamp/price.
+                    close_fill = (
+                        max(close_fills, key=lambda t: t.get("creationTimestamp", ""))
+                        if close_fills else None
+                    )
+                    exit_price = (
+                        float(close_fill.get("price")) if close_fill else
+                        (entry_fill_price if entry_fill_price else float(signal.entry_price))
+                    )
+                    exit_time = (
+                        close_fill.get("creationTimestamp") if close_fill else
+                        str(datetime.now(timezone.utc))
+                    )
+                    fallback_entry_price = (
+                        entry_fill_price if entry_fill_price is not None
+                        else float(signal.entry_price)
+                    )
+                    current_stop = pos.get(
+                        "current_stop_price", float(signal.stop_price),
+                    )
+                    stop_points = abs(current_stop - fallback_entry_price)
+                    # Determine reason: stop fill, target fill, or external.
+                    if close_fill is None:
+                        reason = "broker_close_no_fill_match"
+                    elif str(close_fill.get("orderId")) == stop_oid:
+                        reason = "stop_silent"
+                    elif str(close_fill.get("orderId")) == target_oid:
+                        reason = "target_silent"
+                    else:
+                        reason = "broker_close_external"
+                    sig_kz = getattr(signal, "kill_zone", "") or ""
+                    recovered_trade_dict = {
+                        "id": key,
+                        "strategy": signal.strategy,
+                        "direction": direction,
+                        "symbol": signal.symbol,
+                        "entry_price": fallback_entry_price,
+                        "exit_price": exit_price,
+                        "entry_time": str(opened_at_for_search),
+                        "exit_time": str(exit_time),
+                        "pnl": float(total_pnl),
+                        "confluence_score": getattr(signal, "confluence_score", 0),
+                        "ict_concepts": list(
+                            getattr(signal, "confluence_breakdown", {}).keys()
+                        ),
+                        "kill_zone": sig_kz,
+                        "stop_points": stop_points,
+                        "contracts": contracts,
+                        "reason": f"recovered:{reason}",
+                    }
+                    recovered_pnl = float(total_pnl)
+                    logger.warning(
+                        "Reconcile RECOVERED silent close — %s %s %dx: "
+                        "entry=%.2f exit=%.2f P&L=$%.2f reason=%s "
+                        "(fills=%d)",
+                        direction, signal.symbol, contracts,
+                        fallback_entry_price, exit_price, total_pnl,
+                        reason, len(our_fills),
+                    )
+
             # 2026-04-24: include entry_order — a limit entry that never
             # filled AND leaked an orphan still needs to be cancelled at
             # the broker, otherwise it can fill late and create a real
@@ -2595,11 +2734,27 @@ async def _reconcile_positions(components: Components, state: EngineState) -> No
                     ", ".join(f"{k}={i}" for k, i in cancel_failures),
                 )
             sym = (pos.get("signal") and pos["signal"].symbol) or key
-            entry_ord = pos.get("entry_order")
             entry_never_filled = (
                 getattr(entry_ord, "filled_price", None) is None
                 if entry_ord else True
             )
+
+            # ── 2026-04-27 AUDIT FIX — fire trade closed accounting ───────
+            # If we recovered P&L from silent close, run it through the
+            # full _on_trade_closed pipeline NOW (before the orphan
+            # log/alert) so the user sees a real "Trade closed WIN/LOSS"
+            # alert + Supabase record + risk accounting tracks the
+            # realized P&L. Skip the misleading "phantom/orphan" alert in
+            # this case.
+            if recovered_trade_dict is not None:
+                try:
+                    await _on_trade_closed(components, state, recovered_trade_dict)
+                except Exception as exc:
+                    logger.exception(
+                        "Reconcile recovered trade close pipeline failed: %s", exc,
+                    )
+                continue  # skip to next orphan_key — accounting done
+
             logger.info(
                 "ORPHAN resolved: removed local position %s, cancelled "
                 "entry+stop+target orders (entry_filled=%s)",

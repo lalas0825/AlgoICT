@@ -653,6 +653,57 @@ class TopstepXClient:
             logger.debug("get_positions: 0 open")
         return positions
 
+    async def search_trades(
+        self,
+        start_ts: datetime,
+        end_ts: Optional[datetime] = None,
+    ) -> list[dict]:
+        """
+        Query the broker's trade execution history via POST /Trade/search.
+
+        Used by the reconciler (2026-04-27 audit) to recover P&L for
+        positions that closed silently (broker stop fills) when the User
+        Hub fill events were missed. Returns the raw trade rows so the
+        caller can filter by orderId / accountId / time-window.
+
+        ProjectX response shape (per 2026-04-27 audit):
+          {
+            "trades": [
+              {
+                "id": int, "accountId": int, "contractId": str,
+                "creationTimestamp": "2026-04-27T19:32:00.666343+00:00",
+                "price": float, "size": int, "side": int (1=SELL, 0=BUY),
+                "profitAndLoss": float, "fees": float, "voided": bool,
+                "orderId": int,
+              }, ...
+            ],
+            "success": bool, "errorCode": int, "errorMessage": str,
+          }
+        """
+        if end_ts is None:
+            end_ts = datetime.now(timezone.utc)
+        payload = {
+            "accountId": int(self._account_id),
+            "startTimestamp": start_ts.isoformat(),
+            "endTimestamp": end_ts.isoformat(),
+        }
+        try:
+            data = await self._post("/Trade/search", payload)
+        except Exception as exc:
+            logger.warning("search_trades: API call failed: %s", exc)
+            return []
+        if not isinstance(data, dict):
+            logger.warning("search_trades: unexpected response shape: %r", data)
+            return []
+        if not data.get("success", True):
+            logger.warning(
+                "search_trades: ProjectX error code=%s msg=%s",
+                data.get("errorCode"), data.get("errorMessage"),
+            )
+            return []
+        trades = data.get("trades") or []
+        return [t for t in trades if isinstance(t, dict) and not t.get("voided")]
+
     async def flatten_all(self) -> list[OrderResult]:
         """
         Close all open positions with market orders.
@@ -834,17 +885,33 @@ class TopstepXClient:
 
         disconnected = asyncio.Event()
 
+        def _extract_payload(args: list) -> Optional[dict]:
+            """SignalR shape varies — sometimes [accountId, payload], sometimes [payload]."""
+            if len(args) >= 2 and isinstance(args[1], dict):
+                return args[1]
+            if len(args) >= 1 and isinstance(args[0], dict):
+                return args[0]
+            return None
+
         def _on_order_update(args: list) -> None:
             """Runs in signalrcore's thread — bridge fills to asyncio loop."""
             try:
-                # GatewayUserOrder args shape: [accountId, orderData] or [orderData]
-                order_data: dict
-                if len(args) >= 2 and isinstance(args[1], dict):
-                    order_data = args[1]
-                elif len(args) >= 1 and isinstance(args[0], dict):
-                    order_data = args[0]
-                else:
+                order_data = _extract_payload(args)
+                if order_data is None:
+                    logger.debug("User hub: GatewayUserOrder unknown shape: %r", args)
                     return
+
+                # 2026-04-27 audit fix: log EVERY order event at INFO so we can
+                # see status transitions in real time (was: silent unless
+                # status=2). Helps diagnose why fills weren't arriving.
+                logger.info(
+                    "User hub: ORDER event status=%s oid=%s qty=%s/%s price=%s",
+                    order_data.get("status"),
+                    order_data.get("orderId") or order_data.get("id"),
+                    order_data.get("filledQuantity") or 0,
+                    order_data.get("qty") or order_data.get("contracts") or 0,
+                    order_data.get("filledPrice"),
+                )
 
                 # ProjectX status codes: 2 = Filled
                 if order_data.get("status") != 2:
@@ -866,6 +933,121 @@ class TopstepXClient:
                     )
             except Exception as exc:
                 logger.exception("User hub order handler error: %s", exc)
+
+        def _on_trade_event(args: list) -> None:
+            """
+            2026-04-27 audit fix — register handler for GatewayUserTrade.
+
+            SignalR was logging "Event 'GatewayUserTrade' hasn't fired any
+            handler" for every fill all day on 2026-04-27 — meaning the
+            broker WAS sending fill events via this channel but the bot
+            wasn't listening. Result: bot blind to 6 of 8 fills today,
+            silently lost ~$540 it never reconciled. This handler routes
+            trade events through the same _fill_callback as GatewayUserOrder
+            (existing fill plumbing dedups via order_id, so double-firing
+            from both event types is safe).
+
+            Trade event payload (observed shape):
+              {
+                "orderId": int,
+                "price": float,           # actual fill price
+                "size": int,
+                "side": int (1=SELL, 0=BUY),
+                "voided": bool,
+                "creationTimestamp": str,
+                ...
+              }
+            """
+            try:
+                trade_data = _extract_payload(args)
+                if trade_data is None:
+                    logger.debug("User hub: GatewayUserTrade unknown shape: %r", args)
+                    return
+
+                # Voided trades (e.g. busted on exchange) — skip.
+                if trade_data.get("voided"):
+                    logger.warning("User hub: TRADE event VOIDED — skipping: %s", trade_data)
+                    return
+
+                oid = trade_data.get("orderId") or trade_data.get("id")
+                price = (
+                    trade_data.get("price")
+                    or trade_data.get("filledPrice")
+                    or trade_data.get("avgPrice")
+                )
+                size = (
+                    trade_data.get("size")
+                    or trade_data.get("filledQuantity")
+                    or trade_data.get("quantity")
+                )
+                logger.info(
+                    "User hub: TRADE event oid=%s price=%s size=%s side=%s",
+                    oid, price, size, trade_data.get("side"),
+                )
+                if not oid or price is None:
+                    logger.warning("User hub: trade event missing orderId/price: %s", trade_data)
+                    return
+
+                # Synthesize the order_data shape that _on_broker_fill expects.
+                # _fill_callback dedups via pos["entry_fill_confirmed"] flag, so
+                # if GatewayUserOrder already fired for this fill, this one is
+                # a no-op. If GatewayUserOrder is silently dropped (today's
+                # observed broker behavior), this is the ONLY fill notification.
+                synthetic = {
+                    "orderId": oid,
+                    "filledPrice": float(price),
+                    "filledQuantity": int(size) if size else None,
+                    "qty": int(size) if size else None,
+                    "status": 2,  # treat as filled
+                    "_source": "GatewayUserTrade",
+                }
+
+                if self._fill_callback is not None:
+                    asyncio.run_coroutine_threadsafe(
+                        self._fill_callback(synthetic), loop
+                    )
+            except Exception as exc:
+                logger.exception("User hub trade handler error: %s", exc)
+
+        def _on_position_event(args: list) -> None:
+            """
+            2026-04-27 audit fix — register handler for GatewayUserPosition.
+
+            Used as a passive observer: log position changes at INFO so the
+            audit trail is complete. The actual fill detection is done in
+            _on_trade_event / _on_order_update; this is just for forensics
+            (e.g. detect when broker zeros out a position the bot still
+            tracks locally — that's the silent-close pattern from today).
+            """
+            try:
+                position_data = _extract_payload(args)
+                if position_data is None:
+                    logger.debug("User hub: GatewayUserPosition unknown shape: %r", args)
+                    return
+                logger.info(
+                    "User hub: POSITION event contractId=%s size=%s avg=%s type=%s",
+                    position_data.get("contractId"),
+                    position_data.get("size"),
+                    position_data.get("averagePrice"),
+                    position_data.get("type"),
+                )
+            except Exception as exc:
+                logger.debug("User hub position handler error: %s", exc)
+
+        def _on_account_event(args: list) -> None:
+            """2026-04-27 audit fix — register handler for GatewayUserAccount."""
+            try:
+                account_data = _extract_payload(args)
+                if account_data is None:
+                    return
+                # Account updates are noisy (every fee tick); DEBUG only.
+                logger.debug(
+                    "User hub: ACCOUNT event balance=%s id=%s",
+                    account_data.get("balance"),
+                    account_data.get("id"),
+                )
+            except Exception:
+                pass
 
         def _on_open() -> None:
             # 2026-04-24 Bug K fix: the ProjectX User Hub spec requires
@@ -948,6 +1130,13 @@ class TopstepXClient:
             loop.call_soon_threadsafe(disconnected.set)
 
         conn.on("GatewayUserOrder", _on_order_update)
+        # 2026-04-27 audit fix — wire all 4 user-hub events. Pre-fix, only
+        # GatewayUserOrder was registered, so Trade/Position/Account events
+        # arriving from the broker were silently discarded ("hasn't fired
+        # any handler" log lines) and the bot was blind to fills.
+        conn.on("GatewayUserTrade", _on_trade_event)
+        conn.on("GatewayUserPosition", _on_position_event)
+        conn.on("GatewayUserAccount", _on_account_event)
         conn.on_open(_on_open)
         conn.on_close(_on_close)
         conn.on_error(_on_error)
