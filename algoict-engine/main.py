@@ -2446,6 +2446,47 @@ async def _reconcile_positions(components: Components, state: EngineState) -> No
                 except Exception:
                     pass
 
+            # ── 2026-04-27 RECONCILER PHANTOM COOLDOWN ────────────────────
+            # Mirror the poll-path behavior: after cleaning up an orphan
+            # whose entry never filled, arm the strategy's phantom-cleanup
+            # cooldown so the next 10 bars don't immediately re-fire the
+            # same FVG/sweep/structure setup that just produced an unfilled
+            # limit. The poll-path (line ~2200) already does this; the
+            # reconciler path didn't, which is why London 2026-04-27 saw
+            # fire-orphan-fire-orphan loop (02:06 → 02:26 orphan → 02:28
+            # fire #2 → 02:31 orphan → 02:32 fire #3).
+            #
+            # Cooldown bumped 5→10 min so it spans more than one reconciler
+            # cycle (reconciler runs every 5 min). Only meaningful for
+            # entry_never_filled cases — if entry actually filled, the
+            # orphan came from a closed-position broker race, not a stuck
+            # setup, and the cooldown shouldn't suppress new genuine
+            # signals.
+            if entry_never_filled:
+                signal_obj = pos.get("signal")
+                strat_name = getattr(signal_obj, "strategy", "") if signal_obj else ""
+                strat = None
+                if strat_name == "silver_bullet":
+                    strat = getattr(components, "silver_bullet_strategy", None)
+                elif strat_name == "ny_am_reversal":
+                    strat = getattr(components, "ny_am_strategy", None)
+                if strat is not None and hasattr(strat, "record_phantom_cleanup"):
+                    try:
+                        last_bar_ts = (
+                            state.bars_1min.index[-1]
+                            if not state.bars_1min.empty
+                            else (signal_obj.timestamp if signal_obj else None)
+                        )
+                        if last_bar_ts is not None:
+                            strat.record_phantom_cleanup(
+                                last_bar_ts, cooldown_minutes=10
+                            )
+                    except Exception as exc:
+                        logger.warning(
+                            "Reconcile orphan: phantom cooldown arm failed for %s: %s",
+                            sym, exc,
+                        )
+
 
 async def _manage_open_positions(
     components: Components,
