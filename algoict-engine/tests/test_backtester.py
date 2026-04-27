@@ -217,9 +217,11 @@ class TestSignalAndExit:
             entry_price=100.0, stop_price=99.0, target_price=101.0,
             contracts=5,
         )
-        # Patch bar at 09:30 (well after any 2nd eval) with high=102
+        # Patch bar at 09:30 (well after any 2nd eval) — high=101 just hits
+        # target. Excursion = 1R, below 2R ratchet threshold → ratchet
+        # stays armed so this test isolates the fixed-target codepath.
         spike_ts = pd.Timestamp("2025-03-03 09:30", tz="US/Central")
-        _patch_bar(df, spike_ts, high=102.0)
+        _patch_bar(df, spike_ts, high=101.0)
 
         bt = _make_backtester(strategy=mock)
         result = bt.run(df)
@@ -312,7 +314,10 @@ class TestSignalAndExit:
             contracts=5,
         )
         both_ts = pd.Timestamp("2025-03-03 09:30", tz="US/Central")
-        _patch_bar(df, both_ts, high=102.0, low=98.5)
+        # high=101 (target), low=98.5 (below stop) — excursion 1R keeps
+        # ratchet inert so the conservative-stop-wins-ties rule remains
+        # the only mechanism under test.
+        _patch_bar(df, both_ts, high=101.0, low=98.5)
 
         bt = _make_backtester(strategy=mock)
         result = bt.run(df)
@@ -918,7 +923,10 @@ class TestTrailingStop:
             timestamp=pd.Timestamp("2025-03-03 09:00", tz="US/Central"),
             price=97.0, type="low", timeframe="5min",
         ))
-        _patch_bar(df, pd.Timestamp("2025-03-03 09:30", tz="US/Central"), high=106.0)
+        # high=103 → 1.5R excursion (below 2R ratchet threshold) so this
+        # test isolates the swing-trail codepath. Ratchet covered separately
+        # in test_ratchet_locks_stop_at_one_R below.
+        _patch_bar(df, pd.Timestamp("2025-03-03 09:30", tz="US/Central"), high=103.0)
         result = bt.run(df)
         assert result.total_trades == 1
         assert result.trades[0].stop_price == pytest.approx(98.0)
@@ -941,11 +949,62 @@ class TestTrailingStop:
     def test_trailing_target_still_fires(self):
         """Fixed target works in trailing mode too."""
         df = _build_day(datetime.date(2025, 3, 3))
-        bt, _ = self._make_bt_trailing(entry=100.0, stop=98.0, target=105.0)
-        _patch_bar(df, pd.Timestamp("2025-03-03 09:30", tz="US/Central"), high=106.0)
+        # R=2 (entry 100 / stop 98), target at +1.5R = 103. Bar high 103.5
+        # → 1.75R excursion stays below the 2R ratchet threshold so the
+        # target codepath is what closes the trade.
+        bt, _ = self._make_bt_trailing(entry=100.0, stop=98.0, target=103.0)
+        _patch_bar(df, pd.Timestamp("2025-03-03 09:30", tz="US/Central"), high=103.5)
         result = bt.run(df)
         assert result.total_trades == 1
         assert result.trades[0].reason == "target"
+
+    def test_ratchet_locks_stop_at_one_R(self):
+        """Bar reaches 2R+ excursion → stop ratchets to entry+1R (long)."""
+        df = _build_day(datetime.date(2025, 3, 3))
+        bt, _ = self._make_bt_trailing(entry=100.0, stop=98.0, target=110.0)
+        # high=104 → excursion 2R exactly → ratchet arms, locks stop @ 102.
+        # Ensure no swing low present so candidate stops are ratchet-only.
+        _patch_bar(df, pd.Timestamp("2025-03-03 09:30", tz="US/Central"), high=104.0)
+        # Then price reverts and stops out at the ratcheted level.
+        _patch_bar(df, pd.Timestamp("2025-03-03 09:35", tz="US/Central"), low=101.5)
+        result = bt.run(df)
+        assert result.total_trades == 1
+        trade = result.trades[0]
+        assert trade.reason == "stop"
+        # Stop ratcheted from 98 → 102 (entry + 1R), so PnL is +1R win.
+        assert trade.stop_price == pytest.approx(102.0)
+        assert trade.pnl > 0
+
+    def test_ratchet_locks_stop_at_one_R_short(self):
+        """Short: bar reaches 2R+ excursion (down) → stop ratchets to entry-1R."""
+        df = _build_day(datetime.date(2025, 3, 3))
+        bt, _ = self._make_bt_trailing(direction="short", entry=100.0, stop=102.0, target=90.0)
+        # low=96 → excursion 2R exactly (entry 100 → 96 = 4 pts = 2R)
+        # → ratchet arms, locks stop @ entry - R = 98.
+        _patch_bar(df, pd.Timestamp("2025-03-03 09:30", tz="US/Central"), low=96.0)
+        # Reversion stops out at the ratcheted level.
+        _patch_bar(df, pd.Timestamp("2025-03-03 09:35", tz="US/Central"), high=98.5)
+        result = bt.run(df)
+        assert result.total_trades == 1
+        trade = result.trades[0]
+        assert trade.reason == "stop"
+        assert trade.stop_price == pytest.approx(98.0)
+        assert trade.pnl > 0
+
+    def test_ratchet_does_not_arm_below_two_R(self):
+        """Bar peaks at 1.5R → ratchet does NOT fire (one-shot at 2R)."""
+        df = _build_day(datetime.date(2025, 3, 3))
+        bt, _ = self._make_bt_trailing(entry=100.0, stop=98.0, target=110.0)
+        # high=103 → 1.5R, below 2R threshold.
+        _patch_bar(df, pd.Timestamp("2025-03-03 09:30", tz="US/Central"), high=103.0)
+        # Pull-back to original stop level → exits at 98 (no ratchet).
+        _patch_bar(df, pd.Timestamp("2025-03-03 09:35", tz="US/Central"), low=97.5)
+        result = bt.run(df)
+        assert result.total_trades == 1
+        trade = result.trades[0]
+        assert trade.reason == "stop"
+        assert trade.stop_price == pytest.approx(98.0)  # unchanged
+        assert trade.pnl < 0  # original loss, no profit lock
 
 
 # ═══════════════════════════════════════════════════════════════════════════

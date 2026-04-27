@@ -264,6 +264,17 @@ class EngineState:
     # kill zone string at the time the sweep was detected.
     pending_sweep_alerts: Optional[list] = None
 
+    # 2026-04-27: ICT session range trackers. dict keyed by session name
+    # ('asian', 'london', 'ny_am', 'ny_pm') → SessionRangeTracker. Each
+    # tracker accumulates running high/low while its session is active.
+    # On session end (transition active→inactive), finalize() produces
+    # LiquidityLevel objects (AH/AL, LH/LL, NAH/NAL, NPH/NPL) that get
+    # appended to tracked_levels for use by the next session's strategies.
+    session_trackers: Optional[dict] = None
+    # active_sessions: which sessions were active LAST bar. Used to detect
+    # active→inactive transitions which trigger finalize().
+    active_sessions: Optional[set] = None
+
     def __post_init__(self):
         if self.bars_1min is None:
             self.bars_1min = pd.DataFrame(
@@ -279,6 +290,106 @@ class EngineState:
             self.kz_stats = _fresh_kz_stats()
         if self.pending_sweep_alerts is None:
             self.pending_sweep_alerts = []
+        if self.session_trackers is None:
+            from detectors.liquidity import SessionRangeTracker
+            self.session_trackers = {}
+            for name, cfg in (config.cfg("SESSION_RANGES", {}) or {}).items():
+                self.session_trackers[name] = SessionRangeTracker(
+                    name=name,
+                    level_high_type=cfg.get("high_type", f"{name.upper()}H"),
+                    level_low_type=cfg.get("low_type", f"{name.upper()}L"),
+                )
+        if self.active_sessions is None:
+            self.active_sessions = set()
+
+
+def _session_active(ts: pd.Timestamp, range_cfg: dict) -> bool:
+    """Return True if *ts* (CT-aware) is inside the session window.
+
+    range_cfg : {"start": (h, m), "end": (h, m)}. Asian wraps midnight
+    (start_h > end_h, e.g. 19→23 doesn't wrap so this is fine, but
+    20→00 would).
+    """
+    import datetime as _dt
+    if ts is None:
+        return False
+    # Convert to CT if not already. Bars in main.py are tz-aware in CT
+    # via TimeframeManager.aggregate, but be defensive.
+    try:
+        if ts.tz is None:
+            ts = ts.tz_localize("US/Central")
+        else:
+            ts = ts.tz_convert("US/Central")
+    except Exception:
+        pass
+    bar_t = ts.time()
+    sh, sm = range_cfg["start"]
+    eh, em = range_cfg["end"]
+    start_t = _dt.time(sh, sm)
+    end_t = _dt.time(eh, em)
+    if start_t <= end_t:
+        return start_t <= bar_t < end_t
+    # wrap midnight (e.g. asian 20:00 → 00:00)
+    return bar_t >= start_t or bar_t < end_t
+
+
+def _update_session_trackers(state, components, ts, bar_high, bar_low) -> None:
+    """
+    Per-bar session range bookkeeping.
+
+    For each session in config.SESSION_RANGES:
+      - if currently active: update tracker with this bar's high/low
+      - if was active last bar but not now: finalize → emit LH/LL etc
+        LiquidityLevel objects, append to tracked_levels, reset tracker
+
+    Called from _on_new_bar after the bar is appended but before
+    strategy evaluation, so freshly-finalized session levels are
+    visible to the immediately-next strategy pass.
+    """
+    if state.session_trackers is None:
+        return
+    ranges = config.cfg("SESSION_RANGES", {}) or {}
+    if not ranges:
+        return
+
+    now_active: set = set()
+    for name, range_cfg in ranges.items():
+        if _session_active(ts, range_cfg):
+            now_active.add(name)
+            tracker = state.session_trackers.get(name)
+            if tracker is not None:
+                try:
+                    tracker.update(float(bar_high), float(bar_low), ts)
+                except Exception as exc:
+                    logger.debug("session %s update failed: %s", name, exc)
+
+    # Detect active→inactive transitions (session just ended).
+    ended = (state.active_sessions or set()) - now_active
+    for name in ended:
+        tracker = state.session_trackers.get(name)
+        if tracker is None:
+            continue
+        try:
+            new_levels = tracker.finalize()
+        except Exception as exc:
+            logger.warning("session %s finalize failed: %s", name, exc)
+            new_levels = []
+        if new_levels:
+            tracked = components.detectors.get("tracked_levels") or []
+            tracked.extend(new_levels)
+            components.detectors["tracked_levels"] = tracked
+            logger.info(
+                "Session %s closed — added %d levels: %s",
+                name, len(new_levels),
+                ", ".join(f"{l.type}@{l.price:.2f}" for l in new_levels),
+            )
+        # Reset the tracker so the next iteration of this session starts
+        # fresh (next day for daily sessions).
+        try:
+            tracker.reset()
+        except Exception:
+            pass
+    state.active_sessions = now_active
 
 
 def _fresh_kz_stats() -> dict:
@@ -1391,6 +1502,12 @@ async def _execute_signal(
         "target_order": target_order,
         "opened_at": datetime.now(timezone.utc),
         "current_stop_price": float(signal.stop_price),
+        # Persist initial stop for ratchet-to-profit R computation. R is
+        # |entry - initial_stop|; once trail tightens current_stop the
+        # original R must remain stable. Captured at signal creation.
+        "initial_stop_price": float(signal.stop_price),
+        "peak_R": 0.0,
+        "ratcheted_to_1R": False,
         "entry_fill_confirmed": entry_confirmed,
         "bars_pending": 0,
     }
@@ -2519,6 +2636,15 @@ async def _manage_open_positions(
     except Exception:
         last_close = None
 
+    # 2026-04-27 ratchet-to-profit: read most recent 1-min bar high/low
+    # for peak-R bookkeeping. Mirrors backtester._update_trailing_stop §1.
+    try:
+        last_bar_high = float(state.bars_1min["high"].iloc[-1])
+        last_bar_low = float(state.bars_1min["low"].iloc[-1])
+    except Exception:
+        last_bar_high = None
+        last_bar_low = None
+
     for pos in list(state.open_positions.values()):
         signal = pos["signal"]
         direction = signal.direction
@@ -2539,16 +2665,49 @@ async def _manage_open_positions(
             # which point the position becomes real).
             continue
 
+        # ── 2026-04-27 ratchet-to-profit ──────────────────────────────────
+        # Backtester mirror. Uses initial_stop captured at fill (so R is
+        # constant once trail tightens). When peak excursion crosses 2R,
+        # promote stop to +1R and mark ratcheted (one-shot per position).
+        # Closes 2026-04-27 London give-back: 4R unrealized → +1R lock.
+        candidate_stops: list[float] = []
+        initial_stop = pos.setdefault("initial_stop_price", float(signal.stop_price))
+        if last_bar_high is not None and last_bar_low is not None and entry_filled_price is not None:
+            R = abs(float(entry_filled_price) - float(initial_stop))
+            if R > 0:
+                if direction == "long":
+                    bar_excursion_R = (last_bar_high - float(entry_filled_price)) / R
+                else:
+                    bar_excursion_R = (float(entry_filled_price) - last_bar_low) / R
+                pos["peak_R"] = max(pos.get("peak_R", 0.0), bar_excursion_R)
+                if pos["peak_R"] >= 2.0 and not pos.get("ratcheted_to_1R"):
+                    if direction == "long":
+                        ratchet = float(entry_filled_price) + R
+                    else:
+                        ratchet = float(entry_filled_price) - R
+                    candidate_stops.append(ratchet)
+                    pos["ratcheted_to_1R"] = True
+                    logger.info(
+                        "RATCHET-TO-PROFIT armed: %s %s peak=%.2fR → lock stop @ %.2f (+1R)",
+                        direction, symbol, pos["peak_R"], ratchet,
+                    )
+
         if direction == "long":
             sp = swing.get_latest_swing_low()
-            if sp is None or sp.price <= current_stop:
+            if sp is not None:
+                candidate_stops.append(sp.price)
+            tighter = [s for s in candidate_stops if s > current_stop]
+            if not tighter:
                 continue
-            new_stop = sp.price
+            new_stop = max(tighter)
         else:
             sp = swing.get_latest_swing_high()
-            if sp is None or sp.price >= current_stop:
+            if sp is not None:
+                candidate_stops.append(sp.price)
+            tighter = [s for s in candidate_stops if s < current_stop]
+            if not tighter:
                 continue
-            new_stop = sp.price
+            new_stop = min(tighter)
 
         # ── Bug F fix (2026-04-24): stop must be on correct side of price ─
         # For SHORT: stop BUY must be ABOVE current price (triggered when
@@ -2710,6 +2869,20 @@ async def _on_new_bar(
         _update_edge_state(components, state)
 
         ts = state.bars_1min.index[-1]
+
+        # ── 3b2. Session range trackers (Asian/London/NY AM/NY PM) ──
+        # 2026-04-27: track running high/low per ICT session and emit
+        # LH/LL/AH/AL/NAH/NAL/NPH/NPL LiquidityLevel objects when each
+        # session closes. Strategies' sweep gates accept these as ICT
+        # canonical pools alongside PDH/PDL/PWH/PWL.
+        try:
+            last_bar = state.bars_1min.iloc[-1]
+            _update_session_trackers(
+                state, components, ts,
+                last_bar["high"], last_bar["low"],
+            )
+        except Exception as exc:
+            logger.debug("session trackers update failed: %s", exc)
 
         # ── 3c. Persist bar to Supabase market_data (fire and forget) ─
         if components.supabase is not None:
@@ -3377,11 +3550,29 @@ def _reset_for_new_day(components: Components, state: EngineState) -> None:
             levels = components.detectors["liquidity"].build_key_levels(
                 df_daily=df_daily, df_weekly=df_weekly, as_of_ts=as_of,
             )
+            # 2026-04-27 fix: backfill swept flags by replaying warmup
+            # 5-min bars through check_sweep. Without this, levels swept
+            # during the warmup window (e.g. PDH swept in London at
+            # 02:05 CT before bot relaunch at 04:57) appear "active"
+            # forever — they never re-sweep because price already moved
+            # past them. Apples-to-apples with what live would have
+            # detected if the bot had been continuously running.
+            try:
+                df_5min = tf_mgr.aggregate(bars, "5min")
+                if df_5min is not None and not df_5min.empty:
+                    components.detectors["liquidity"].backfill_swept_flags(
+                        levels, df_5min,
+                    )
+            except Exception as exc:
+                logger.warning("tracked_levels backfill swept flags failed: %s", exc)
             components.detectors["tracked_levels"] = levels
             logger.info(
                 "tracked_levels seeded on daily reset (as_of=%s): %d levels (%s)",
                 as_of, len(levels),
-                ", ".join(f"{lvl.type}@{lvl.price:.2f}" for lvl in levels),
+                ", ".join(
+                    f"{lvl.type}@{lvl.price:.2f}{'/SWEPT' if lvl.swept else ''}"
+                    for lvl in levels
+                ),
             )
         else:
             logger.warning("tracked_levels: no warm-up bars yet, deferring to pre-market")

@@ -260,6 +260,40 @@ class Backtester:
         daily_pnl: dict = {}
         _limit_ttl = config.cfg("LIMIT_ORDER_TTL_BARS", 10)
 
+        # 2026-04-27: ICT session range trackers (Asian, London, NY AM, NY PM).
+        # On each bar: update active sessions' running high/low; when a
+        # session ends (active→inactive transition), finalize → emit
+        # AH/AL, LH/LL, NAH/NAL, NPH/NPL LiquidityLevel objects and
+        # append to tracked_levels for use by the next session's strategy.
+        from detectors.liquidity import SessionRangeTracker
+        _session_ranges = config.cfg("SESSION_RANGES", {}) or {}
+        _session_trackers: dict = {}
+        for _name, _cfg in _session_ranges.items():
+            _session_trackers[_name] = SessionRangeTracker(
+                name=_name,
+                level_high_type=_cfg.get("high_type", f"{_name.upper()}H"),
+                level_low_type=_cfg.get("low_type", f"{_name.upper()}L"),
+            )
+        _active_sessions: set = set()
+
+        def _bt_session_active(ts: pd.Timestamp, range_cfg: dict) -> bool:
+            """Mirror of main._session_active for backtester."""
+            try:
+                if ts.tz is None:
+                    ts = ts.tz_localize("US/Central")
+                else:
+                    ts = ts.tz_convert("US/Central")
+            except Exception:
+                pass
+            t = ts.time()
+            sh, sm = range_cfg["start"]
+            eh, em = range_cfg["end"]
+            start_t = datetime.time(sh, sm)
+            end_t = datetime.time(eh, em)
+            if start_t <= end_t:
+                return start_t <= t < end_t
+            return t >= start_t or t < end_t
+
         n = len(df)
         for i in range(n):
             current_ts = ts_index[i]
@@ -267,6 +301,32 @@ class Backtester:
             bar_low = float(low_arr[i])
             bar_close = float(close_arr[i])
             current_date = current_ts.date()
+
+            # ── Session range tracker update (ICT AH/AL/LH/LL/NAH/NAL/NPH/NPL) ─
+            # Called BEFORE strategy evaluation so any session that just
+            # closed has its levels appended to tracked_levels in time
+            # for the strategy on this bar.
+            if _session_ranges:
+                _now_active: set = set()
+                for _name, _cfg in _session_ranges.items():
+                    if _bt_session_active(current_ts, _cfg):
+                        _now_active.add(_name)
+                        _tr = _session_trackers.get(_name)
+                        if _tr is not None:
+                            _tr.update(bar_high, bar_low, current_ts)
+                # Detect ended sessions → finalize → emit levels.
+                _ended = _active_sessions - _now_active
+                for _name in _ended:
+                    _tr = _session_trackers.get(_name)
+                    if _tr is None:
+                        continue
+                    _new_levels = _tr.finalize()
+                    if _new_levels:
+                        _tracked = self.detectors.get("tracked_levels") or []
+                        _tracked.extend(_new_levels)
+                        self.detectors["tracked_levels"] = _tracked
+                    _tr.reset()
+                _active_sessions = _now_active
 
             # ── Session reset at every new calendar date (CT) ─────────
             if current_session_date != current_date:
@@ -327,9 +387,14 @@ class Backtester:
                             open_position, bar_high, bar_low, bar_close, current_ts, i,
                         )
                     elif self.trade_management == "trailing":
-                        # Pass bar_close for Bug F parity — ensures trail
-                        # stop isn't placed on the wrong side of price.
-                        self._update_trailing_stop(open_position, bar_close=bar_close)
+                        # Pass bar_high/bar_low for ratchet-to-profit (peak >=2R locks +1R)
+                        # bar_close kept for legacy logging path.
+                        self._update_trailing_stop(
+                            open_position,
+                            bar_high=bar_high,
+                            bar_low=bar_low,
+                            bar_close=bar_close,
+                        )
                         closed_trades = self._process_fixed(
                             open_position, bar_high, bar_low, bar_close, current_ts, i,
                         )
@@ -623,38 +688,82 @@ class Backtester:
         pos["closed"] = True
         return [trade]
 
-    def _update_trailing_stop(self, pos: dict, bar_close: float | None = None) -> None:
+    def _update_trailing_stop(
+        self,
+        pos: dict,
+        bar_high: float | None = None,
+        bar_low: float | None = None,
+        bar_close: float | None = None,
+    ) -> None:
         """
-        Advance the trailing stop to the most recent swing low (long) or
-        swing high (short) detected by swing_entry, if it improves the stop.
-        Only tightens — never widens.
+        Trail the protective stop using two combined mechanisms:
 
-        2026-04-25: REVERTED Bug F bar_close validation (`buffer_pts=0.25`).
-        That validation was added 2026-04-24 to mirror live Bug F
-        (broker rejects stops on wrong side of price). But in BACKTESTER
-        the broker constraint doesn't exist — bar_close validation
-        rejected ~30% of valid trail-tightenings, keeping stops loose
-        on losing trades and collapsing WR from 50% (v9) to 21% (v10/v11).
-        Q1 2025 v9 vs v10:
-            v9 :  377 trades · WR 50.1% · P&L +$21,956 · PF 2.18
-            v10:  258 trades · WR 20.9% · P&L -$3,836  · PF 0.84
-        The bar_close param is preserved in the signature for API
-        compatibility but ignored. Live trail in main.py keeps its
-        broker-side validation (that's correct for live execution).
+        1. **Ratchet-to-profit** (2026-04-27): when peak unrealized
+           excursion crosses 2R, lock the stop at +1R minimum. Guarantees
+           that any trade that ran 2R favorably never closes worse than
+           +1R. One-shot — only triggers once per position.
+
+        2. **Swing-based trail**: stop moves to the most recent swing low
+           (long) or swing high (short) detected by swing_entry.
+
+        The TIGHTER candidate wins (only tightens, never widens). This
+        addresses the 2026-04-27 London give-back where a SHORT trade
+        ran 4R unrealized, never produced a counter-rally swing high
+        below the current stop, then reverted to ~1R when stopped out.
+        With ratchet, that trade exits at +1R minimum.
+
+        2026-04-25 NOTE: bar_close param ignored (was Bug F validation
+        that we reverted — see git history). The bar_high/bar_low params
+        are NEW (2026-04-27) for the ratchet's peak-R computation.
         """
-        swing = self.detectors.get("swing_entry")
-        if swing is None:
-            return
         direction = pos["direction"]
         current_stop = pos["stop_price"]
+        entry = pos.get("entry_price")
+        # Initial stop captured at position creation. If absent (existing
+        # positions from before this fix), bootstrap from current_stop on
+        # first call — slight inaccuracy but harmless once trail tightens.
+        initial_stop = pos.setdefault("initial_stop_price", current_stop)
+
+        candidate_stops: list[float] = []
+
+        # ── 1. Ratchet-to-profit ────────────────────────────────────
+        if entry is not None and bar_high is not None and bar_low is not None:
+            R = abs(entry - initial_stop)
+            if R > 0:
+                if direction == "long":
+                    bar_excursion_R = (bar_high - entry) / R
+                else:
+                    bar_excursion_R = (entry - bar_low) / R
+                pos["peak_R"] = max(pos.get("peak_R", 0.0), bar_excursion_R)
+                if pos["peak_R"] >= 2.0 and not pos.get("ratcheted_to_1R"):
+                    if direction == "long":
+                        ratchet = entry + R
+                    else:
+                        ratchet = entry - R
+                    candidate_stops.append(ratchet)
+                    pos["ratcheted_to_1R"] = True
+
+        # ── 2. Swing-based trail ────────────────────────────────────
+        swing = self.detectors.get("swing_entry")
+        if swing is not None:
+            if direction == "long":
+                sp = swing.get_latest_swing_low()
+                if sp is not None:
+                    candidate_stops.append(sp.price)
+            else:
+                sp = swing.get_latest_swing_high()
+                if sp is not None:
+                    candidate_stops.append(sp.price)
+
+        # Pick the tightest candidate that's also better than current stop.
         if direction == "long":
-            sp = swing.get_latest_swing_low()
-            if sp is not None and sp.price > current_stop:
-                pos["stop_price"] = sp.price
+            tighter = [s for s in candidate_stops if s > current_stop]
+            if tighter:
+                pos["stop_price"] = max(tighter)
         else:
-            sp = swing.get_latest_swing_high()
-            if sp is not None and sp.price < current_stop:
-                pos["stop_price"] = sp.price
+            tighter = [s for s in candidate_stops if s < current_stop]
+            if tighter:
+                pos["stop_price"] = min(tighter)
 
     # ------------------------------------------------------------------ #
     # Detectors / sweeps                                                    #
@@ -781,16 +890,18 @@ class Backtester:
         if not levels:
             return
 
-        _bsl = {"BSL", "PDH", "PWH", "equal_highs"}
-        _ssl = {"SSL", "PDL", "PWL", "equal_lows"}
+        # 2026-04-27: import canonical type sets so backtester accepts
+        # the full ICT taxonomy (session highs/lows AH/AL, LH/LL, NAH/NAL,
+        # NPH/NPL) just like the live `liquidity.check_sweep`.
+        from detectors.liquidity import BSL_LEVEL_TYPES, SSL_LEVEL_TYPES
 
         for level in levels:
             if level.swept:
                 continue
-            if level.type in _bsl:
+            if level.type in BSL_LEVEL_TYPES:
                 if bar_high > level.price and bar_close < level.price:
                     level.swept = True
-            elif level.type in _ssl:
+            elif level.type in SSL_LEVEL_TYPES:
                 if bar_low < level.price and bar_close > level.price:
                     level.swept = True
 

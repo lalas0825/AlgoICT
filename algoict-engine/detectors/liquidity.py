@@ -40,17 +40,123 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class LiquidityLevel:
-    """Represents a liquidity pool / key price level."""
+    """Represents a liquidity pool / key price level.
+
+    Type taxonomy (2026-04-27 expanded with ICT session levels):
+
+    Daily/weekly references:
+        PDH/PDL   — Previous Day High/Low (RTH)
+        PWH/PWL   — Previous Week High/Low
+        PDC       — Previous Day Close (fair value reference)
+
+    Intraday session ranges (ICT canonical session highs/lows):
+        AH/AL     — Asian Range High/Low (19:00-23:00 CT)
+        LH/LL     — London Session High/Low (01:00-04:00 CT)
+        NAH/NAL   — NY AM High/Low (07:00-09:00 CT, ICT canonical)
+        NPH/NPL   — NY PM High/Low (12:30-15:00 CT)
+
+    Other:
+        BSL/SSL              — intraday swing-based liquidity
+        equal_highs/lows     — clusters of swings (double tops/bottoms)
+    """
 
     price: float
-    type: str           # 'BSL'|'SSL'|'PDH'|'PDL'|'PWH'|'PWL'|'equal_highs'|'equal_lows'
+    type: str           # see taxonomy above
     swept: bool = False
-    timestamp: Optional[pd.Timestamp] = None
+    timestamp: Optional[pd.Timestamp] = None  # when level was IDENTIFIED
+    swept_at: Optional[pd.Timestamp] = None    # when sweep occurred (if swept)
 
     def __repr__(self) -> str:
         status = "SWEPT" if self.swept else "active"
         ts = f", ts={self.timestamp}" if self.timestamp else ""
         return f"LiquidityLevel({self.type} @ {self.price:.4f}{ts}, {status})"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Type sets — canonical buy-side / sell-side liquidity classification
+# ─────────────────────────────────────────────────────────────────────────
+# Used by check_sweep() and by strategies to filter sweep candidates.
+# Buy-side (BSL): pools above price → tested by UP-wicks, generate SHORT bias
+# Sell-side (SSL): pools below price → tested by DOWN-wicks, generate LONG bias
+BSL_LEVEL_TYPES: frozenset = frozenset({
+    "BSL", "PDH", "PWH", "AH", "LH", "NAH", "NPH", "equal_highs",
+})
+SSL_LEVEL_TYPES: frozenset = frozenset({
+    "SSL", "PDL", "PWL", "AL", "LL", "NAL", "NPL", "equal_lows",
+})
+
+
+@dataclass
+class SessionRangeTracker:
+    """
+    Tracks the running high/low of a named trading session.
+
+    ICT canonical sessions (CT):
+        Asian:    19:00-23:00 (sets the "tone")
+        London:   01:00-04:00 (first major liquidity grab)
+        NY AM:    07:00-09:00 (manipulation phase, raids London)
+        NY PM:    12:30-15:00 (final raids before close)
+
+    Usage:
+        tracker = SessionRangeTracker(name="london", level_high_type="LH",
+                                      level_low_type="LL")
+        # While session active, on each new bar:
+        tracker.update(bar_high, bar_low, bar_ts)
+        # When session closes:
+        levels = tracker.finalize()  # → [LH, LL] LiquidityLevel objects
+        tracker.reset()              # ready for next day's session
+    """
+
+    name: str
+    level_high_type: str     # e.g. "LH" for London High
+    level_low_type: str      # e.g. "LL" for London Low
+    high: float = float("-inf")
+    low: float = float("inf")
+    high_ts: Optional[pd.Timestamp] = None
+    low_ts: Optional[pd.Timestamp] = None
+    bars_seen: int = 0
+
+    def update(self, bar_high: float, bar_low: float,
+               bar_ts: Optional[pd.Timestamp] = None) -> None:
+        """Extend running range with the latest bar."""
+        if bar_high > self.high:
+            self.high = float(bar_high)
+            self.high_ts = bar_ts
+        if bar_low < self.low:
+            self.low = float(bar_low)
+            self.low_ts = bar_ts
+        self.bars_seen += 1
+
+    def finalize(self) -> list[LiquidityLevel]:
+        """
+        Convert the running range into LiquidityLevel objects.
+
+        Returns empty list if the session was empty (no bars seen) — e.g.
+        weekend or holiday. Otherwise returns [high_level, low_level].
+        """
+        if self.bars_seen == 0 or self.high == float("-inf"):
+            return []
+        return [
+            LiquidityLevel(
+                price=self.high, type=self.level_high_type,
+                timestamp=self.high_ts,
+            ),
+            LiquidityLevel(
+                price=self.low, type=self.level_low_type,
+                timestamp=self.low_ts,
+            ),
+        ]
+
+    def reset(self) -> None:
+        """Reset for the next session iteration."""
+        self.high = float("-inf")
+        self.low = float("inf")
+        self.high_ts = None
+        self.low_ts = None
+        self.bars_seen = 0
+
+    def is_active(self) -> bool:
+        return self.bars_seen > 0 and self.high != float("-inf")
 
 
 class LiquidityDetector:
@@ -350,25 +456,84 @@ class LiquidityDetector:
         high = float(candle["high"])
         low = float(candle["low"])
         close = float(candle["close"])
-
-        _bsl_types = {"BSL", "PDH", "PWH", "equal_highs"}
-        _ssl_types = {"SSL", "PDL", "PWL", "equal_lows"}
+        # 2026-04-27: extract optional timestamp so swept_at can be stamped
+        # for downstream temporal-validation logic (e.g. "sweep BEFORE FVG").
+        candle_ts = None
+        if hasattr(candle, "name"):
+            candle_ts = candle.name
+        elif "timestamp" in candle:
+            candle_ts = candle["timestamp"]
 
         swept: list[LiquidityLevel] = []
         for level in levels:
             if level.swept:
                 continue
-            if level.type in _bsl_types:
+            if level.type in BSL_LEVEL_TYPES:
                 if high > level.price and close < level.price:
                     level.swept = True
+                    level.swept_at = candle_ts
                     swept.append(level)
                     logger.debug("BSL sweep: %s at high=%.4f, close=%.4f", level, high, close)
-            elif level.type in _ssl_types:
+            elif level.type in SSL_LEVEL_TYPES:
                 if low < level.price and close > level.price:
                     level.swept = True
+                    level.swept_at = candle_ts
                     swept.append(level)
                     logger.debug("SSL sweep: %s at low=%.4f, close=%.4f", level, low, close)
         return swept
+
+    def backfill_swept_flags(
+        self,
+        levels: list[LiquidityLevel],
+        df: pd.DataFrame,
+    ) -> int:
+        """
+        Replay historical bars through ``check_sweep`` to set the initial
+        swept state on freshly-seeded levels.
+
+        2026-04-27 fix for the "PDH stays active after London sweep on
+        bot relaunch" bug. When the bot starts mid-day or relaunches,
+        ``build_key_levels`` creates LiquidityLevel objects with
+        ``swept=False``. Live ``check_sweep`` then only runs on bars
+        AFTER warmup, so any sweep that occurred during the warmup
+        window is invisible — the level appears "active" even though
+        price already swept it earlier.
+
+        Call this AFTER ``build_key_levels`` and BEFORE the engine
+        starts processing live bars. Cheap: ~4-6 levels × 10K bars =
+        ~50K ops, <100ms.
+
+        Parameters
+        ----------
+        levels : list[LiquidityLevel] — freshly seeded, swept=False
+        df     : DataFrame indexed by timestamp with columns high, low, close.
+                 Typically the warmup 5-min frame so wicks are fully
+                 expressed at the resolution sweep detection expects.
+
+        Returns
+        -------
+        int — count of levels marked swept (logged for observability).
+        """
+        if not levels or df is None or df.empty:
+            return 0
+        marked = 0
+        for ts, row in df.iterrows():
+            # Re-use the same check_sweep logic for consistency. We pass
+            # a pseudo-row that exposes .name and dict-like access so
+            # the candle_ts extraction works the same way.
+            new_swept = self.check_sweep(row, levels)
+            marked += len(new_swept)
+        if marked:
+            logger.info(
+                "backfill_swept_flags: %d level(s) marked swept from "
+                "%d warmup bars: %s",
+                marked, len(df),
+                ", ".join(
+                    f"{l.type}@{l.price:.2f}@{l.swept_at}"
+                    for l in levels if l.swept
+                ),
+            )
+        return marked
 
     # ------------------------------------------------------------------ #
     # Private helpers                                                      #

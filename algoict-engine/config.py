@@ -455,6 +455,20 @@ GEX_REFRESH_INTERVAL_MIN = 30  # Refresh GEX data every 30 minutes
 # on Silver Bullet. To re-enable NY AM Reversal: add "ny_am_reversal".
 STRATEGIES_ENABLED = ("silver_bullet",)
 
+# 2026-04-27: ICT canonical session ranges for liquidity tracking.
+# Each session's running high/low becomes a LiquidityLevel after the
+# session closes (AH/AL, LH/LL, NAH/NAL, NPH/NPL). These join PDH/PDL/
+# PWH/PWL as valid sweep targets — Silver Bullet's gate now accepts
+# the full ICT taxonomy of pools, not just daily/weekly references.
+# Times are CT (US/Central). NY AM uses the canonical ICT 7-9 CT range
+# distinct from the wider trading kill zone (8:30-12 CT).
+SESSION_RANGES = {
+    "asian":  {"start": (19, 0),  "end": (23, 0), "high_type": "AH",  "low_type": "AL"},
+    "london": {"start": (1, 0),   "end": (4, 0),  "high_type": "LH",  "low_type": "LL"},
+    "ny_am":  {"start": (7, 0),   "end": (9, 0),  "high_type": "NAH", "low_type": "NAL"},
+    "ny_pm":  {"start": (12, 30), "end": (15, 0), "high_type": "NPH", "low_type": "NPL"},
+}
+
 FVG_MITIGATION_MODE = "body_close"   # "body_close" (ICT) | "ratio" (legacy)
 FVG_MITIGATION_RATIO = 0.75          # only used when FVG_MITIGATION_MODE == "ratio"
 # 2026-04-24 Batch 4: made explicit (was silent default in detectors/fair_value_gap.py).

@@ -171,11 +171,28 @@ class SilverBulletStrategy:
     MAX_TRADES = MAX_TRADES_PER_ZONE * 3  # effectively unlimited total
 
     # Opposite-pool sweep that must precede a long / short setup.
-    _LONG_SWEEP_TYPES = {"SSL", "PDL", "PWL", "equal_lows"}
-    _SHORT_SWEEP_TYPES = {"BSL", "PDH", "PWH", "equal_highs"}
+    # 2026-04-27: ICT canonical sweep types expanded to include session
+    # highs/lows (AH/AL Asian, LH/LL London, NAH/NAL NY AM, NPH/NPL NY PM).
+    # Previously SB only accepted PDH/PDL/PWH/PWL/equal as sweep targets,
+    # missing the most temporally-relevant pools — e.g. NY AM typically
+    # raids LH or LL before the real move, but those weren't tracked.
+    _LONG_SWEEP_TYPES = {
+        "SSL", "PDL", "PWL", "equal_lows",
+        "AL", "LL", "NAL", "NPL",   # session lows
+    }
+    _SHORT_SWEEP_TYPES = {
+        "BSL", "PDH", "PWH", "equal_highs",
+        "AH", "LH", "NAH", "NPH",   # session highs
+    }
     # Target pool types in the trade direction.
-    _LONG_TARGET_TYPES = {"BSL", "PDH", "PWH", "equal_highs"}
-    _SHORT_TARGET_TYPES = {"SSL", "PDL", "PWL", "equal_lows"}
+    _LONG_TARGET_TYPES = {
+        "BSL", "PDH", "PWH", "equal_highs",
+        "AH", "LH", "NAH", "NPH",
+    }
+    _SHORT_TARGET_TYPES = {
+        "SSL", "PDL", "PWL", "equal_lows",
+        "AL", "LL", "NAL", "NPL",
+    }
 
     def __init__(
         self,
