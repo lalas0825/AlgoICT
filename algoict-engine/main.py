@@ -3216,6 +3216,28 @@ async def _on_new_bar(
                 and (ts.hour > HARD_CLOSE_HOUR
                      or (ts.hour == HARD_CLOSE_HOUR and ts.minute >= HARD_CLOSE_MIN))):
             logger.warning("HARD CLOSE reached at %s CT — flattening all", ts)
+            # 2026-04-28 audit fix — fire the trailing KZ-summary BEFORE the
+            # hard-close return. Pre-fix the KZ transition tracking lived
+            # only in `_evaluate_strategies`, but hard close returns
+            # earlier in the bar-processing flow and `hard_close_done=True`
+            # short-circuits all subsequent bars. Result: the NY PM KZ
+            # never got its summary because hard close (15:00 CT) and
+            # NY PM end (15:00 CT) collide. Same race could affect any
+            # KZ-ending-at-hard-close in the future. Flushing here gives
+            # the user the close-of-session stats consistently.
+            if state.active_kz is not None and components.telegram is not None:
+                try:
+                    await components.telegram.send_kz_summary(
+                        kz=state.active_kz,
+                        ts_str=ts.strftime("%H:%M"),
+                        stats=dict(state.kz_stats or {}),
+                    )
+                except Exception as exc:
+                    logger.debug("KZ summary at hard-close failed: %s", exc)
+                # Clear so a stray re-entry to this branch doesn't
+                # double-fire (defensive).
+                state.active_kz = None
+                state.kz_stats = _fresh_kz_stats()
             # Bug H11 (2026-04-24): Telegram alert pro-activo. Antes el
             # usuario veía las alertas individuales de WIN/LOSS de cada
             # posición pero no un "session closed" consolidado.
@@ -3664,14 +3686,47 @@ async def _flatten_all(
             "current_stop_price": pos.get("current_stop_price"),
         })
 
+    # 2026-04-28 audit fix — capture flatten timestamp BEFORE submitting
+    # market orders so the post-flatten search_trades query can scope its
+    # window precisely.
+    flatten_start_ts = datetime.now(timezone.utc) - timedelta(seconds=5)
+    flatten_results: list = []
     try:
-        await components.broker.flatten_all()
+        flatten_results = await components.broker.flatten_all() or []
     except Exception as exc:
         logger.error("Broker flatten failed: %s", exc)
 
-    # Resolve an exit price once for all positions — last completed 1-min
-    # close is the best available proxy when broker.flatten_all doesn't
-    # return per-fill prices.
+    # ── 2026-04-28 audit fix — fetch REAL fill prices from broker ──────
+    # Pre-fix the bot used `state.bars_1min["close"].iloc[-1]` as the
+    # exit price. Today's NY PM hard-close ran the bot's exit at
+    # 27,168.75 (last 1-min close) but the broker's actual market sell
+    # filled at 27,166.00 — $2.75 off, $55 over-stated for the 10x trade.
+    # The /Trade/search endpoint returns the real fill price; we wait
+    # ~1.5s for broker to record the fills, then match by order_id
+    # against the flatten_all() return values. Fall back to last-close
+    # proxy only if the broker query fails or doesn't return matches.
+    flatten_order_ids = {
+        str(getattr(r, "order_id", ""))
+        for r in flatten_results
+        if getattr(r, "order_id", None)
+    }
+    fill_price_by_oid: dict[str, float] = {}
+    if flatten_order_ids and hasattr(components.broker, "search_trades"):
+        try:
+            await asyncio.sleep(1.5)  # let broker register the fills
+            recent_trades = await components.broker.search_trades(flatten_start_ts)
+            for t in recent_trades:
+                oid = str(t.get("orderId") or "")
+                px = t.get("price")
+                if oid in flatten_order_ids and px is not None:
+                    fill_price_by_oid[oid] = float(px)
+        except Exception as exc:
+            logger.warning(
+                "Flatten exit-price fetch via /Trade/search failed: %s "
+                "(falling back to last-close proxy)", exc,
+            )
+
+    # Last 1-min close as fallback proxy.
     exit_price_proxy: Optional[float] = None
     try:
         if not state.bars_1min.empty:
@@ -3679,12 +3734,60 @@ async def _flatten_all(
     except Exception:
         exit_price_proxy = None
 
+    # Match flatten OrderResults to captured positions by symbol+side.
+    # broker.flatten_all() iterates broker positions in order, our
+    # `captured` list iterates state.open_positions in dict order.
+    # Both should preserve the same per-symbol order, but to be safe
+    # we match by symbol root.
+    def _root_sym(s: str) -> str:
+        s = (s or "").upper()
+        if s.startswith("CON.F.") and "." in s:
+            parts = s.split(".")
+            if len(parts) >= 4:
+                return parts[3]
+        return s
+
+    flatten_oid_by_sym: dict[str, str] = {}
+    for r in flatten_results:
+        sym_root = _root_sym(getattr(r, "symbol", ""))
+        oid = str(getattr(r, "order_id", ""))
+        if sym_root and oid:
+            flatten_oid_by_sym.setdefault(sym_root, oid)
+
     for cap in captured:
         signal = cap["signal"]
         entry_price = float(signal.entry_price)
+        # 2026-04-28 — prefer broker-stamped filled_price for accurate
+        # P&L (vs signal.entry_price which is the LIMIT). When the User
+        # Hub fill events parse correctly, filled_price is the real fill.
+        try:
+            ent_ord = (
+                state.open_positions.get(cap["pos_key"], {}).get("entry_order")
+                if cap["pos_key"] in state.open_positions
+                else None
+            )
+            fp = getattr(ent_ord, "filled_price", None) if ent_ord else None
+            if fp is not None and float(fp) > 0:
+                entry_price = float(fp)
+        except Exception:
+            pass
         contracts = int(signal.contracts)
         direction = signal.direction
-        exit_price = exit_price_proxy if exit_price_proxy is not None else entry_price
+        # Resolve exit price: broker fill > proxy > entry (last resort).
+        sym_root = _root_sym(signal.symbol)
+        flatten_oid = flatten_oid_by_sym.get(sym_root)
+        broker_exit = (
+            fill_price_by_oid.get(flatten_oid) if flatten_oid else None
+        )
+        if broker_exit is not None:
+            exit_price = broker_exit
+            exit_source = "broker_fill"
+        elif exit_price_proxy is not None:
+            exit_price = exit_price_proxy
+            exit_source = "last_close_proxy"
+        else:
+            exit_price = entry_price
+            exit_source = "entry_fallback"
         if direction == "long":
             pnl = (exit_price - entry_price) * contracts * config.MNQ_POINT_VALUE
         else:
@@ -3708,11 +3811,14 @@ async def _flatten_all(
             "stop_points": stop_points,
             "contracts": contracts,
             "reason": f"flatten:{reason}",
-            "exit_price_is_proxy": exit_price_proxy is not None and exit_price_proxy != entry_price,
+            "exit_price_is_proxy": exit_source != "broker_fill",
+            "exit_price_source": exit_source,
         }
         logger.info(
-            "TRADE CLOSED (flatten): %s %s %dx @ %.2f | P&L: $%.2f | reason=flatten:%s",
-            direction, signal.symbol, contracts, exit_price, pnl, reason,
+            "TRADE CLOSED (flatten): %s %s %dx @ %.2f [%s] | P&L: $%.2f | "
+            "reason=flatten:%s",
+            direction, signal.symbol, contracts, exit_price, exit_source,
+            pnl, reason,
         )
         try:
             await _on_trade_closed(components, state, trade_dict)
