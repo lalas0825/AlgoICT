@@ -392,6 +392,72 @@ def _update_session_trackers(state, components, ts, bar_high, bar_low) -> None:
     state.active_sessions = now_active
 
 
+def _replay_warmup_session_transitions(
+    components, state,
+) -> None:
+    """
+    2026-04-28 fix — replay warmup bars through `_update_session_trackers`
+    so any session transition that happened in the warmup window emits
+    its LH/LL/AH/AL/NAH/NAL/NPH/NPL retroactively.
+
+    Why: at fresh boot the session tracker has empty `active_sessions`.
+    The first live bar processed is whatever WS delivers next. If a
+    session ended DURING the warmup window (e.g. London ended at 04:00
+    CT and the bot rebooted at 04:00:39 CT), the active→inactive
+    transition is never detected — `now_active = empty - empty = empty`
+    and `finalize()` never fires. Result: LL never gets emitted, NY AM
+    runs without London liquidity targets.
+
+    This function replays every warmup bar in chronological order
+    through `_update_session_trackers`. It MUST be called exactly once
+    after warmup completes and BEFORE the first live bar is processed,
+    otherwise it would re-emit session levels for bars that already
+    triggered transitions live.
+
+    Caught 2026-04-28: bot relaunched at 04:00:39 CT (= London end ±1m),
+    so London H/L never emitted, NY AM had only PDH/PDL/PWH/PWL/NAH/NAL
+    instead of the full set.
+    """
+    if state.session_trackers is None:
+        return
+    if state.bars_1min is None or state.bars_1min.empty:
+        return
+    ranges = config.cfg("SESSION_RANGES", {}) or {}
+    if not ranges:
+        return
+
+    df = state.bars_1min
+    n = len(df)
+    pre_count = sum(
+        1 for lvl in (components.detectors.get("tracked_levels") or [])
+        if getattr(lvl, "type", "") in
+           {"AH", "AL", "LH", "LL", "NAH", "NAL", "NPH", "NPL"}
+    )
+    logger.info(
+        "Session-tracker warmup replay starting: %d bars in window", n,
+    )
+    for i in range(n):
+        try:
+            ts = df.index[i]
+            row = df.iloc[i]
+            _update_session_trackers(
+                state, components, ts,
+                float(row["high"]), float(row["low"]),
+            )
+        except Exception as exc:
+            logger.debug("session replay bar %d failed: %s", i, exc)
+    post_count = sum(
+        1 for lvl in (components.detectors.get("tracked_levels") or [])
+        if getattr(lvl, "type", "") in
+           {"AH", "AL", "LH", "LL", "NAH", "NAL", "NPH", "NPL"}
+    )
+    logger.info(
+        "Session-tracker warmup replay done: session levels %d -> %d "
+        "(added %d from warmup transitions)",
+        pre_count, post_count, post_count - pre_count,
+    )
+
+
 def _fresh_kz_stats() -> dict:
     """Initialize a fresh KZ-session stats dict (for use on KZ enter / reset)."""
     return {
@@ -4250,6 +4316,14 @@ async def run(
             "Warm-up complete: %d bars loaded (>= %d required) — trading enabled",
             seeded, MIN_WARMUP_BARS_FOR_TRADING,
         )
+        # 2026-04-28 fix — replay warmup bars through session_tracker so
+        # any session transition that ended during the warmup window
+        # (e.g. London just closed at 04:00 CT before relaunch) gets its
+        # LH/LL/etc emitted retroactively. One-shot, before live loop.
+        try:
+            _replay_warmup_session_transitions(components, state)
+        except Exception as exc:
+            logger.warning("Session-tracker warmup replay failed: %s", exc)
     elif seeded == 0:
         logger.warning(
             "Running with cold detectors — first %d WS bars will be "
