@@ -286,9 +286,17 @@ if (-not (Test-Path $healthFile)) {
             # version was hardcoded for EST (UTC-5) and would false-fire
             # during EDT (UTC-4) period, March-November — most of the year.
             #
-            # CME MNQ futures trade Sun 17:00 ET → Fri 16:00 ET, with a
-            # daily 16:00-17:00 ET break. Outside those hours, no bars
-            # are expected.
+            # CME E-mini/Micro index futures (MNQ, NQ, ES, etc):
+            #   Sunday 6:00 PM ET → Friday 5:00 PM ET (continuous)
+            #   Daily maintenance break: 5:00-6:00 PM ET (= 17:00-18:00 ET)
+            #
+            # 2026-04-28 fix — previous version had the break window wrong
+            # (16-17 ET) and Sun/Fri boundaries 1h early. False-fired
+            # ws_feed_stale alerts when bot booted during the actual
+            # break window (today: bot relaunched at 17:17 ET, last bar
+            # was 16:59 ET = market entering 17:00 ET break, monitor
+            # alerted at 17:35 ET because etHour=17 didn't match the
+            # buggy check `etHour=16`). Corrected per CME public spec.
             $cmeClosed = $false
             try {
                 $etTz = [System.TimeZoneInfo]::FindSystemTimeZoneById("Eastern Standard Time")
@@ -297,12 +305,12 @@ if (-not (Test-Path $healthFile)) {
                 $etHour = $etNow.Hour
                 if ($etDow -eq 'Saturday') {
                     $cmeClosed = $true
-                } elseif ($etDow -eq 'Friday' -and $etHour -ge 16) {
-                    $cmeClosed = $true       # Fri after 4 PM ET
-                } elseif ($etDow -eq 'Sunday' -and $etHour -lt 17) {
-                    $cmeClosed = $true       # Sun before 5 PM ET
-                } elseif ($etHour -eq 16) {
-                    $cmeClosed = $true       # daily 4-5 PM ET break
+                } elseif ($etDow -eq 'Friday' -and $etHour -ge 17) {
+                    $cmeClosed = $true       # Fri after 5 PM ET (week close)
+                } elseif ($etDow -eq 'Sunday' -and $etHour -lt 18) {
+                    $cmeClosed = $true       # Sun before 6 PM ET (week open)
+                } elseif ($etHour -eq 17) {
+                    $cmeClosed = $true       # daily 5-6 PM ET maintenance break
                 }
             } catch {
                 # TimeZone DB missing on minimal Windows builds — fall back
