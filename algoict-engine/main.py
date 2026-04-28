@@ -3275,15 +3275,25 @@ async def _on_new_bar(
                     state._partials_be_warned = True  # type: ignore[attr-defined]
             # mode == "fixed": nothing to do — bracket runs to SL/TP
 
-        # ── 4c. Position-status polling (User hub fallback) ───────────
-        # When the User hub is unavailable (paper-account SubscribeAccounts
-        # failure after 3 retries), we poll get_positions() every bar to
-        # detect fills. This is less latent than the 5-min reconcile and
-        # routes inferred closes through _on_broker_fill so risk accounting,
-        # Supabase, Telegram, and post-mortem all fire correctly.
-        if (state.open_positions
-                and components.broker is not None
-                and not getattr(components.broker, "user_hub_alive", True)):
+        # ── 4c. Position-status polling (defense-in-depth) ────────────
+        # 2026-04-28 audit fix — was previously gated on
+        # `not user_hub_alive`. But today's NY PM trade revealed a worse
+        # failure mode: User Hub was "alive" (connected, subscribed) BUT
+        # the event-payload parser had a bug (nested 'data' envelope not
+        # unwrapped) so every fill event was silently dropped. With the
+        # poll gated on user_hub_alive=False, the fallback never ran,
+        # and the bot stayed blind to the fill for 6 minutes until hard
+        # close flattened. Result: no Trade Opened alert, no trail stop
+        # movement, no ratchet armed at +2.26R peak, $100 left on table.
+        #
+        # New policy: ALWAYS poll. The poll-path is idempotent — it
+        # checks `entry_fill_confirmed` before sending alerts, so if
+        # User Hub already fired the fill notification, the poll is a
+        # no-op. If User Hub is asleep / broken / silently dropping
+        # events, the poll catches it within 1 bar instead of waiting
+        # for the next 5-min reconciler tick (or never, if the fill
+        # never propagates to position state). Belt + suspenders.
+        if state.open_positions and components.broker is not None:
             await _poll_position_status(components, state)
 
         # ── 4d. Limit order TTL — cancel unfilled entries ─────────────
