@@ -3762,6 +3762,23 @@ def _reset_for_new_day(components: Components, state: EngineState) -> None:
             df_daily = tf_mgr.aggregate(bars, "D")
             df_weekly = tf_mgr.aggregate(bars, "W")
             as_of = bars.index[-1]
+            # 2026-04-28 fix — preserve session levels across the daily reset.
+            # Pre-fix, build_key_levels returns only PDH/PDL/PWH/PWL, then
+            # we'd OVERWRITE tracked_levels and lose every AH/AL/LH/LL/NAH/
+            # NAL/NPH/NPL emitted in the prior 24h (Asian session closes at
+            # 23:00 CT, daily reset fires at 00:00 CT — so AH/AL emitted
+            # ~1h ago get wiped before London's 01:00 CT start). Caught on
+            # 2026-04-28 London: bot emitted AH@27,467.75/AL@27,386.25 at
+            # 23:01 CT, reset wiped them at 00:00 CT, London ran without
+            # them, last bar was 35pts below AL with no setup. Fix: capture
+            # unswept session levels BEFORE re-seed, then re-attach after.
+            from detectors.liquidity import SESSION_LEVEL_TYPES
+            old_levels = components.detectors.get("tracked_levels") or []
+            preserved_session_levels = [
+                lvl for lvl in old_levels
+                if getattr(lvl, "type", "") in SESSION_LEVEL_TYPES
+                and not getattr(lvl, "swept", False)
+            ]
             levels = components.detectors["liquidity"].build_key_levels(
                 df_daily=df_daily, df_weekly=df_weekly, as_of_ts=as_of,
             )
@@ -3780,10 +3797,31 @@ def _reset_for_new_day(components: Components, state: EngineState) -> None:
                     )
             except Exception as exc:
                 logger.warning("tracked_levels backfill swept flags failed: %s", exc)
+            # Re-attach preserved session levels (also run them through the
+            # sweep backfill so any session level swept during warmup is
+            # correctly marked).
+            if preserved_session_levels:
+                try:
+                    df_5min = tf_mgr.aggregate(bars, "5min")
+                    if df_5min is not None and not df_5min.empty:
+                        components.detectors["liquidity"].backfill_swept_flags(
+                            preserved_session_levels, df_5min,
+                        )
+                except Exception:
+                    pass
+                # Drop any session level whose swept flag the backfill
+                # just stamped — the daily reset is also when overnight
+                # sweeps get retroactively recognized.
+                preserved_session_levels = [
+                    lvl for lvl in preserved_session_levels
+                    if not getattr(lvl, "swept", False)
+                ]
+                levels.extend(preserved_session_levels)
             components.detectors["tracked_levels"] = levels
             logger.info(
-                "tracked_levels seeded on daily reset (as_of=%s): %d levels (%s)",
-                as_of, len(levels),
+                "tracked_levels seeded on daily reset (as_of=%s): %d levels "
+                "(preserved %d session levels) (%s)",
+                as_of, len(levels), len(preserved_session_levels),
                 ", ".join(
                     f"{lvl.type}@{lvl.price:.2f}{'/SWEPT' if lvl.swept else ''}"
                     for lvl in levels

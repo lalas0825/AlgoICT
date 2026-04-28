@@ -85,6 +85,15 @@ SSL_LEVEL_TYPES: frozenset = frozenset({
     "SSL", "PDL", "PWL", "AL", "LL", "NAL", "NPL", "equal_lows",
 })
 
+# Session-derived level types (emitted by SessionRangeTracker.finalize at
+# the close of Asian/London/NY AM/NY PM). These are intraday liquidity pools
+# that must SURVIVE the daily reset — without persistence they get wiped at
+# midnight CT and the next morning's KZ sees no Asian liquidity targets,
+# defeating the v13 session-tracking feature entirely (caught 2026-04-28).
+SESSION_LEVEL_TYPES: frozenset = frozenset({
+    "AH", "AL", "LH", "LL", "NAH", "NAL", "NPH", "NPL",
+})
+
 
 @dataclass
 class SessionRangeTracker:
