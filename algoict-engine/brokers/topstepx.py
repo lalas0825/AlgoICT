@@ -886,12 +886,37 @@ class TopstepXClient:
         disconnected = asyncio.Event()
 
         def _extract_payload(args: list) -> Optional[dict]:
-            """SignalR shape varies — sometimes [accountId, payload], sometimes [payload]."""
+            """
+            SignalR shape varies. Observed shapes (2026-04-28 audit):
+              [{'action': N, 'data': {...real payload...}}]   <- ProjectX wraps
+              [accountId, {'action': N, 'data': {...}}]
+              [{...real payload...}]
+              [accountId, {...real payload...}]
+
+            Pre-fix the parser returned the outer wrapper and tried
+            `.get('orderId')` on it (which has only 'action' + 'data') —
+            so every fill event today logged "missing orderId/price"
+            even though the data was right there nested. Cost: $100 of
+            profit on the NY PM LONG that hit 2.26R (ratchet never armed
+            because filled_price never got stamped).
+
+            Now: if the picked dict has the {'action', 'data'} envelope,
+            unwrap to the inner data dict so callers see the real fields.
+            """
+            picked: Optional[dict] = None
             if len(args) >= 2 and isinstance(args[1], dict):
-                return args[1]
-            if len(args) >= 1 and isinstance(args[0], dict):
-                return args[0]
-            return None
+                picked = args[1]
+            elif len(args) >= 1 and isinstance(args[0], dict):
+                picked = args[0]
+            if picked is None:
+                return None
+            inner = picked.get("data")
+            if isinstance(inner, dict) and (
+                "orderId" in inner or "id" in inner or "price" in inner
+                or "size" in inner or "filledPrice" in inner
+            ):
+                return inner
+            return picked
 
         def _on_order_update(args: list) -> None:
             """Runs in signalrcore's thread — bridge fills to asyncio loop."""
