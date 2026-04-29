@@ -383,6 +383,60 @@ Then add a new #NNN entry to this file with symptom / root cause / fix / verify.
 
 ---
 
+## Phase 6 — 2026-04-29 (Connection resilience)
+
+### #032 — WS market hub silent death (London KZ blackout)
+- **Severity**: 🔴 Critical
+- **Tags**: `ws` · `signalr` · `connection-loss` · `silent-failure`
+- **Symptom**: Bot ran the entire London KZ (01:00-04:00 CT) blind on 2026-04-29. Last bar received at 00:13 CT; bot still "alive" per heartbeat (User Hub on a separate connection that detected and reconnected). Asian-session AH@27,294 swept at 23:10 CT (DOWN-wick, bullish setup) — bot saw the sweep but then went silent. Daily P&L $0, 0 trades, 0 evaluations during London.
+- **Root cause**: SignalR market hub TCP connection forcibly closed by remote at 01:12 ET (`WinError 10054 ConnectionResetError`). The third-party `signalrcore` library logged the error internally but **did NOT fire our `_on_close` / `_on_error` callbacks**. The `disconnected` asyncio.Event never set, the listener loop kept spinning waiting for bars that would never arrive, and `_ws_listener_loop`'s reconnect logic never triggered (it depends on a return-from-listener or exception, neither of which happened).
+- **Repro**: hard to script — depends on signalrcore swallowing the underlying ConnectionResetError. Observational evidence: search engine.log for `Receive error: [WinError 10054]` followed by NO subsequent `SignalR: market hub disconnected` line.
+- **Fix**: `brokers/topstepx.py:_signalr_connect_and_listen` — added independent stale-bar watchdog inside the inner while loop. Tracks `last_emit_ts` (atomic float in a list, no lock — see #033). If no bars emit for `WS_BAR_STALE_THRESHOLD_S` (default 600s = 10 min) AND the CME is not in a known closed window (`_cme_market_closed_now()` mirrors monitor.ps1 schedule), forces `disconnected.set()` to break the inner loop. Outer `_ws_listener_loop` then runs its retry/backoff and reconnects.
+- **Verify**: `grep -n "WATCHDOG — no bars" algoict-engine/brokers/topstepx.py`
+- **Commit**: `d2b69f6` (watchdog) + `55fc604` (deadlock fix, see #033)
+
+### #033 — WS watchdog deadlock — bot zombie 30+ min
+- **Severity**: 🔴 Critical (self-inflicted while fixing #032)
+- **Tags**: `deadlock` · `threading-lock` · `non-reentrant` · `asyncio-freeze`
+- **Symptom**: First relaunch with the #032 watchdog froze 30+ min after boot. Process alive in tasklist, `.health.json` mtime stuck at first-bar timestamp, engine.log last entry was a `WS: ... bar [...]` line followed by complete silence. External monitor fired `bot_dead` alert at 60s threshold, then again at 15min throttle.
+- **Root cause**: My #032 watchdog patch added `with bar_lock: last_emit_ts[0] = time.time()` inside `_emit_bar`. But `_emit_bar` is called from inside the bar-flush path which already holds `bar_lock`:
+
+  ```python
+  with bar_lock:                            # ← outer lock held
+      for cid, s in list(bar_state.items()):
+          if s["count"] > 0 and s["minute_ts"] < current_minute:
+              old = _flush_bar(cid)
+              if old:
+                  _emit_bar(old)             # ← tried bar_lock again
+                                             #   threading.Lock is NOT
+                                             #   reentrant → freeze
+  ```
+
+  `threading.Lock` is non-reentrant. Same thread acquiring it twice blocks forever. Asyncio loop trapped inside `_emit_bar` → no more bar processing, no health.json updates, no strategy evals.
+- **Repro**: launch bot with the d2b69f6 version of `_emit_bar`. As soon as the bar-flush path emits one bar, the loop deadlocks. Bot is alive in tasklist but does nothing.
+- **Fix**:
+  1. Drop `with bar_lock` from `_emit_bar` — `last_emit_ts[0] = time.time()` is a single-attribute write to a list element, atomic under CPython's GIL.
+  2. (Defensive #034) Convert `bar_lock` from `threading.Lock` to `threading.RLock` so any future nested acquisition by the same thread doesn't freeze. `RLock` allows reentrant acquisition with no perf penalty in uncontended path.
+- **Verify**: `grep -n "Atomic store — DO NOT wrap in" algoict-engine/brokers/topstepx.py` and `grep -n "threading.RLock" algoict-engine/brokers/topstepx.py`
+- **Commit**: `55fc604` (lock removed) + (RLock conversion in same commit family)
+
+### #034 — DEFENSIVE: asyncio liveness watchdog (separate thread)
+- **Severity**: 🟢 Hardening (no incident yet — preventive)
+- **Tags**: `defensive` · `asyncio-freeze` · `watchdog` · `self-recovery`
+- **Why**: #033 proved that an asyncio deadlock leaves the process technically alive but completely non-functional. The bot can't detect its own asyncio freeze (the very loop that would detect it is the one that's frozen). External monitor catches it eventually but only after 60s+, and a paused or disabled monitor would miss it entirely.
+- **Mechanism**: Independent `threading.Thread` (daemon, pure threading no asyncio) checks an `_ASYNCIO_HEARTBEAT_TS` shared float every 30s. An asyncio task updates the timestamp every 5s. If the timestamp hasn't advanced in 90s → `os._exit(2)` — bypasses Python cleanup (which may also hang if asyncio is hung) and lets the OS reap the process. External monitor + Telegram alert fires within 60s. User (or task scheduler) relaunches with fresh state.
+- **Trade-off**: 90s window between freeze and self-kill is intentional — short enough that one missed bar window is rare, long enough to absorb legitimate slow ops (e.g. Supabase backpressure during warmup batch upserts).
+- **Verify**: `grep -n "Asyncio liveness watchdog started" algoict-engine/main.py` and check for `[INFO] Asyncio liveness watchdog started (threshold=90s` in engine.log on next launch.
+- **Commit**: same family as #033 (defensive companion)
+
+### #035 — DEFENSIVE: bar_lock RLock conversion
+- **Severity**: 🟢 Hardening
+- **Tags**: `defensive` · `lock` · `reentrancy`
+- **Why**: After #033 burned us with a non-reentrant `threading.Lock` deadlock, any future patch that adds a `with bar_lock:` inside a function called from the lock-held flush path would hit the same trap. RLock is reentrant — same-thread nested acquisition just bumps a counter, no deadlock. Same throughput as Lock for single-acquisition (the common case). Pure upside.
+- **Verify**: `grep -n "bar_lock = threading.RLock" algoict-engine/brokers/topstepx.py`
+
+---
+
 ## Summary
 
 | Phase | Date | Bugs fixed | Critical |
@@ -392,7 +446,8 @@ Then add a new #NNN entry to this file with symptom / root cause / fix / verify.
 | 3 | 2026-04-24 AM | 9 (#009-017) | 5 |
 | 4 | 2026-04-24 PM | 14 (#018-031) | 7 |
 | 5 | 2026-04-24 night | 5 hardening systems | — |
+| 6 | 2026-04-29 | 2 incidents (#032-033) + 2 hardening (#034-035) | 2 |
 
-**Total: 31 numbered incidents + 5 defensive systems + 2 earlier foundational (counted separately from the 33-total narrative).**
+**Total: 33 numbered incidents + 7 defensive systems + 2 earlier foundational.**
 
 The gap between "counted 31 here" and "33 in the commit messages" is because #002-#004 were batched as wiring fixes and some minor issues (like the `.engine.lock` fix from 2026-04-17) predate this log. All listed above were verified closed as of commit `4293eee`.

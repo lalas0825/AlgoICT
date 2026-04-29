@@ -1350,7 +1350,13 @@ class TopstepXClient:
         # ── Bar aggregation state (per-contract) ─────────────────────
         # Keys: contractId → dict with OHLCV accumulators.
         bar_state: dict[str, dict] = {}
-        bar_lock = threading.Lock()
+        # 2026-04-29 hardening — RLock instead of Lock. The flush path
+        # acquires bar_lock and then calls _emit_bar; if any future code
+        # adds a `with bar_lock` inside _emit_bar (or any of its callees),
+        # a non-reentrant Lock would freeze the asyncio loop. RLock allows
+        # safe nested acquisition by the same thread. Same TPS as Lock for
+        # uncontended cases — defensive belt suspender.
+        bar_lock = threading.RLock()
 
         def _flush_bar(cid: str) -> Optional[dict]:
             """Return a completed bar dict and reset the accumulator.

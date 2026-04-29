@@ -4424,6 +4424,71 @@ async def run(
     except Exception as exc:
         logger.warning("HealthWriter start failed: %s", exc)
 
+    # ── 3d. Asyncio liveness watchdog (independent thread) ──────────────
+    # 2026-04-29 hardening — caught a real deadlock today: WS watchdog
+    # took bar_lock inside _emit_bar while the flush path already held
+    # bar_lock, freezing the asyncio loop for 30+ minutes. Process was
+    # alive in tasklist, .health.json mtime stuck, no error visible.
+    #
+    # This watchdog runs in a SEPARATE THREAD (pure threading, not
+    # asyncio) so it can detect when the asyncio loop itself freezes.
+    # Mechanism:
+    #   - Asyncio task `_asyncio_heartbeat_writer()` updates a shared
+    #     timestamp every 5s.
+    #   - Watcher thread reads the timestamp every 30s.
+    #   - If the timestamp hasn't advanced for 90s → asyncio frozen →
+    #     the process is non-recoverable from inside, so we
+    #     `os._exit(2)` immediately.
+    #   - External monitor.ps1 detects bot_dead within 60s and alerts
+    #     via Telegram. User (or task scheduler) relaunches.
+    #
+    # _exit(2) bypasses Python's normal cleanup (no atexit, no buffered
+    # stderr flush) which is what we want — the loop is hung, so
+    # cleanup may also hang. Hard exit is the only safe way out.
+    try:
+        import os as _os_for_watchdog
+        import threading as _threading_for_watchdog
+        _ASYNCIO_HEARTBEAT_TS = [time.time()]
+
+        async def _asyncio_heartbeat_writer():
+            while True:
+                _ASYNCIO_HEARTBEAT_TS[0] = time.time()
+                await asyncio.sleep(5.0)
+
+        def _asyncio_freeze_detector():
+            FREEZE_THRESHOLD_S = 90.0
+            CHECK_INTERVAL_S = 30.0
+            while True:
+                time.sleep(CHECK_INTERVAL_S)
+                age = time.time() - _ASYNCIO_HEARTBEAT_TS[0]
+                if age > FREEZE_THRESHOLD_S:
+                    msg = (
+                        f"FATAL: asyncio loop frozen {age:.0f}s "
+                        f"(threshold {FREEZE_THRESHOLD_S:.0f}s) — "
+                        f"hard-killing process to recover. External "
+                        f"monitor will detect and alert.\n"
+                    )
+                    try:
+                        sys.stderr.write(msg)
+                        sys.stderr.flush()
+                    except Exception:
+                        pass
+                    _os_for_watchdog._exit(2)
+
+        asyncio.create_task(_asyncio_heartbeat_writer())
+        _watchdog_thread = _threading_for_watchdog.Thread(
+            target=_asyncio_freeze_detector,
+            name="asyncio-freeze-detector",
+            daemon=True,
+        )
+        _watchdog_thread.start()
+        logger.info(
+            "Asyncio liveness watchdog started "
+            "(threshold=90s, check_interval=30s)",
+        )
+    except Exception as exc:
+        logger.warning("Asyncio liveness watchdog failed to start: %s", exc)
+
     # ── 4. Warm-up: preload historical bars so detectors start primed ─
     seeded = await _warmup_historical_bars(components, state)
     if seeded >= MIN_WARMUP_BARS_FOR_TRADING:
