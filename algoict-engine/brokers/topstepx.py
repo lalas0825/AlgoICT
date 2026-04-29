@@ -32,6 +32,10 @@ import logging
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # py3.8 fallback
+    ZoneInfo = None  # type: ignore
 from typing import Any, Callable, Coroutine, Optional
 
 import threading
@@ -60,6 +64,43 @@ TOKEN_REFRESH_BUFFER_S = 120
 WS_RECONNECT_BASE_S = 1.0
 WS_RECONNECT_MAX_S = 60.0
 WS_MAX_RETRIES = 8
+
+# 2026-04-29: WS stale-bar watchdog. If the market hub stops emitting bars
+# while the market is supposed to be open, signalrcore sometimes swallows
+# the underlying TCP error without firing our on_close/on_error callbacks
+# (caught 2026-04-28 overnight: WinError 10054 internal-only, listener
+# loop spun forever waiting for `disconnected` event that never set).
+# This watchdog independently tracks last bar emission time and forces a
+# reconnect after WS_BAR_STALE_THRESHOLD_S of silence during open hours.
+WS_BAR_STALE_THRESHOLD_S = 600  # 10 minutes
+
+
+def _cme_market_closed_now() -> bool:
+    """
+    Return True if CME E-mini/Micro index futures (MNQ/NQ/ES) are in a
+    known closed window:
+      * Saturday (all day)
+      * Friday after 5:00 PM ET (week close)
+      * Sunday before 6:00 PM ET (week open)
+      * Daily 5:00-6:00 PM ET maintenance break
+    Uses ET timezone (DST-aware). Falls back to False on TZ DB failure.
+    """
+    try:
+        et = ZoneInfo("America/New_York")
+        now_et = datetime.now(et)
+        dow = now_et.weekday()  # 0=Mon ... 5=Sat ... 6=Sun
+        h = now_et.hour
+        if dow == 5:  # Saturday
+            return True
+        if dow == 4 and h >= 17:  # Friday after 5 PM ET
+            return True
+        if dow == 6 and h < 18:  # Sunday before 6 PM ET
+            return True
+        if h == 17:  # Daily 5-6 PM ET maintenance break
+            return True
+        return False
+    except Exception:
+        return False
 
 # Order sides (string aliases accepted by the public API)
 SIDE_BUY = "buy"
@@ -1336,6 +1377,11 @@ class TopstepXClient:
                 "volume": 0, "count": 0,
             }
 
+        # 2026-04-29 fix — track last bar emission for stale-feed watchdog.
+        # Mutable container so closures can mutate. Floats accessed under
+        # bar_lock for thread safety with the on_trade thread.
+        last_emit_ts = [time.time()]
+
         def _emit_bar(bar: dict) -> None:
             """Push a completed bar to all registered callbacks (thread-safe)."""
             logger.info(
@@ -1343,6 +1389,8 @@ class TopstepXClient:
                 bar["symbol"], bar["timestamp"],
                 bar["open"], bar["high"], bar["low"], bar["close"], bar["volume"],
             )
+            with bar_lock:
+                last_emit_ts[0] = time.time()
             for cb in self._bar_callbacks:
                 try:
                     loop.call_soon_threadsafe(cb, bar)
@@ -1461,6 +1509,45 @@ class TopstepXClient:
                             old = _flush_bar(cid)
                             if old:
                                 _emit_bar(old)
+
+                # 2026-04-29 fix — STALE-BAR WATCHDOG.
+                # On 2026-04-28 overnight the SignalR market hub got
+                # forcibly closed (WinError 10054) but signalrcore's
+                # internal error handler swallowed it without firing
+                # our `_on_close` / `_on_error` callbacks. Result: the
+                # `disconnected` event never set, this while loop kept
+                # spinning forever waiting for bars that would never
+                # arrive, and the bot ran blind through London KZ.
+                #
+                # Defense: independently track the last bar emission
+                # timestamp, and if no bars have flowed for
+                # WS_BAR_STALE_THRESHOLD_S (default 600s = 10 min) AND
+                # the CME is not in a known closed window, force the
+                # disconnected event ourselves so the outer reconnect
+                # loop can reconnect.
+                #
+                # During CME daily break (17:00-18:00 ET) and weekend
+                # closure no bars are expected, so we skip the check
+                # then. CME-closed detection mirrors monitor.ps1
+                # logic. Other slow periods (overnight Asian quiet)
+                # still produce ~1 bar/min from synthetic-emit above.
+                with bar_lock:
+                    age = now_ts - last_emit_ts[0]
+                if age > WS_BAR_STALE_THRESHOLD_S:
+                    if not _cme_market_closed_now():
+                        logger.error(
+                            "SignalR: WATCHDOG — no bars in %ds (threshold "
+                            "%ds), market open. Forcing reconnect.",
+                            int(age), WS_BAR_STALE_THRESHOLD_S,
+                        )
+                        disconnected.set()
+                        break
+                    else:
+                        # Stale but inside a known closed window — reset
+                        # the watchdog clock so we don't false-fire when
+                        # the market reopens.
+                        with bar_lock:
+                            last_emit_ts[0] = now_ts
         finally:
             try:
                 conn.stop()
