@@ -1378,8 +1378,10 @@ class TopstepXClient:
             }
 
         # 2026-04-29 fix — track last bar emission for stale-feed watchdog.
-        # Mutable container so closures can mutate. Floats accessed under
-        # bar_lock for thread safety with the on_trade thread.
+        # Mutable container so closures can mutate. Single-attribute writes
+        # to a list element are atomic in CPython under the GIL, so no lock
+        # is needed (and a lock here would DEADLOCK with the bar-flush path
+        # that calls _emit_bar from inside `with bar_lock`).
         last_emit_ts = [time.time()]
 
         def _emit_bar(bar: dict) -> None:
@@ -1389,8 +1391,11 @@ class TopstepXClient:
                 bar["symbol"], bar["timestamp"],
                 bar["open"], bar["high"], bar["low"], bar["close"], bar["volume"],
             )
-            with bar_lock:
-                last_emit_ts[0] = time.time()
+            # Atomic store — DO NOT wrap in `with bar_lock`. The flush path
+            # calls _emit_bar while already holding bar_lock; threading.Lock
+            # is non-reentrant, so a lock here freezes the asyncio loop
+            # (caught 2026-04-29 — bot zombie 30+ min, missed pre-NY AM).
+            last_emit_ts[0] = time.time()
             for cb in self._bar_callbacks:
                 try:
                     loop.call_soon_threadsafe(cb, bar)
@@ -1531,8 +1536,9 @@ class TopstepXClient:
                 # then. CME-closed detection mirrors monitor.ps1
                 # logic. Other slow periods (overnight Asian quiet)
                 # still produce ~1 bar/min from synthetic-emit above.
-                with bar_lock:
-                    age = now_ts - last_emit_ts[0]
+                # Atomic read — no lock needed. last_emit_ts[0] is a float
+                # whose single-store is atomic under the GIL.
+                age = now_ts - last_emit_ts[0]
                 if age > WS_BAR_STALE_THRESHOLD_S:
                     if not _cme_market_closed_now():
                         logger.error(
@@ -1546,8 +1552,7 @@ class TopstepXClient:
                         # Stale but inside a known closed window — reset
                         # the watchdog clock so we don't false-fire when
                         # the market reopens.
-                        with bar_lock:
-                            last_emit_ts[0] = now_ts
+                        last_emit_ts[0] = now_ts
         finally:
             try:
                 conn.stop()
