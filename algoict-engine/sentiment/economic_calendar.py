@@ -345,6 +345,85 @@ def get_event_risk(date: datetime.date) -> str:
     return risk
 
 
+def is_in_news_blackout(
+    ts: datetime.datetime,
+    before_min: int = 30,
+    after_min: int = 60,
+    min_risk: str = "high",
+) -> tuple[bool, Optional[EconomicEvent]]:
+    """
+    Return (in_blackout, triggering_event) for the given CT timestamp.
+
+    A blackout is active if `ts` falls within [-before_min, +after_min]
+    of any event on the same date whose risk level is `>= min_risk`.
+
+    Events without a `time_ct` field are skipped (we can't compute a
+    window without a release time).
+
+    Caught 2026-04-29: bot took 3 losers between 13:32-14:07 CT despite
+    SWC daily-mood warning about FOMC at 12:00 CT. With this gate +
+    config defaults (30 before / 60 after / 'high' min_risk) those
+    trades would have been blocked from 11:30 CT → 13:00 CT (FOMC at
+    12:00 CT in our calendar — but actual today FOMC was at 13:00 CT
+    so blackout would extend to 14:00 CT covering all 3 losers).
+
+    Parameters
+    ----------
+    ts : datetime — current bar timestamp (CT, tz-aware preferred)
+    before_min, after_min : window around the event in minutes
+    min_risk : 'medium' | 'high' | 'extreme' — minimum risk that triggers
+    """
+    if isinstance(ts, datetime.date) and not isinstance(ts, datetime.datetime):
+        # Only a date — can't compute an intra-day window
+        return (False, None)
+
+    date = ts.date() if hasattr(ts, "date") else ts
+    events = _CALENDAR.get(date, [])
+    if not events:
+        return (False, None)
+
+    min_risk_level = _RISK_ORDER.get(min_risk, _RISK_ORDER["high"])
+
+    # ts may be tz-aware; we compare via "minutes from midnight" to
+    # avoid tz arithmetic complications. The event's time_ct is in CT.
+    # Caller should pass `ts` already in CT — strategies use bar
+    # timestamps which are CT-localized.
+    try:
+        # Coerce to CT-localized minutes-since-midnight (naive-comparison-friendly)
+        if hasattr(ts, "tz_convert"):
+            # pandas Timestamp
+            ts_ct = ts.tz_convert("US/Central") if ts.tz is not None else ts
+        elif hasattr(ts, "astimezone") and ts.tzinfo is not None:
+            try:
+                from zoneinfo import ZoneInfo
+                ts_ct = ts.astimezone(ZoneInfo("America/Chicago"))
+            except Exception:
+                ts_ct = ts
+        else:
+            ts_ct = ts
+        ts_minutes = ts_ct.hour * 60 + ts_ct.minute
+    except Exception:
+        return (False, None)
+
+    for event in events:
+        if _RISK_ORDER.get(event.risk, 0) < min_risk_level:
+            continue
+        if not event.time_ct:
+            continue
+        try:
+            hh, mm = event.time_ct.split(":")
+            event_minutes = int(hh) * 60 + int(mm)
+        except Exception:
+            continue
+        delta = ts_minutes - event_minutes
+        # delta < 0 → ts is BEFORE event; check if within `before_min`
+        # delta > 0 → ts is AFTER event; check if within `after_min`
+        if -before_min <= delta <= after_min:
+            return (True, event)
+
+    return (False, None)
+
+
 def get_upcoming_events(
     from_date: datetime.date,
     days_ahead: int = 7,

@@ -149,6 +149,38 @@ MNQ_TICK_VALUE = 0.50         # USD per tick per contract (0.25 pts)
 MNQ_TICK_SIZE = 0.25          # minimum price increment (used for order rounding)
 KILL_SWITCH_LOSSES = 3        # 3 consecutive losses = done for the day
 KILL_SWITCH_AMOUNT = 750      # $750 max daily loss from kill switch
+
+# 2026-04-29 hardening — same-setup tighter kill-switch + cooldown.
+# Caught 2026-04-29 NY PM: bot took 3 SHORTs at IDENTICAL entry/stop
+# (27,199.25 / 27,212.75) within 35 min, all stopped out (-$331.50
+# total). The 3-consecutive-losses kill_switch eventually halted but
+# only AFTER the 3rd loss. These layered tighter guards stop earlier:
+#
+#   KILL_SWITCH_SAME_SETUP_LOSSES         — 2 losses at same price → halt
+#   KILL_SWITCH_SAME_SETUP_PRICE_TOL_PTS  — "same" tolerance window
+#   SB_SAME_SETUP_COOLDOWN_MIN            — strategy-side cooldown after
+#                                            a stopout at same FVG zone
+#   SB_SAME_SETUP_PRICE_TOL_PTS           — strategy "same" tolerance
+KILL_SWITCH_SAME_SETUP_LOSSES = 2
+KILL_SWITCH_SAME_SETUP_PRICE_TOL_PTS = 5.0
+SB_SAME_SETUP_COOLDOWN_MIN = 30
+SB_SAME_SETUP_PRICE_TOL_PTS = 5.0
+
+# 2026-04-29 hardening — fresh-sweep window. Caught 2026-04-29: NAH
+# swept at 10:10 CT, bot fired SHORTs 3+ hours later (13:32-14:07).
+# ICT canonical: post-sweep reversal happens within minutes, not hours.
+# After this many minutes the sweep is "consumed" / context shifted.
+SB_MAX_SWEEP_AGE_MINUTES = 60
+
+# 2026-04-29 hardening — news blackout. SWC daily mood explicitly
+# warned about FOMC at 12:00 CT today; bot took 3 trades AFTER FOMC
+# during the post-announcement whipsaw, all losers. New gate skips
+# trading around scheduled high-impact events.
+NEWS_BLACKOUT_MIN_BEFORE = 30   # block N min BEFORE event
+NEWS_BLACKOUT_MIN_AFTER = 60    # block N min AFTER event
+NEWS_BLACKOUT_MIN_RISK = "high" # 'high' or 'extreme' triggers blackout
+NEWS_BLACKOUT_ENABLED = True
+
 DAILY_PROFIT_CAP = 1500       # $1,500/day — stop trading after this
 HARD_CLOSE_HOUR = 15          # 3:00 PM CT — flatten everything
 HARD_CLOSE_MINUTE = 0

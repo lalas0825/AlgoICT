@@ -2048,13 +2048,28 @@ async def _on_trade_closed(
     )
     risk_status: dict = {}
     try:
+        # 2026-04-29 — pass entry_price so risk_manager can detect the
+        # same-setup-stopout pattern (2 losses at same FVG → halt).
+        entry_for_risk = trade.get("entry_price")
         risk_status = components.risk.record_trade(
             pnl,
             kill_zone=trade.get("kill_zone"),
             order_id=str(order_id),
+            entry_price=float(entry_for_risk) if entry_for_risk is not None else None,
         ) or {}
     except Exception as exc:
         logger.warning("risk.record_trade failed: %s", exc)
+
+    # 2026-04-29 — notify strategy of the closed trade so it can arm
+    # the same-setup cooldown (rejects future fires at the same FVG
+    # zone for SB_SAME_SETUP_COOLDOWN_MIN minutes after a stopout).
+    try:
+        for strat_attr in ("silver_bullet_strategy", "ny_am_strategy"):
+            strat = getattr(components, strat_attr, None)
+            if strat is not None and hasattr(strat, "notify_trade_closed"):
+                strat.notify_trade_closed(trade)
+    except Exception as exc:
+        logger.debug("notify_trade_closed dispatch failed: %s", exc)
 
     # Bug C6 dedup: risk_status["recorded"] is False on duplicate —
     # skip the rest of this handler so we don't double-Telegram or

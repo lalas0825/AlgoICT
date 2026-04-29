@@ -200,6 +200,7 @@ class TestOnBrokerFillStop:
             pytest.approx(expected_pnl, abs=0.01),
             kill_zone=mock.ANY,
             order_id=mock.ANY,
+            entry_price=mock.ANY,
         )
 
 
@@ -234,6 +235,7 @@ class TestOnBrokerFillTarget:
             pytest.approx(expected_pnl, abs=0.01),
             kill_zone=mock.ANY,
             order_id=mock.ANY,
+            entry_price=mock.ANY,
         )
 
     def test_target_fill_cancels_stop(self):
@@ -350,7 +352,7 @@ class TestOnTradeClosed:
         asyncio.run(_on_trade_closed(components, state, trade))
 
         components.risk.record_trade.assert_called_once_with(
-            500.0, kill_zone=mock.ANY, order_id=mock.ANY,
+            500.0, kill_zone=mock.ANY, order_id=mock.ANY, entry_price=mock.ANY
         )
 
     def test_telegram_send_trade_closed_win(self):
@@ -392,7 +394,7 @@ class TestOnTradeClosed:
         # Should not raise
         asyncio.run(_on_trade_closed(components, state, trade))
         components.risk.record_trade.assert_called_once_with(
-            100.0, kill_zone=mock.ANY, order_id=mock.ANY,
+            100.0, kill_zone=mock.ANY, order_id=mock.ANY, entry_price=mock.ANY
         )
 
     def test_no_crash_when_supabase_none(self):
@@ -401,7 +403,7 @@ class TestOnTradeClosed:
         trade = self._make_trade(pnl=200.0)
         asyncio.run(_on_trade_closed(components, state, trade))
         components.risk.record_trade.assert_called_once_with(
-            200.0, kill_zone=mock.ANY, order_id=mock.ANY,
+            200.0, kill_zone=mock.ANY, order_id=mock.ANY, entry_price=mock.ANY
         )
 
     def test_supabase_write_trade_called(self):

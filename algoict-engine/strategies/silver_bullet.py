@@ -242,6 +242,15 @@ class SilverBulletStrategy:
         # `is_near_miss=False` so verbose mode doesn't flood.
         self.last_rejection: Optional[dict] = None
 
+        # 2026-04-29 hardening — same-setup-stopout cooldown state.
+        # On a stop-out, record (entry_price, ts, kz). If a subsequent
+        # signal in the SAME kz tries to fire at an entry within
+        # SB_SAME_SETUP_PRICE_TOL_PTS within SB_SAME_SETUP_COOLDOWN_MIN
+        # of the loss → reject. ICT: a stopped-out FVG is invalidated.
+        self._last_stopped_entry_price: Optional[float] = None
+        self._last_stopped_ts = None
+        self._last_stopped_kz: str = ""
+
     def _set_rejection(
         self,
         ts,
@@ -324,6 +333,35 @@ class SilverBulletStrategy:
                 _ts_hm(ts),
             )
             return None
+
+        # ── 2026-04-29 NEWS BLACKOUT ──────────────────────────────────
+        # Block trading around scheduled high-impact events (FOMC, CPI,
+        # NFP). Caught 2026-04-29 NY PM: bot took 3 losers (-$331.50)
+        # in the post-FOMC whipsaw despite SWC mood explicitly warning.
+        if config.cfg("NEWS_BLACKOUT_ENABLED", True):
+            try:
+                from sentiment.economic_calendar import is_in_news_blackout
+                in_blk, blk_event = is_in_news_blackout(
+                    ts,
+                    before_min=config.cfg("NEWS_BLACKOUT_MIN_BEFORE", 30),
+                    after_min=config.cfg("NEWS_BLACKOUT_MIN_AFTER", 60),
+                    min_risk=config.cfg("NEWS_BLACKOUT_MIN_RISK", "high"),
+                )
+                if in_blk and blk_event is not None:
+                    logger.info(
+                        "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, "
+                        "reason=news_blackout (%s @%s, risk=%s)",
+                        _ts_hm(ts), blk_event.name, blk_event.time_ct, blk_event.risk,
+                    )
+                    self._set_rejection(
+                        ts, "news_blackout", active_zone, is_near_miss=False,
+                        event_name=blk_event.name,
+                        event_time=blk_event.time_ct,
+                        event_risk=blk_event.risk,
+                    )
+                    return None
+            except Exception as exc:
+                logger.debug("News blackout check failed: %s", exc)
 
         # Dynamic cancel check: last 10 minutes of the active window.
         kz_cfg = config.KILL_ZONES.get(active_zone, {})
@@ -449,6 +487,53 @@ class SilverBulletStrategy:
                 ),
             )
             return None
+
+        # ── 2026-04-29 FRESH-SWEEP WINDOW ──────────────────────────────
+        # ICT canonical: post-sweep reversal happens within minutes,
+        # not hours. After SB_MAX_SWEEP_AGE_MINUTES the sweep is
+        # "consumed" — context has shifted, the original liquidity
+        # grab is no longer the active narrative. Caught 2026-04-29:
+        # NAH swept at 10:10 CT, bot fired SHORTs 3+ hours later
+        # (13:32-14:07), all stopped out. Filter by `swept_at` age.
+        max_sweep_age_min = config.cfg("SB_MAX_SWEEP_AGE_MINUTES", 60)
+        if max_sweep_age_min and max_sweep_age_min > 0:
+            fresh_sweeps = []
+            for lvl in sweeps:
+                swept_at = getattr(lvl, "swept_at", None)
+                if swept_at is None:
+                    # Pre-2026-04-26 levels lack swept_at — keep them
+                    # for backward compat (tests, replay).
+                    fresh_sweeps.append(lvl)
+                    continue
+                try:
+                    age_s = (ts - swept_at).total_seconds()
+                    if age_s <= max_sweep_age_min * 60:
+                        fresh_sweeps.append(lvl)
+                except Exception:
+                    fresh_sweeps.append(lvl)
+            if not fresh_sweeps:
+                # Stash the freshest oldness for log clarity.
+                oldest = min(
+                    (
+                        (ts - getattr(lvl, "swept_at", ts)).total_seconds() / 60
+                        for lvl in sweeps
+                        if getattr(lvl, "swept_at", None) is not None
+                    ),
+                    default=999,
+                )
+                logger.info(
+                    "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, "
+                    "reason=stale_sweep (oldest %.0fmin > %dmin threshold)",
+                    _ts_hm(ts), oldest, max_sweep_age_min,
+                )
+                self._set_rejection(
+                    ts, "stale_sweep", active_zone, is_near_miss=True,
+                    fvg_direction=bias_dir,
+                    sweep_age_min=round(oldest, 1),
+                    threshold_min=max_sweep_age_min,
+                )
+                return None
+            sweeps = fresh_sweeps
         sweep = sweeps[-1]
 
         # ── 4. 5-min structure in FVG direction ────────────────────────
@@ -576,6 +661,43 @@ class SilverBulletStrategy:
                 _ts_hm(ts),
             )
             return None
+
+        # ── 2026-04-29 SAME-SETUP STOPOUT COOLDOWN ─────────────────────
+        # If the last loss in THIS kz was at a similar entry price within
+        # the cooldown window, skip — that FVG just stopped us out and is
+        # invalidated. ICT: a stopped-out FVG is broken structure, not a
+        # second-chance setup. Caught 2026-04-29 NY PM: trades #2 and #3
+        # had IDENTICAL entry/stop (27,199.25 / 27,212.75), 13min apart,
+        # both stopped out for -$108 each.
+        if (
+            self._last_stopped_entry_price is not None
+            and self._last_stopped_kz == active_zone
+            and self._last_stopped_ts is not None
+        ):
+            try:
+                cooldown_min = config.cfg("SB_SAME_SETUP_COOLDOWN_MIN", 30)
+                price_tol = config.cfg("SB_SAME_SETUP_PRICE_TOL_PTS", 5.0)
+                age_s = (ts - self._last_stopped_ts).total_seconds()
+                price_diff = abs(entry_price - self._last_stopped_entry_price)
+                if age_s <= cooldown_min * 60 and price_diff <= price_tol:
+                    logger.info(
+                        "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, "
+                        "reason=same_setup_cooldown (entry %.2f within %.1fpts of "
+                        "last stopout %.2f, %.0fmin ago)",
+                        _ts_hm(ts), entry_price, price_tol,
+                        self._last_stopped_entry_price, age_s / 60,
+                    )
+                    self._set_rejection(
+                        ts, "same_setup_cooldown", active_zone, is_near_miss=True,
+                        attempted_entry=entry_price,
+                        last_stopped_entry=self._last_stopped_entry_price,
+                        price_diff_pts=round(price_diff, 2),
+                        cooldown_min=cooldown_min,
+                        age_min=round(age_s / 60, 1),
+                    )
+                    return None
+            except Exception as exc:
+                logger.debug("Same-setup cooldown check failed: %s", exc)
 
         # Min-stop gate (disabled by default in v3; MIN_STOP_PTS=0).
         # The v2 absolute 8pt floor was price-dependent and over-filtered
@@ -744,6 +866,41 @@ class SilverBulletStrategy:
         if zone in self._trades_by_zone:
             self._trades_by_zone[zone] = self._trades_by_zone[zone] + 1
         self.trades_today += 1
+
+    def notify_trade_closed(self, trade: dict) -> None:
+        """
+        2026-04-29 — record last stopout for the same-setup cooldown gate.
+
+        Called from main._on_trade_closed after broker confirms the
+        trade closed. We track only LOSING trades here — a profitable
+        setup is fine to re-attempt; a stopped-out setup is invalidated
+        per ICT (broken FVG / consumed liquidity).
+        """
+        try:
+            pnl = float(trade.get("pnl") or 0)
+            if pnl >= 0:
+                # Winner / scratch — don't arm the cooldown
+                return
+            self._last_stopped_entry_price = float(
+                trade.get("entry_price") or 0
+            ) or None
+            # exit_time is a string; the strategy compares against
+            # incoming bar timestamps (pd.Timestamp). Convert.
+            try:
+                import pandas as _pd
+                self._last_stopped_ts = _pd.Timestamp(trade.get("exit_time"))
+            except Exception:
+                self._last_stopped_ts = None
+            self._last_stopped_kz = str(trade.get("kill_zone") or "")
+            logger.info(
+                "silver_bullet: same-setup cooldown ARMED — last stopout "
+                "@ %.2f in %s at %s",
+                self._last_stopped_entry_price or 0.0,
+                self._last_stopped_kz or "?",
+                self._last_stopped_ts,
+            )
+        except Exception as exc:
+            logger.debug("notify_trade_closed failed: %s", exc)
 
     def reset_daily(self) -> None:
         """Reset trade counters — call at session start."""

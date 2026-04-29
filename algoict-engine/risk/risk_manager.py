@@ -21,6 +21,7 @@ Override priority:
 
 import logging
 from datetime import datetime
+from typing import Optional
 
 import sys
 from pathlib import Path
@@ -74,6 +75,16 @@ class RiskManager:
         # Hard stop flags
         self.kill_switch_active: bool = False
         self.profit_cap_active: bool = False
+
+        # 2026-04-29 — same-setup-stopout tighter kill switch.
+        # Tracks last loss's entry price + kz so we can detect the
+        # "same FVG re-entered after stopout" pattern. After
+        # KILL_SWITCH_SAME_SETUP_LOSSES (default 2) at the same price
+        # tolerance, halt the kz immediately rather than waiting for
+        # the 3rd consecutive loss.
+        self._last_loss_entry_price: Optional[float] = None
+        self._last_loss_kz: str = ""
+        self._same_setup_loss_count: int = 0
 
         # Soft override state (set by SWC / VPIN modules)
         self._min_confluence_adj: int = 0    # +N added to min confluence
@@ -262,6 +273,7 @@ class RiskManager:
         pnl: float,
         kill_zone: str = None,
         order_id: str = None,
+        entry_price: float = None,
     ) -> dict:
         """
         Record a completed trade P&L and update all risk counters.
@@ -338,8 +350,28 @@ class RiskManager:
                 self._kz_losing_trades[kill_zone] = (
                     self._kz_losing_trades.get(kill_zone, 0) + 1
                 )
+            # 2026-04-29 — same-setup-stopout streak tracking
+            tol = float(getattr(config, "KILL_SWITCH_SAME_SETUP_PRICE_TOL_PTS", 5.0))
+            if (
+                entry_price is not None
+                and self._last_loss_entry_price is not None
+                and self._last_loss_kz == (kill_zone or "")
+                and abs(float(entry_price) - self._last_loss_entry_price) <= tol
+            ):
+                self._same_setup_loss_count += 1
+            else:
+                self._same_setup_loss_count = 1
+            self._last_loss_entry_price = (
+                float(entry_price) if entry_price is not None else None
+            )
+            self._last_loss_kz = kill_zone or ""
         else:
             self.consecutive_losses = 0
+            # Profitable trade — clear the same-setup streak (winning
+            # at the same level proves the setup wasn't broken).
+            self._same_setup_loss_count = 0
+            self._last_loss_entry_price = None
+            self._last_loss_kz = ""
 
         kill_reason: str | None = None
 
@@ -360,6 +392,33 @@ class RiskManager:
             logger.warning(
                 "KILL SWITCH: %d consecutive losses (daily_pnl=%.2f)",
                 self.consecutive_losses, self.daily_pnl,
+            )
+
+        # ── 2026-04-29 — Kill switch: SAME-SETUP losses (tighter) ──────
+        # Trigger earlier than the 3-consecutive count when the SAME
+        # FVG zone has stopped us out twice. Caught NY PM 2026-04-29:
+        # trades #2 + #3 had IDENTICAL entry/stop, both stopped out for
+        # -$108 each. The 3-loss threshold caught it on trade #4 (-$115
+        # extra). With this 2-same-setup gate, trade #4 would have been
+        # blocked. Suppressed when the ladder is enabled (same rationale
+        # as the 3-loss kill).
+        same_setup_thresh = int(getattr(
+            config, "KILL_SWITCH_SAME_SETUP_LOSSES", 2,
+        ))
+        if (
+            not self._ladder_enabled
+            and same_setup_thresh > 0
+            and self._same_setup_loss_count >= same_setup_thresh
+        ):
+            if not self.kill_switch_active:
+                kill_reason = "same_setup_losses"
+            self.kill_switch_active = True
+            logger.warning(
+                "KILL SWITCH: %d same-setup losses @ ~%.2f in %s (tol=%.1fpts)",
+                self._same_setup_loss_count,
+                self._last_loss_entry_price or 0,
+                self._last_loss_kz or "?",
+                float(getattr(config, "KILL_SWITCH_SAME_SETUP_PRICE_TOL_PTS", 5.0)),
             )
 
         # ── Kill switch: daily loss exceeds $750 ────────────────────────
