@@ -585,6 +585,91 @@ class SilverBulletStrategy:
             return None
         last_struct = aligned[-1]
 
+        # ── 2026-04-29 FIX #5 — SMART STRUCTURE VALIDATOR ──────────────
+        # Two gates that close the "stale bear MSS used during fresh bull
+        # context" hole that caused 3 SHORT losers on 2026-04-29 NY PM.
+        #
+        # Gate A — last_struct must be RECENT (max age):
+        #   Default 60min. ICT canonical: structure shift should be the
+        #   catalyst for the FVG forming, so they should be tightly
+        #   coupled in time. An MSS from 2 hours ago is no longer the
+        #   active narrative.
+        #
+        # Gate B — count opposite events in recent window:
+        #   Default 2+ opposite events in last 30min → invalidate.
+        #   Distinguishes single-pullback noise (1 counter event = OK)
+        #   from real bias flip (2+ counters = bias actually shifted).
+        #   This is a SMART version of the disabled Bug G — the original
+        #   triggered on ANY single opposite event and over-rejected
+        #   valid setups during normal counter-rallies (Q1 2025 v10
+        #   collapsed: WR 21%, PF 0.84). Backtest Q1 2025 with this
+        #   version BEFORE relying on it in live.
+        if config.cfg("SB_STRUCT_INVALIDATOR_ENABLED", True):
+            max_age_min = config.cfg("SB_MAX_STRUCT_AGE_MINUTES", 60)
+            opp_count_thresh = config.cfg("SB_INVALIDATOR_OPPOSITE_COUNT", 2)
+            opp_window_min = config.cfg("SB_INVALIDATOR_WINDOW_MIN", 30)
+
+            # Gate A: aligned event age
+            try:
+                age_s = (ts - last_struct.timestamp).total_seconds()
+            except Exception:
+                age_s = 0
+            if max_age_min > 0 and age_s > max_age_min * 60:
+                logger.info(
+                    "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, "
+                    "reason=stale_structure (last %s %s @ %s is %.0fmin old, "
+                    "max %dmin)",
+                    _ts_hm(ts), last_struct.type, bias_dir,
+                    _ts_hm(last_struct.timestamp), age_s / 60, max_age_min,
+                )
+                self._set_rejection(
+                    ts, "stale_structure", active_zone, is_near_miss=True,
+                    fvg_direction=bias_dir,
+                    last_struct_type=last_struct.type,
+                    last_struct_age_min=round(age_s / 60, 1),
+                    threshold_min=max_age_min,
+                )
+                return None
+
+            # Gate B: counter-event count in recent window
+            opposite_dir = "bullish" if bias_dir == "bearish" else "bearish"
+            window_start = ts
+            try:
+                from datetime import timedelta as _td
+                window_start = ts - _td(minutes=opp_window_min)
+            except Exception:
+                pass
+            recent_opposite = [
+                e for e in fresh_events
+                if e.type in ("MSS", "BOS", "CHoCH")
+                and e.direction == opposite_dir
+                and e.timestamp > last_struct.timestamp
+                and e.timestamp >= window_start
+            ]
+            if opp_count_thresh > 0 and len(recent_opposite) >= opp_count_thresh:
+                most_recent_opp = recent_opposite[-1]
+                logger.info(
+                    "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, "
+                    "reason=structure_invalidated (last %s %s @ %s superseded "
+                    "by %d %s events in last %dmin, most recent %s %s @ %s)",
+                    _ts_hm(ts), last_struct.type, bias_dir,
+                    _ts_hm(last_struct.timestamp),
+                    len(recent_opposite), opposite_dir, opp_window_min,
+                    most_recent_opp.type, opposite_dir,
+                    _ts_hm(most_recent_opp.timestamp),
+                )
+                self._set_rejection(
+                    ts, "structure_invalidated", active_zone, is_near_miss=True,
+                    fvg_direction=bias_dir,
+                    last_struct_type=last_struct.type,
+                    opposite_count=len(recent_opposite),
+                    opposite_dir=opposite_dir,
+                    window_min=opp_window_min,
+                    most_recent_opp_type=most_recent_opp.type,
+                    most_recent_opp_ts=_ts_hm(most_recent_opp.timestamp),
+                )
+                return None
+
         # ── Bug G structure invalidation — DISABLED for v11 bisect ────
         # 2026-04-25: Q1 2025 v10 backtest (with this gate) collapsed:
         #   WR 21% (gate ≥40%), PF 0.84 (gate ≥1.5), -$3.8K, 5 RESETs.
@@ -661,6 +746,57 @@ class SilverBulletStrategy:
                 _ts_hm(ts),
             )
             return None
+
+        # ── 2026-04-29 FIX #6 — FVG QUALITY FILTER ─────────────────────
+        # ICT canonical: a "true" FVG comes from a strong displacement
+        # (candle 2 big body) where candle 1 and candle 3 wicks DON'T
+        # consume the gap. A 3pt-wide FVG with a 19pt stop (caught
+        # 2026-04-29 NY PM trade #4) has candle 1 with a dominant wick
+        # = INDECISION, not displacement. Two guard rails:
+        #
+        # Gate A — absolute floor: anything <SB_MIN_FVG_WIDTH_PTS is
+        #          noise on MNQ tick-level pricing.
+        # Gate B — relative ratio: FVG width / stop distance must be
+        #          >= SB_MIN_FVG_TO_STOP_RATIO. A tiny gap relative to
+        #          a wide stop means the ENTRY zone is shrinkwrap
+        #          tight while the RISK zone is wide → tail-risk
+        #          loss profile. ICT-aligned setups have proportional
+        #          gap+stop relationships.
+        if config.cfg("SB_FVG_QUALITY_ENABLED", True):
+            fvg_width = abs(float(fvg.top) - float(fvg.bottom))
+            min_width = float(config.cfg("SB_MIN_FVG_WIDTH_PTS", 2.0))
+            if fvg_width < min_width:
+                logger.info(
+                    "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, "
+                    "reason=fvg_too_narrow (width %.2fpts < %.1fpts min)",
+                    _ts_hm(ts), fvg_width, min_width,
+                )
+                self._set_rejection(
+                    ts, "fvg_too_narrow", active_zone, is_near_miss=True,
+                    fvg_direction=bias_dir,
+                    fvg_width_pts=round(fvg_width, 2),
+                    threshold_pts=min_width,
+                )
+                return None
+            min_ratio = float(config.cfg("SB_MIN_FVG_TO_STOP_RATIO", 0.20))
+            if stop_points > 0 and min_ratio > 0:
+                ratio = fvg_width / stop_points
+                if ratio < min_ratio:
+                    logger.info(
+                        "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, "
+                        "reason=fvg_too_narrow_for_stop "
+                        "(width %.2fpts / stop %.2fpts = %.3f < %.2f min ratio)",
+                        _ts_hm(ts), fvg_width, stop_points, ratio, min_ratio,
+                    )
+                    self._set_rejection(
+                        ts, "fvg_too_narrow_for_stop", active_zone, is_near_miss=True,
+                        fvg_direction=bias_dir,
+                        fvg_width_pts=round(fvg_width, 2),
+                        stop_pts=round(stop_points, 2),
+                        ratio=round(ratio, 3),
+                        threshold_ratio=min_ratio,
+                    )
+                    return None
 
         # ── 2026-04-29 SAME-SETUP STOPOUT COOLDOWN ─────────────────────
         # If the last loss in THIS kz was at a similar entry price within

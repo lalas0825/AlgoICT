@@ -126,8 +126,11 @@ def _build_full_setup(
     fvg_det = FairValueGapDetector()
     if inject_fvg:
         # FVG must live INSIDE the active KZ window.
+        # 2026-04-29 — width bumped 2pt → 3pt to satisfy Fix #6 quality
+        # gate (FVG/stop ratio >= 0.20). With stop_ref=91 (stop dist
+        # 10.5pt), 3pt FVG = 0.286 ratio (passes), 2pt was 0.190 (fails).
         fvg_det.fvgs.append(FVG(
-            top=101.0, bottom=99.0, direction="bullish",
+            top=102.0, bottom=99.0, direction="bullish",
             timeframe="1min", candle_index=10,
             timestamp=ts - pd.Timedelta(minutes=3),
             # Candle-1 low well below bottom so stop distance passes 8pt min.
@@ -208,8 +211,9 @@ class TestPositiveSetup:
         """Long entry = FVG.top + 1 tick (ICT section 2.3)."""
         strat, c1, c5 = _build_full_setup()
         sig = strat.evaluate(c1, c5)
-        # FVG.top = 101.0, tick = 0.25 → entry = 101.25
-        assert sig.entry_price == pytest.approx(101.25)
+        # FVG.top = 102.0 (post-2026-04-29 helper bump for FVG quality
+        # gate), tick = 0.25 → entry = 102.25
+        assert sig.entry_price == pytest.approx(102.25)
 
     def test_signal_stop_at_candle1_low_minus_tick(self):
         """Long stop = FVG.stop_reference - 1 tick (ICT section 5.1)."""
@@ -411,8 +415,10 @@ class TestBearishSetup:
             inject_fvg=False, inject_sweep=False, inject_target=False, ts=ts,
         )
         # Bearish FVG + BSL sweep + SSL target below entry.
+        # 2026-04-29 — width 2pt → 3pt for Fix #6 quality gate
+        # (3pt / stop_dist 10.5pt = 0.286 ratio passes 0.20 min).
         strat.detectors["fvg"].fvgs.append(FVG(
-            top=101.0, bottom=99.0, direction="bearish",
+            top=101.0, bottom=98.0, direction="bearish",
             timeframe="1min", candle_index=10,
             timestamp=ts - pd.Timedelta(minutes=3),
             stop_reference=109.0,   # candle-1 high, well above top
@@ -422,7 +428,7 @@ class TestBearishSetup:
             timestamp=ts - pd.Timedelta(minutes=5),
         ))
         strat.detectors["tracked_levels"].append(LiquidityLevel(
-            price=88.0, type="SSL", swept=False,
+            price=87.0, type="SSL", swept=False,
             timestamp=ts - pd.Timedelta(hours=1),
         ))
         # Need bearish structure too (5-min per V9 post-2026-04-23 audit).
@@ -435,9 +441,9 @@ class TestBearishSetup:
         sig = strat.evaluate(c1, c5)
         assert sig is not None
         assert sig.direction == "short"
-        assert sig.entry_price == pytest.approx(98.75)   # bottom - tick
+        assert sig.entry_price == pytest.approx(97.75)   # bottom 98 - tick
         assert sig.stop_price == pytest.approx(109.25)   # stop_ref + tick
-        assert sig.target_price == pytest.approx(88.0)
+        assert sig.target_price == pytest.approx(87.0)
 
 
 # ─── Three windows: each zone routes correctly ──────────────────────────────

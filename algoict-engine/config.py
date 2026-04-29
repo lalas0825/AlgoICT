@@ -172,6 +172,34 @@ SB_SAME_SETUP_PRICE_TOL_PTS = 5.0
 # After this many minutes the sweep is "consumed" / context shifted.
 SB_MAX_SWEEP_AGE_MINUTES = 60
 
+# 2026-04-29 hardening — Fix #5: max-age + smart invalidator for 5-min struct.
+# Caught NY PM 2026-04-29: bot fired 3 SHORTs against fresh BULLISH structure
+# (CHoCH bull 13:55, MSS bull 14:00, BOS bull 14:15+) using STALE bear MSS
+# from 11:45 CT (1h 46min - 2h 21min stale). Bug G original (single-event
+# invalidator) was too aggressive in backtest — Q1 2025 v10 collapsed.
+# This SMART version uses two thresholds:
+#
+#   Gate A — MAX_STRUCT_AGE: aligned event must be < N min old
+#   Gate B — INVALIDATOR_COUNT + WINDOW: only invalidate if N+ opposite events
+#            in M-min window (filters single-pullback noise from real flips)
+#
+# Defaults are conservative — backtest Q1 2025 to validate before enabling.
+SB_STRUCT_INVALIDATOR_ENABLED = True
+SB_MAX_STRUCT_AGE_MINUTES = 60        # last aligned event must be < 60min old
+SB_INVALIDATOR_OPPOSITE_COUNT = 2     # need 2+ opposite events to invalidate
+SB_INVALIDATOR_WINDOW_MIN = 30        # within last 30 minutes from current bar
+
+# 2026-04-29 hardening — Fix #6: FVG quality filter.
+# Caught NY PM trade #4 2026-04-29: FVG was 3pt wide with 19.25pt stop
+# (candle 1 had 11.25pt upper wick = indecision, not displacement). FVG
+# entered, mitigated 1 bar later, stopped out for -$115.50.
+# ICT canonical: a quality FVG has candle 1 with small wicks relative to
+# body, candle 2 strong displacement, gap proportional to setup risk.
+SB_FVG_QUALITY_ENABLED = True
+SB_MIN_FVG_WIDTH_PTS = 2.0            # absolute floor: anything <2pt is noise
+SB_MIN_FVG_TO_STOP_RATIO = 0.20       # FVG must be >=20% of stop distance
+
+
 # 2026-04-29 hardening — news blackout. SWC daily mood explicitly
 # warned about FOMC at 12:00 CT today; bot took 3 trades AFTER FOMC
 # during the post-announcement whipsaw, all losers. New gate skips
