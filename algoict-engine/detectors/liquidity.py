@@ -66,6 +66,14 @@ class LiquidityLevel:
     timestamp: Optional[pd.Timestamp] = None  # when level was IDENTIFIED
     swept_at: Optional[pd.Timestamp] = None    # when sweep occurred (if swept)
 
+    # 2026-04-30 — POST-SWEEP INVALIDATION (replaces age-based filtering).
+    # ICT canonical: a sweep stays valid as setup trigger UNTIL price
+    # closes BACK ACROSS the swept level (continuation, not reversal).
+    # When that happens, the sweep is no longer the active narrative —
+    # bias has flipped to trend-with-direction. Setup invalidates.
+    invalidated: bool = False
+    invalidated_at: Optional[pd.Timestamp] = None  # close-back ts
+
     def __repr__(self) -> str:
         status = "SWEPT" if self.swept else "active"
         ts = f", ts={self.timestamp}" if self.timestamp else ""
@@ -490,6 +498,70 @@ class LiquidityDetector:
                     swept.append(level)
                     logger.debug("SSL sweep: %s at low=%.4f, close=%.4f", level, low, close)
         return swept
+
+    def check_post_sweep_invalidation(
+        self,
+        candle: pd.Series,
+        levels: list[LiquidityLevel],
+    ) -> list[LiquidityLevel]:
+        """
+        Mark swept levels as INVALIDATED if a subsequent candle CLOSED
+        back across the level — bias flipped to trend continuation.
+
+        ICT canonical: a sweep stays valid as a setup trigger as long as
+        price hasn't continued through. The original wick-and-reject
+        sweep tells us liquidity was grabbed; if price comes back and
+        CLOSES across the level again, the reversal narrative dies and
+        the trend reasserts.
+
+        BSL (high) sweep: invalidated when subsequent close > level.price
+        SSL (low) sweep:  invalidated when subsequent close < level.price
+
+        IMPORTANT: skips the same bar that did the sweep — the close on
+        the sweep bar itself was on the OPPOSITE side (that's how the
+        sweep was detected). Only later bars can invalidate.
+
+        Returns the list of levels newly invalidated by this candle.
+        """
+        close = float(candle["close"])
+        candle_ts = None
+        if hasattr(candle, "name"):
+            candle_ts = candle.name
+        elif "timestamp" in candle:
+            candle_ts = candle["timestamp"]
+
+        invalidated: list[LiquidityLevel] = []
+        for level in levels:
+            if not level.swept or level.invalidated:
+                continue
+            # Don't invalidate on the same bar that produced the sweep.
+            if (
+                level.swept_at is not None
+                and candle_ts is not None
+                and candle_ts <= level.swept_at
+            ):
+                continue
+            if level.type in BSL_LEVEL_TYPES:
+                # Sweep was UP-wick + close BELOW; invalidates if close > level.
+                if close > level.price:
+                    level.invalidated = True
+                    level.invalidated_at = candle_ts
+                    invalidated.append(level)
+                    logger.debug(
+                        "Sweep INVALIDATED: %s post-sweep close %.4f > level %.4f",
+                        level, close, level.price,
+                    )
+            elif level.type in SSL_LEVEL_TYPES:
+                # Sweep was DOWN-wick + close ABOVE; invalidates if close < level.
+                if close < level.price:
+                    level.invalidated = True
+                    level.invalidated_at = candle_ts
+                    invalidated.append(level)
+                    logger.debug(
+                        "Sweep INVALIDATED: %s post-sweep close %.4f < level %.4f",
+                        level, close, level.price,
+                    )
+        return invalidated
 
     def backfill_swept_flags(
         self,

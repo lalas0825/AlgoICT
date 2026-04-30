@@ -1097,6 +1097,28 @@ def _update_detectors(
             # and rejects every bar silently — the cause of 0 signals for 2 days.
             tracked = components.detectors.get("tracked_levels", [])
             if tracked:
+                # 2026-04-30 — POST-SWEEP INVALIDATION: check FIRST so
+                # already-swept levels that close back across get marked
+                # invalidated before we look for NEW sweeps. Per ICT
+                # canonical: a sweep stays valid as setup trigger UNTIL
+                # price closes back across — then bias has flipped.
+                # Replaces the old age-based filtering (Fix #2 60min) which
+                # killed valid overnight setups going into London/NY AM.
+                try:
+                    newly_invalid = components.detectors["liquidity"].check_post_sweep_invalidation(
+                        df_5min.iloc[-1], tracked,
+                    )
+                    if newly_invalid:
+                        logger.info(
+                            "SWEEP INVALIDATED on 5min [%s]: %s",
+                            last_5_ts,
+                            ", ".join(
+                                f"{lvl.type}@{lvl.price:.2f}"
+                                for lvl in newly_invalid
+                            ),
+                        )
+                except Exception as exc:
+                    logger.debug("post_sweep_invalidation failed: %s", exc)
                 newly_swept = components.detectors["liquidity"].check_sweep(
                     df_5min.iloc[-1], tracked,
                 )

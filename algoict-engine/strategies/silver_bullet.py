@@ -466,14 +466,20 @@ class SilverBulletStrategy:
         sweep_types = (
             self._LONG_SWEEP_TYPES if direction == "long" else self._SHORT_SWEEP_TYPES
         )
+        # 2026-04-30 — sweep validity is now POST-SWEEP-INVALIDATION based
+        # (close-back across level) instead of age-based. ICT canonical:
+        # a sweep stays valid as setup trigger until price closes back
+        # across the level, then bias has flipped and the sweep is dead.
         sweeps = [
             lvl for lvl in tracked_levels
-            if lvl.swept and lvl.type in sweep_types
+            if lvl.swept
+            and not getattr(lvl, "invalidated", False)
+            and lvl.type in sweep_types
         ]
         if not sweeps:
             logger.info(
                 "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, "
-                "reason=no_valid_setup (no_sweep of %s)",
+                "reason=no_valid_setup (no_sweep of %s OR all invalidated)",
                 _ts_hm(ts),
                 "SSL/equal_lows" if direction == "long" else "BSL/equal_highs",
             )
@@ -488,21 +494,17 @@ class SilverBulletStrategy:
             )
             return None
 
-        # ── 2026-04-29 FRESH-SWEEP WINDOW ──────────────────────────────
-        # ICT canonical: post-sweep reversal happens within minutes,
-        # not hours. After SB_MAX_SWEEP_AGE_MINUTES the sweep is
-        # "consumed" — context has shifted, the original liquidity
-        # grab is no longer the active narrative. Caught 2026-04-29:
-        # NAH swept at 10:10 CT, bot fired SHORTs 3+ hours later
-        # (13:32-14:07), all stopped out. Filter by `swept_at` age.
-        max_sweep_age_min = config.cfg("SB_MAX_SWEEP_AGE_MINUTES", 60)
+        # 2026-04-30 — REMOVED Fix #2 max-sweep-age filter. ICT does NOT
+        # expire sweeps by time; they expire by post-sweep close-back
+        # (handled in `LiquidityDetector.check_post_sweep_invalidation`,
+        # filtered above via `not invalidated`). Legacy config knob
+        # SB_MAX_SWEEP_AGE_MINUTES kept as opt-in (default 0 = disabled).
+        max_sweep_age_min = config.cfg("SB_MAX_SWEEP_AGE_MINUTES", 0)
         if max_sweep_age_min and max_sweep_age_min > 0:
             fresh_sweeps = []
             for lvl in sweeps:
                 swept_at = getattr(lvl, "swept_at", None)
                 if swept_at is None:
-                    # Pre-2026-04-26 levels lack swept_at — keep them
-                    # for backward compat (tests, replay).
                     fresh_sweeps.append(lvl)
                     continue
                 try:
@@ -512,7 +514,6 @@ class SilverBulletStrategy:
                 except Exception:
                     fresh_sweeps.append(lvl)
             if not fresh_sweeps:
-                # Stash the freshest oldness for log clarity.
                 oldest = min(
                     (
                         (ts - getattr(lvl, "swept_at", ts)).total_seconds() / 60

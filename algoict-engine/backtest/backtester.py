@@ -473,7 +473,7 @@ class Backtester:
             )
 
             # ── 5. Sweep check on current 1-min bar ────────────────────
-            self._update_sweeps(bar_high, bar_low, bar_close)
+            self._update_sweeps(bar_high, bar_low, bar_close, bar_ts=current_ts)
 
             # ── 6. Strategy evaluation — skip if a limit order is waiting
             if pending_entry is not None:
@@ -903,10 +903,17 @@ class Backtester:
         bar_high: float,
         bar_low: float,
         bar_close: float,
+        bar_ts=None,
     ) -> None:
         """
         Mark tracked liquidity levels as swept if the current 1-min bar
         pierced them with a close back on the original side.
+
+        Also runs POST-SWEEP INVALIDATION: a previously-swept level whose
+        subsequent CLOSE goes back across the level (continuation, not
+        reversal) is marked invalidated — bias has flipped, the sweep is
+        no longer the active narrative. Mirrors live's
+        `LiquidityDetector.check_post_sweep_invalidation`.
 
         Uses raw floats (no pd.Series) to stay hot-loop-cheap.
         """
@@ -920,14 +927,36 @@ class Backtester:
         from detectors.liquidity import BSL_LEVEL_TYPES, SSL_LEVEL_TYPES
 
         for level in levels:
+            # 2026-04-30: post-sweep invalidation BEFORE checking new sweep
+            # on the same level (the same bar can't both sweep and invalidate
+            # — invalidation requires a LATER bar's close).
+            if (
+                level.swept
+                and not getattr(level, "invalidated", False)
+                and bar_ts is not None
+                and getattr(level, "swept_at", None) is not None
+                and bar_ts > level.swept_at
+            ):
+                if level.type in BSL_LEVEL_TYPES:
+                    if bar_close > level.price:
+                        level.invalidated = True
+                        level.invalidated_at = bar_ts
+                        continue
+                elif level.type in SSL_LEVEL_TYPES:
+                    if bar_close < level.price:
+                        level.invalidated = True
+                        level.invalidated_at = bar_ts
+                        continue
             if level.swept:
                 continue
             if level.type in BSL_LEVEL_TYPES:
                 if bar_high > level.price and bar_close < level.price:
                     level.swept = True
+                    level.swept_at = bar_ts
             elif level.type in SSL_LEVEL_TYPES:
                 if bar_low < level.price and bar_close > level.price:
                     level.swept = True
+                    level.swept_at = bar_ts
 
     # ------------------------------------------------------------------ #
     # Helpers                                                              #
