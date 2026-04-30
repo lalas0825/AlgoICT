@@ -168,11 +168,11 @@ SB_SAME_SETUP_PRICE_TOL_PTS = 5.0
 
 # 2026-04-29 hardening — fresh-sweep window. Caught 2026-04-29: NAH
 # swept at 10:10 CT, bot fired SHORTs 3+ hours later (13:32-14:07).
-# 2026-04-30 — Disabled (was 60min). ICT does NOT expire sweeps by
-# time. Replaced by post-sweep-close-back invalidation
-# (`LiquidityDetector.check_post_sweep_invalidation` and the strategy's
-# `not lvl.invalidated` filter). Legacy config kept for opt-in tests.
-SB_MAX_SWEEP_AGE_MINUTES = 0          # 0 = disabled
+# 2026-04-30 v18 — RELAXED to 90min. v15's 60min was over-restrictive
+# (-65% P&L 7-year), v16's 0min (close-back only) added back trades
+# that lost $5K in Q1 2025. 90min combined with close-back catches the
+# best of both: cross-session context allowed, multi-hour stale rejected.
+SB_MAX_SWEEP_AGE_MINUTES = 90          # 90 = middle ground
 
 # 2026-04-29 hardening — Fix #5: max-age + smart invalidator for 5-min struct.
 # Caught NY PM 2026-04-29: bot fired 3 SHORTs against fresh BULLISH structure
@@ -187,13 +187,14 @@ SB_MAX_SWEEP_AGE_MINUTES = 0          # 0 = disabled
 #
 # Defaults are conservative — backtest Q1 2025 to validate before enabling.
 SB_STRUCT_INVALIDATOR_ENABLED = True
-# 2026-04-30 — Disabled max-struct-age (was 60min). 7-year walk-forward
-# v15 showed the age filter cut P&L by 65% with NO PF improvement —
-# rejecting trades that were net positive. Replaced semantically by
-# the smart counter-event invalidator (Gate B below) which is the
-# ICT-canonical way: bear setup is invalidated if 2+ bull events
-# occurred AFTER the bear MSS, not because the bear MSS is old.
-SB_MAX_STRUCT_AGE_MINUTES = 0         # 0 = disabled (legacy config)
+# 2026-04-30 v18 — RELAXED to 90min after Q1 2025 v16 showed close-back
+# alone wasn't catching all stale setups. v15 60min was too tight (cut
+# P&L 65% in 7-year), v16 0min (close-back only) underperformed v15 in
+# Q1 by $5K. 90min middle ground: accepts overnight cross-session
+# context (Asian → London, London → NY AM) but rejects multi-hour
+# stale events. Combined with close-back and smart counter-event
+# invalidator (Gate B below).
+SB_MAX_STRUCT_AGE_MINUTES = 90        # 90 = middle ground
 SB_INVALIDATOR_OPPOSITE_COUNT = 2     # need 2+ opposite events to invalidate
 SB_INVALIDATOR_WINDOW_MIN = 30        # within last 30 minutes from current bar
 
