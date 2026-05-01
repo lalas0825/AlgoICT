@@ -252,15 +252,16 @@ class TestPositiveSetup:
 class TestRejectionGates:
 
     def test_outside_kill_zone_returns_none(self):
-        out_ts = _sb_ts(8, 0)   # before AM window (starts at 09:00 CT)
+        # v19a-WIDE: KZs are continuous 01:00-15:00 CT. Test outside that:
+        # 00:30 CT (before London) or 16:00 CT (after NY PM).
+        out_ts = _sb_ts(0, 30)   # before London (01:00 CT)
         strat, _, c5 = _build_full_setup(ts=out_ts)
         c1_out = _make_1min(out_ts, close=100.0)
         assert strat.evaluate(c1_out, c5) is None
 
     def test_after_kill_zone_returns_none(self):
-        """v4: ny_am ends at 12:00 CT. 12:30 CT is outside all 3 RTH KZs
-        (not london 01-04, not ny_am 08:30-12, not ny_pm 13:30-15)."""
-        out_ts = _sb_ts(12, 30)
+        """v19a-WIDE: ny_pm ends at 15:00 CT. 15:30 CT is outside all KZs."""
+        out_ts = _sb_ts(15, 30)
         strat, _, c5 = _build_full_setup(ts=out_ts)
         c1_out = _make_1min(out_ts, close=100.0)
         assert strat.evaluate(c1_out, c5) is None

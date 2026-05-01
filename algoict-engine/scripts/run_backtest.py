@@ -96,6 +96,7 @@ from timeframes.session_manager import SessionManager  # noqa: E402
 # Strategies
 from strategies.ny_am_reversal import NYAMReversalStrategy  # noqa: E402
 from strategies.silver_bullet import SilverBulletStrategy  # noqa: E402
+from strategies.htf_continuation import HTFContinuationStrategy  # noqa: E402
 from strategies.donchian_vol import DonchianVolStrategy  # noqa: E402
 
 # HTF bias detector for dynamic bias mode
@@ -438,6 +439,20 @@ def build_backtester(
         strategy = SilverBulletStrategy(
             detectors, risk_mgr, session_mgr, static_bullish_bias
         )
+    elif strategy_name_lc == "htf_continuation":
+        # HTF Continuation REQUIRES the dynamic bias function — its entire
+        # premise is daily_bias direction. The static stub always returns
+        # bullish, which would force long-only every bar. AUTO-ENABLE
+        # dynamic_bias for this strategy regardless of CLI flag.
+        if not dynamic_bias:
+            print(
+                "  ⚠ HTF Continuation requires dynamic bias — "
+                "auto-enabling (overriding --dynamic-bias absence)."
+            )
+            dynamic_bias = True
+        strategy = HTFContinuationStrategy(
+            detectors, risk_mgr, session_mgr, static_bullish_bias
+        )
     elif strategy_name_lc == "donchian_vol":
         # Donchian-Vol does not use HTF bias; pass the stub for API compat.
         strategy = DonchianVolStrategy(
@@ -446,7 +461,7 @@ def build_backtester(
     else:
         raise ValueError(
             f"Unknown strategy '{strategy_name}'. "
-            f"Valid: ny_am_reversal, silver_bullet, donchian_vol"
+            f"Valid: ny_am_reversal, silver_bullet, htf_continuation, donchian_vol"
         )
 
     # Ablation overrides
@@ -631,6 +646,57 @@ def main() -> int:
     print("▶ M11 — AlgoICT First Real Backtest")
     print()
 
+    # 2026-04-30 — apply per-run config overrides BEFORE building strategy.
+    # Strategy reads via config.cfg(name, default), so monkey-patching the
+    # imported module here propagates correctly. Process-local; does not
+    # affect any other Python process (e.g. the live bot reading config.py).
+    import config as _cfg_module
+    _overrides_applied: list[str] = []
+    if args.no_struct_age_cap:
+        _cfg_module.SB_MAX_STRUCT_AGE_MINUTES = 0
+        _overrides_applied.append("SB_MAX_STRUCT_AGE_MINUTES=0 (--no-struct-age-cap)")
+    if args.no_sweep_age_cap:
+        _cfg_module.SB_MAX_SWEEP_AGE_MINUTES = 0
+        _overrides_applied.append("SB_MAX_SWEEP_AGE_MINUTES=0 (--no-sweep-age-cap)")
+    for spec in args.config_override:
+        if "=" not in spec:
+            print(f"✗ Invalid --config-override '{spec}': expected NAME=VALUE")
+            return 1
+        name, raw = spec.split("=", 1)
+        name = name.strip()
+        raw = raw.strip()
+        # Parse as int → float → bool → string
+        parsed: object
+        try:
+            parsed = int(raw)
+        except ValueError:
+            try:
+                parsed = float(raw)
+            except ValueError:
+                low = raw.lower()
+                if low in ("true", "false"):
+                    parsed = (low == "true")
+                else:
+                    parsed = raw
+        setattr(_cfg_module, name, parsed)
+        _overrides_applied.append(f"{name}={parsed!r} (--config-override)")
+    if args.wide_kz:
+        # Widen KZ to full non-overlapping sessions (v19a-WIDE experiment).
+        # Snapshot dict so we don't mutate config.KILL_ZONES module-level
+        # (other scripts importing config would see the change otherwise).
+        _cfg_module.KILL_ZONES = dict(_cfg_module.KILL_ZONES)
+        _cfg_module.KILL_ZONES["london"] = {"start": (1, 0), "end": (7, 30)}
+        _cfg_module.KILL_ZONES["ny_am"]  = {"start": (7, 30), "end": (12, 0)}
+        _cfg_module.KILL_ZONES["ny_pm"]  = {"start": (12, 0), "end": (15, 0)}
+        _overrides_applied.append(
+            "WIDE-KZ: london=01:00-07:30, ny_am=07:30-12:00, ny_pm=12:00-15:00"
+        )
+    if _overrides_applied:
+        print("⚠ Per-run config overrides applied:")
+        for o in _overrides_applied:
+            print(f"    • {o}")
+        print()
+
     # Step 1: data
     try:
         df = load_or_generate_data(
@@ -732,6 +798,22 @@ def main() -> int:
         print(f"    bullish : {stats['bullish']:>6,}  ({stats['bullish_pct']:>5.1%})")
         print(f"    bearish : {stats['bearish']:>6,}  ({stats['bearish_pct']:>5.1%})")
         print(f"    neutral : {stats['neutral']:>6,}  ({stats['neutral_pct']:>5.1%})")
+        print()
+
+    # Optional: strategy-level reject counters (HTF Continuation diagnostic).
+    # If the strategy exposes a `reject_counters` Counter, dump it sorted.
+    inner = (
+        strategy_obj._inner if isinstance(strategy_obj, DynamicBiasStrategy)
+        else strategy_obj
+    )
+    rc = getattr(inner, "reject_counters", None)
+    if rc:
+        total_rejects = sum(rc.values())
+        print()
+        print(f"  Strategy reject distribution (total {total_rejects:,} rejects):")
+        for reason, count in sorted(rc.items(), key=lambda x: -x[1]):
+            pct = count / total_rejects * 100
+            print(f"    {reason:>22}: {count:>7,}  ({pct:>5.1f}%)")
         print()
 
     # Optional: Topstep MLL stats
@@ -846,7 +928,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--strategy",
         required=True,
-        choices=("ny_am_reversal", "silver_bullet", "donchian_vol"),
+        choices=("ny_am_reversal", "silver_bullet", "htf_continuation", "donchian_vol"),
         help="Strategy to backtest",
     )
 
@@ -1024,6 +1106,50 @@ def _parse_args() -> argparse.Namespace:
         help=(
             "Comma-separated kill zone override, e.g. 'london,ny_am'. "
             "Overrides the strategy's default KILL_ZONES for this run."
+        ),
+    )
+    # 2026-04-30 — investigation flags (V15_REGRESSION_INVESTIGATION).
+    # Allow toggling specific Fix #5 / Fix #2 gates per-run for ablation
+    # without touching config.py (which the live bot reads on restart).
+    p.add_argument(
+        "--no-struct-age-cap",
+        action="store_true",
+        help=(
+            "Override SB_MAX_STRUCT_AGE_MINUTES to 0 for this run only "
+            "(disable Gate A of Fix #5; keep Gate B counter-event check). "
+            "Does NOT modify config.py — live bot is unaffected."
+        ),
+    )
+    p.add_argument(
+        "--no-sweep-age-cap",
+        action="store_true",
+        help=(
+            "Override SB_MAX_SWEEP_AGE_MINUTES to 0 for this run only "
+            "(disable Fix #2; keep close-back invalidation). "
+            "Does NOT modify config.py — live bot is unaffected."
+        ),
+    )
+    p.add_argument(
+        "--config-override",
+        action="append",
+        default=[],
+        help=(
+            "Override an arbitrary config attribute for this run only. "
+            "Format: 'NAME=VALUE'. Repeatable. Value is parsed as int, "
+            "float, bool, or string in that order. E.g. "
+            "--config-override SB_MAX_STRUCT_AGE_MINUTES=120"
+        ),
+    )
+    p.add_argument(
+        "--wide-kz",
+        action="store_true",
+        help=(
+            "Widen kill zones to full non-overlapping ICT sessions: "
+            "london 01:00-07:30 CT (vs default 01:00-04:00), "
+            "ny_am 07:30-12:00 CT (vs default 08:30-12:00), "
+            "ny_pm 12:00-15:00 CT (vs default 13:30-15:00). "
+            "Tests whether SB v19a holds edge when trading window "
+            "is doubled (~14h/day vs ~7.5h)."
         ),
     )
     return p.parse_args()

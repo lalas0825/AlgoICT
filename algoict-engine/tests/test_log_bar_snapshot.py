@@ -77,10 +77,13 @@ def _make_state(ts: pd.Timestamp) -> EngineState:
     (13, 30, "ny_pm"),
     (14, 0,  "ny_pm"),
     (14, 59, "ny_pm"),
-    # Outside all zones: 12:00 CT (between ny_am end 11:00 and ny_pm start 13:30)
-    (12, 0,  "none"),
-    # Outside all zones: 15:05 CT (after hard close)
+    # 2026-05-01 v19a-WIDE — KZs widened, no gap between ny_am/ny_pm.
+    # 12:00 CT is now START of ny_pm (was outside any zone before).
+    (12, 0,  "ny_pm"),
+    # Outside all zones: 15:05 CT (after hard close, ny_pm ends 15:00)
     (15, 5,  "none"),
+    # Outside all zones: 00:30 CT (before London 01:00 start)
+    (0, 30,  "none"),
 ])
 def test_kz_label_in_log(hour, minute, expected_kz, caplog):
     ts = _make_ts(hour, minute)

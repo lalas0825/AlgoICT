@@ -166,13 +166,30 @@ KILL_SWITCH_SAME_SETUP_PRICE_TOL_PTS = 5.0
 SB_SAME_SETUP_COOLDOWN_MIN = 30
 SB_SAME_SETUP_PRICE_TOL_PTS = 5.0
 
-# 2026-04-29 hardening — fresh-sweep window. Caught 2026-04-29: NAH
-# swept at 10:10 CT, bot fired SHORTs 3+ hours later (13:32-14:07).
-# 2026-04-30 v18 — RELAXED to 90min. v15's 60min was over-restrictive
-# (-65% P&L 7-year), v16's 0min (close-back only) added back trades
-# that lost $5K in Q1 2025. 90min combined with close-back catches the
-# best of both: cross-session context allowed, multi-hour stale rejected.
-SB_MAX_SWEEP_AGE_MINUTES = 90          # 90 = middle ground
+# 2026-04-30 v19a — DISABLED time-based age caps for sweeps and structure.
+# ICT canonical: sweeps and structure events expire by PRICE ACTION, not by
+# clock time. The age caps were anti-selective — they preferentially rejected
+# the highest-quality late-KZ trades (London +60-+165min buckets had 70-94%
+# WR but were systematically blocked).
+#
+# Investigation evidence (V15_REGRESSION_INVESTIGATION_2026_04_30.md):
+#   - 7-yr backtest 2019-2025: v15 (60min cap) cut $425K (-65%) vs no-cap baseline
+#   - 3,239 rejected trades >=60min into KZ had 69.4% WR — better than baseline
+#   - 2026-04-30 LIVE: 117 NY AM evals + 54 NY PM evals rejected as stale_sweep
+#     for ICT-textbook setup (LL@27185 swept → bull FVG @27270-78 → BOS bull
+#     @07:20). Trade missed.
+#
+# Replaced by:
+#   - LiquidityDetector.check_post_sweep_invalidation (close-back rule)
+#   - SB_INVALIDATOR_OPPOSITE_COUNT (counter-event count for structure)
+#
+# Backtest validation (single year smoke + Q1 2025 sanity 2026-04-30):
+#   - 2019: v19a $74.7K vs v15 $13K (+476%, recovered v14 baseline)
+#   - Q1 2025: v19a $25.3K vs v15 $20.6K (+23%, did NOT regress trended)
+#   - WR 57.4% (chop) / 60.9% (trend), PF 2.05 / 2.82, MaxDD same or lower
+#
+# To re-enable: set to 60 (v15) or 90 (v18 middle). 0 = ICT canonical (off).
+SB_MAX_SWEEP_AGE_MINUTES = 0           # v19a: rely on close-back invalidation
 
 # 2026-04-29 hardening — Fix #5: max-age + smart invalidator for 5-min struct.
 # Caught NY PM 2026-04-29: bot fired 3 SHORTs against fresh BULLISH structure
@@ -185,16 +202,11 @@ SB_MAX_SWEEP_AGE_MINUTES = 90          # 90 = middle ground
 #   Gate B — INVALIDATOR_COUNT + WINDOW: only invalidate if N+ opposite events
 #            in M-min window (filters single-pullback noise from real flips)
 #
-# Defaults are conservative — backtest Q1 2025 to validate before enabling.
+# v19a (2026-04-30): Gate A DISABLED, Gate B kept. The 04-29 incident is still
+# caught by Gate B (3 fresh bull events in 30min ≥ 2 → bear MSS invalidated).
+# Gate A was the over-filter — see V15_REGRESSION_INVESTIGATION for evidence.
 SB_STRUCT_INVALIDATOR_ENABLED = True
-# 2026-04-30 v18 — RELAXED to 90min after Q1 2025 v16 showed close-back
-# alone wasn't catching all stale setups. v15 60min was too tight (cut
-# P&L 65% in 7-year), v16 0min (close-back only) underperformed v15 in
-# Q1 by $5K. 90min middle ground: accepts overnight cross-session
-# context (Asian → London, London → NY AM) but rejects multi-hour
-# stale events. Combined with close-back and smart counter-event
-# invalidator (Gate B below).
-SB_MAX_STRUCT_AGE_MINUTES = 90        # 90 = middle ground
+SB_MAX_STRUCT_AGE_MINUTES = 0         # v19a: rely on Gate B + close-back
 SB_INVALIDATOR_OPPOSITE_COUNT = 2     # need 2+ opposite events to invalidate
 SB_INVALIDATOR_WINDOW_MIN = 30        # within last 30 minutes from current bar
 
@@ -202,11 +214,36 @@ SB_INVALIDATOR_WINDOW_MIN = 30        # within last 30 minutes from current bar
 # Caught NY PM trade #4 2026-04-29: FVG was 3pt wide with 19.25pt stop
 # (candle 1 had 11.25pt upper wick = indecision, not displacement). FVG
 # entered, mitigated 1 bar later, stopped out for -$115.50.
-# ICT canonical: a quality FVG has candle 1 with small wicks relative to
-# body, candle 2 strong displacement, gap proportional to setup risk.
-SB_FVG_QUALITY_ENABLED = True
-SB_MIN_FVG_WIDTH_PTS = 2.0            # absolute floor: anything <2pt is noise
-SB_MIN_FVG_TO_STOP_RATIO = 0.20       # FVG must be >=20% of stop distance
+#
+# 2026-04-30 v19a: DISABLED. Backtest 2019 ablation showed Fix #6 was THE
+# largest over-filter (~$50K cost in 2019 alone, ~63% of total v15→v19a
+# delta). ICT canonical does NOT require minimum FVG width — the 3-candle
+# imbalance is sufficient (candle1.high < candle3.low for bull). The 2pt
+# + 0.20 ratio thresholds were our invention without ICT basis.
+#
+# The 04-29 NY PM trade #4 loss was a single sample; over 7 years this
+# filter cuts hundreds of valid micro-FVG setups. Bad trade-off.
+SB_FVG_QUALITY_ENABLED = False        # v19a: ICT canonical, no width filter
+SB_MIN_FVG_WIDTH_PTS = 2.0            # (irrelevant — gate disabled)
+SB_MIN_FVG_TO_STOP_RATIO = 0.20       # (irrelevant — gate disabled)
+
+
+# 2026-04-30 — HTF Continuation strategy (second strategy, complements SB).
+# Setup: Daily bias bullish/bearish + price in discount/premium + pullback
+# into 5-min OB or FVG. ICT canonical (Daily candle anatomy: accumulation →
+# manipulation → distribution). Mutually-exclusive ~80% of time vs SB.
+#
+# Stop sizing: structural (last 5min swing - 1tick), capped to:
+#   MIN 15pt — avoid wick-stop-outs on tight blocks
+#   MAX 80pt — keep 2R intraday-achievable
+HTF_CONT_STOP_MIN_PTS = 15.0
+HTF_CONT_STOP_MAX_PTS = 80.0
+HTF_CONT_PROXIMITY_PTS = 5.0          # how close to OB.proximal to fire
+HTF_CONT_MAX_TRADES_PER_ZONE = 1      # 1 setup per KZ → 3 trades/day max
+
+# Same-setup cooldown (Fix #3 analog, falls back to SB_SAME_SETUP_*).
+HTF_CONT_SAME_SETUP_COOLDOWN_MIN = 30
+HTF_CONT_SAME_SETUP_PRICE_TOL_PTS = 5.0
 
 
 # 2026-04-29 hardening — news blackout. SWC daily mood explicitly
@@ -399,21 +436,31 @@ KILL_ZONES = {
         "start": (20, 0),    # 8:00 PM CT
         "end": (0, 0),       # 12:00 AM CT
     },
+    # 2026-05-01 — v19a-WIDE: Kill zones widened to non-overlapping full
+    # ICT sessions for Silver Bullet. Backtest 7-yr 2019-2025 confirmed
+    # +97.9% P&L boost ($591K → $1.17M) vs narrow KZ. WR 63.3%, PF 3.30.
+    # See SCALING_TO_MALDIVAS.md for full math + plan.
+    #
+    # London: 02:00-08:30 ET = 01:00-07:30 CT (institutional London open
+    #         through NY pre-open handover)
+    # NY AM:  08:30-13:00 ET = 07:30-12:00 CT (NY indices open through
+    #         lunch / NY PM transition)
+    # NY PM:  13:00-16:00 ET = 12:00-15:00 CT (NY PM through close)
     "london": {
         "start": (1, 0),     # 1:00 AM CT  (2:00 AM ET)
-        "end": (4, 0),       # 4:00 AM CT  (5:00 AM ET)
+        "end": (7, 30),      # 7:30 AM CT  (8:30 AM ET) — was 4:00
     },
     "london_silver_bullet": {
         "start": (2, 0),     # 2:00 AM CT  (3:00 AM ET) — inside London KZ
         "end": (3, 0),       # 3:00 AM CT  (4:00 AM ET)
     },
     "ny_am": {
-        "start": (8, 30),    # 8:30 AM CT — extended to cover late NY AM setups
-        "end": (12, 0),      # 12:00 PM CT (was 11:00)
+        "start": (7, 30),    # 7:30 AM CT  (8:30 AM ET) — was 8:30
+        "end": (12, 0),      # 12:00 PM CT (1:00 PM ET)
     },
     "ny_pm": {
-        "start": (13, 30),   # 1:30 PM CT
-        "end": (15, 0),      # 3:00 PM CT
+        "start": (12, 0),    # 12:00 PM CT (1:00 PM ET) — was 13:30
+        "end": (15, 0),      # 3:00 PM CT  (4:00 PM ET)
     },
     "silver_bullet": {
         # ICT canonical (2026-04-20 audit): AM Silver Bullet is 10:00-11:00 ET
@@ -531,11 +578,15 @@ STRATEGIES_ENABLED = ("silver_bullet",)
 # the full ICT taxonomy of pools, not just daily/weekly references.
 # Times are CT (US/Central). NY AM uses the canonical ICT 7-9 CT range
 # distinct from the wider trading kill zone (8:30-12 CT).
+# 2026-05-01 — Session windows aligned to KZ trading windows for cleaner
+# H/L tracking. Non-overlapping. Asian extended to capture full overnight
+# (CME re-open 17:00 → London open 01:00). Each session's H/L becomes
+# tracked liquidity for the NEXT session's sweep targets.
 SESSION_RANGES = {
-    "asian":  {"start": (19, 0),  "end": (23, 0), "high_type": "AH",  "low_type": "AL"},
-    "london": {"start": (1, 0),   "end": (4, 0),  "high_type": "LH",  "low_type": "LL"},
-    "ny_am":  {"start": (7, 0),   "end": (9, 0),  "high_type": "NAH", "low_type": "NAL"},
-    "ny_pm":  {"start": (12, 30), "end": (15, 0), "high_type": "NPH", "low_type": "NPL"},
+    "asian":  {"start": (17, 0),  "end": (1, 0),   "high_type": "AH",  "low_type": "AL"},
+    "london": {"start": (1, 0),   "end": (7, 30),  "high_type": "LH",  "low_type": "LL"},
+    "ny_am":  {"start": (7, 30),  "end": (12, 0),  "high_type": "NAH", "low_type": "NAL"},
+    "ny_pm":  {"start": (12, 0),  "end": (15, 0),  "high_type": "NPH", "low_type": "NPL"},
 }
 
 FVG_MITIGATION_MODE = "body_close"   # "body_close" (ICT) | "ratio" (legacy)

@@ -941,6 +941,30 @@ class SilverBulletStrategy:
         # longer reject on it.
 
         # ── 9. Build signal ────────────────────────────────────────────
+        # 2026-05-01 — confluence cleanup: SB has 8 applicable factors out
+        # of the 19-pt total. The other 11 are noise:
+        #   - 7 structural gates (sweep, FVG, OB, MSS, KZ, framework) — these
+        #     are HARD GATES; if absent the signal never reaches the scorer,
+        #     so they always score the same → don't discriminate
+        #   - 2 N/A (OTE fib, HTF OB/FVG) — SB enters on FVG proximal not
+        #     OTE retrace, doesn't scope HTF overlay
+        #   - 2 already counted in SB-applicable subset
+        # Show only the SB-applicable score (out of SB_APPLICABLE_MAX=10)
+        # and store ONLY those factors in the breakdown. Cleaner logs +
+        # Telegram + dashboard.
+        full_breakdown = dict(conf.breakdown)
+        sb_breakdown = {
+            k: v for k, v in full_breakdown.items()
+            if k in config.SB_APPLICABLE_FACTORS
+        }
+        sb_score = sum(sb_breakdown.values())
+        # Filter reasons to those tied to SB-applicable factors.
+        sb_reasons = [
+            r for r in conf.reasons
+            if any(f.replace("_", " ") in r.lower() or f in r.lower()
+                   for f in config.SB_APPLICABLE_FACTORS)
+        ]
+
         signal = Signal(
             strategy="silver_bullet",
             symbol=self.SYMBOL,
@@ -949,20 +973,18 @@ class SilverBulletStrategy:
             stop_price=stop_price,
             target_price=target_price,
             contracts=contracts,
-            confluence_score=conf.total_score,
-            confluence_breakdown=dict(conf.breakdown),
-            confluence_reasons=list(conf.reasons),
+            confluence_score=sb_score,                  # /10, SB-applicable only
+            confluence_breakdown=sb_breakdown,          # only the 8 SB factors
+            confluence_reasons=sb_reasons,
             timestamp=ts,
             kill_zone=active_zone,
         )
         self._last_evaluated_bar_ts = ts
 
-        sb_score, sb_max = sb_applicable_score(signal.confluence_breakdown)
         logger.info(
-            "EVAL silver_bullet [%s]: confluence=%d/%d (SB applicable: %d/%d), "
+            "EVAL silver_bullet [%s]: confluence=%d/%d (SB), "
             "signal=fire, reason=fired (framework=%.1fpts target=%s@%.2f) | %s",
-            _ts_hm(ts), signal.confluence_score, config.MAX_CONFLUENCE,
-            sb_score, sb_max,
+            _ts_hm(ts), sb_score, config.SB_APPLICABLE_MAX,
             framework_pts, target.type, target_price, signal,
         )
         return signal

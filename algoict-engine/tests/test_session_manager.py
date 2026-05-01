@@ -62,8 +62,8 @@ class TestNyAmKillZone:
         assert self.sm.is_kill_zone(_ts("12:00"), "ny_am") is False
 
     def test_outside_ny_am_before(self):
-        """08:29 CT is before NY AM kill zone."""
-        assert self.sm.is_kill_zone(_ts("08:29"), "ny_am") is False
+        """07:29 CT is before NY AM kill zone (v19a-WIDE: starts 07:30)."""
+        assert self.sm.is_kill_zone(_ts("07:29"), "ny_am") is False
 
     def test_outside_ny_am_after(self):
         """12:30 CT is after NY AM kill zone (extended end = 12:00)."""
@@ -143,8 +143,8 @@ class TestLondonKillZone:
         assert self.sm.is_kill_zone(_ts("02:00"), "london") is True
 
     def test_london_end_exclusive(self):
-        """05:00 CT is NOT inside London (exclusive end)."""
-        assert self.sm.is_kill_zone(_ts("05:00"), "london") is False
+        """07:30 CT is NOT inside London (v19a-WIDE: ends 07:30 exclusive)."""
+        assert self.sm.is_kill_zone(_ts("07:30"), "london") is False
 
     def test_outside_london_before(self):
         """00:59 CT is before London (new window starts 01:00)."""

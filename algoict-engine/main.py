@@ -3927,6 +3927,20 @@ def _reset_for_new_day(components: Components, state: EngineState) -> None:
     components.risk.reset_daily()
     components.ny_am_strategy.reset_daily()
     components.silver_bullet_strategy.reset_daily()
+
+    # 2026-05-01 bug fix — the original "preserve session levels" patch
+    # (014fd92, 2026-04-28) was DEAD CODE because it read `tracked_levels`
+    # AFTER the wipe two lines below. Caught on 2026-05-01 London: AH/AL
+    # added at 00:01 CT, wipe at 01:00 CT killed them, AL@27591.50 was
+    # then swept at 02:45 CT but bot saw no_sweep → 113 no-sweep rejects.
+    # Snapshot here BEFORE the wipe so the preservation code below can
+    # actually restore session levels.
+    from detectors.liquidity import SESSION_LEVEL_TYPES as _SLT
+    state._preserved_session_levels = [
+        lvl for lvl in (components.detectors.get("tracked_levels") or [])
+        if getattr(lvl, "type", "") in _SLT
+        and not getattr(lvl, "swept", False)
+    ]
     components.detectors["tracked_levels"] = []
 
     # 2026-04-24 Bug C2: CLEAR detector state at day boundary. Structure
@@ -3989,15 +4003,16 @@ def _reset_for_new_day(components: Components, state: EngineState) -> None:
             # ~1h ago get wiped before London's 01:00 CT start). Caught on
             # 2026-04-28 London: bot emitted AH@27,467.75/AL@27,386.25 at
             # 23:01 CT, reset wiped them at 00:00 CT, London ran without
-            # them, last bar was 35pts below AL with no setup. Fix: capture
-            # unswept session levels BEFORE re-seed, then re-attach after.
-            from detectors.liquidity import SESSION_LEVEL_TYPES
-            old_levels = components.detectors.get("tracked_levels") or []
-            preserved_session_levels = [
-                lvl for lvl in old_levels
-                if getattr(lvl, "type", "") in SESSION_LEVEL_TYPES
-                and not getattr(lvl, "swept", False)
-            ]
+            # them, last bar was 35pts below AL with no setup.
+            #
+            # 2026-05-01 second-bug fix — the snapshot was reading
+            # `tracked_levels` AFTER the wipe, so the preservation list
+            # was always empty. The snapshot is now captured at the top
+            # of `_reset_for_new_day` BEFORE the wipe and stashed in
+            # state._preserved_session_levels.
+            preserved_session_levels = list(
+                getattr(state, "_preserved_session_levels", []) or []
+            )
             levels = components.detectors["liquidity"].build_key_levels(
                 df_daily=df_daily, df_weekly=df_weekly, as_of_ts=as_of,
             )

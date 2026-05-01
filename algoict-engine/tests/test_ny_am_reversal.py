@@ -260,8 +260,9 @@ class TestPositiveSetup:
 class TestRejectionGates:
 
     def test_outside_kill_zone_returns_none(self):
-        """Timestamp at 12:00 CT — between NY AM (ends 11:00) and NY PM (starts 13:30)."""
-        out_ts = _ny_am_ts(12, 0)
+        """v19a-WIDE: KZs are continuous 01:00-15:00 CT. Test outside that.
+        16:00 CT is after NY PM end (15:00)."""
+        out_ts = _ny_am_ts(16, 0)
         strat, _, c15 = _build_full_setup(ts=out_ts)
         c5_out = _make_5min(out_ts, close=100.0)
         assert strat.evaluate(c5_out, c15) is None
@@ -372,8 +373,8 @@ class TestEvalLogging:
     """Verify EVAL INFO lines are emitted in the required format."""
 
     def test_eval_outside_kz(self, caplog):
-        """Bar at 12:00 CT — outside all KZs → 'outside_kz' EVAL line."""
-        out_ts = _ny_am_ts(12, 0)
+        """v19a-WIDE: 16:00 CT (after ny_pm end 15:00) → 'outside_kz' line."""
+        out_ts = _ny_am_ts(16, 0)
         strat, _, c15 = _build_full_setup(ts=out_ts)
         c5_out = _make_5min(out_ts, close=100.0)
         import logging
@@ -383,7 +384,7 @@ class TestEvalLogging:
         assert len(eval_lines) == 1
         assert "signal=reject" in eval_lines[0]
         assert "reason=outside_kz" in eval_lines[0]
-        assert "12:00" in eval_lines[0]
+        assert "16:00" in eval_lines[0]
 
     def test_eval_conf_below_min(self, caplog):
         """Full structural setup but min_conf raised to 99 → conf_below_min line."""

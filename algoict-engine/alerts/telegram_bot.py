@@ -178,17 +178,15 @@ class TelegramBot:
             stop_sign  = "-" if signal.direction == "long" else "+"
             tgt_sign   = "+" if signal.direction == "long" else "-"
 
-            # For Silver Bullet, also compute + show the SB-applicable
-            # sub-score (out of 10) so the number is interpretable on the
-            # SB-specific scale — the full /19 is kept for historical
-            # comparability (Option B — see SILVER_BULLET_STRATEGY_GUIDE §8).
-            conf_line = f"Confluence: {signal.confluence_score}/{MAX_CONFLUENCE}"
+            # 2026-05-01 — show SB-applicable score (/10) for Silver Bullet,
+            # full 19-pt for other strategies (e.g. NY AM Reversal). The 11
+            # noise factors (5 gated structural, 2 N/A, 4 partially counted)
+            # were misleading the at-a-glance interpretation.
             if signal.strategy == "silver_bullet":
-                sb_sub = sum(
-                    pts for key, pts in (signal.confluence_breakdown or {}).items()
-                    if key in SB_APPLICABLE_FACTORS
-                )
-                conf_line += f" (SB: {sb_sub}/{SB_APPLICABLE_MAX})"
+                conf_max = SB_APPLICABLE_MAX  # 10
+            else:
+                conf_max = MAX_CONFLUENCE     # 19
+            conf_line = f"Confluence: {signal.confluence_score}/{conf_max}"
 
             lines = [
                 "🔔 SIGNAL FIRED",
