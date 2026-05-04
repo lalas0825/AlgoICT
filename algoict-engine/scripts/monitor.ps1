@@ -42,10 +42,36 @@ param(
 $ErrorActionPreference = 'Continue'
 
 # -- Paths ----------------------------------------------------------
-$healthFile = Join-Path $EngineRoot ".health.json"
-$stateFile  = Join-Path $EngineRoot ".monitor_state.json"
-$alertLog   = Join-Path $EngineRoot ".monitor_alerts.log"
-$envFile    = Join-Path $EngineRoot ".env"
+$healthFile     = Join-Path $EngineRoot ".health.json"
+$stateFile      = Join-Path $EngineRoot ".monitor_state.json"
+$alertLog       = Join-Path $EngineRoot ".monitor_alerts.log"
+$envFile        = Join-Path $EngineRoot ".env"
+$intentStopFile = Join-Path $EngineRoot ".bot_stopped_intentionally"
+
+
+# -- Intentional-stop short-circuit --------------------------------
+# 2026-05-04: bot writes .bot_stopped_intentionally on graceful shutdown
+# (SIGINT/SIGTERM/SIGBREAK handler) and deletes it on startup. When the
+# sentinel is present the user is intentionally taking the bot offline —
+# don't alert. Crashes don't write the sentinel (atexit-only path skips
+# it), so real bot deaths still page.
+#
+# 7-day TTL: a sentinel older than 7 days is treated as expired (broken
+# install or forgotten file) so monitor resumes alerting eventually
+# without the user having to remember to delete it.
+if (Test-Path $intentStopFile) {
+    $sentinelAge = (Get-Date) - (Get-Item $intentStopFile).LastWriteTime
+    if ($sentinelAge.TotalDays -lt 7) {
+        # Append a quiet log entry so we can verify the monitor is alive
+        # and just suppressed (vs. broken). One line per tick is fine,
+        # the local log doesn't go to Telegram and rotates organically.
+        try {
+            $line = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] suppressed | sentinel age=$([int]$sentinelAge.TotalMinutes)min"
+            Add-Content -Path $alertLog -Value $line -Encoding UTF8
+        } catch { }
+        exit 0
+    }
+}
 
 
 # -- .env parser (needs TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID) -----

@@ -4837,6 +4837,57 @@ def _confirm_live_mode() -> bool:
 
 _LOCK_PATH = Path(__file__).resolve().parent / ".engine.lock"
 
+# 2026-05-04: Intentional-stop sentinel.
+# The external monitor (scripts/monitor.ps1) reads .health.json every 60s
+# and alerts when the bot looks dead (file missing, stale, etc). When the
+# user kills the bot on purpose (Ctrl-C, taskkill, terminal close) those
+# alerts are noise — the user already knows. This sentinel is written by
+# our signal handler (graceful shutdown only) and deleted on startup, so:
+#
+#   sentinel present  → monitor stays silent (bot off intentionally)
+#   sentinel absent   → monitor alerts normally (bot crashed or never ran)
+#
+# Crash detection still works because:
+#   - SIGKILL / OS hard-kill: signal handlers don't run → no sentinel
+#   - Python uncaught exception: signal handlers don't run → no sentinel
+#   - atexit fires on exception, but we DON'T write the sentinel from
+#     atexit / _release_engine_lock — only from the signal handler.
+_INTENTIONAL_STOP_PATH = (
+    Path(__file__).resolve().parent / ".bot_stopped_intentionally"
+)
+
+
+def _write_intentional_stop_sentinel(reason: str = "signal") -> None:
+    """Mark this shutdown as user-initiated so the monitor stays quiet.
+
+    Called from the SIGINT/SIGTERM/SIGBREAK handler before lock release.
+    Best-effort — never raise, never block.
+    """
+    try:
+        import json as _json
+        from datetime import datetime as _dt, timezone as _tz
+        payload = {
+            "ts": _dt.now(_tz.utc).isoformat(),
+            "pid": os.getpid(),
+            "reason": reason,
+        }
+        _INTENTIONAL_STOP_PATH.write_text(_json.dumps(payload))
+    except Exception:
+        # Never let sentinel write block shutdown.
+        pass
+
+
+def _clear_intentional_stop_sentinel() -> None:
+    """Delete the intentional-stop sentinel on bot startup.
+
+    A fresh launch means the bot is alive again and the monitor must
+    resume its normal alerting. Best-effort — never raise.
+    """
+    try:
+        _INTENTIONAL_STOP_PATH.unlink(missing_ok=True)
+    except Exception:
+        pass
+
 
 def _is_pid_alive(pid: int) -> bool:
     """Return True if a process with this PID is currently running.
@@ -4914,9 +4965,18 @@ def _acquire_engine_lock() -> bool:
         print(f"[FATAL] Cannot write lock file {_LOCK_PATH}: {exc}", file=sys.stderr)
         return False
 
+    # 2026-05-04: clear any leftover intentional-stop sentinel — we're
+    # alive again, monitor must resume normal alerting.
+    _clear_intentional_stop_sentinel()
+
     atexit.register(_release_engine_lock)
 
     def _signal_release(signum, _frame):
+        # 2026-05-04: write sentinel BEFORE releasing the lock so the
+        # monitor sees both "lock gone" and "intentional stop" together.
+        # Only the signal path writes this — exceptions / SIGKILL won't,
+        # which is exactly what we want (those are real crashes).
+        _write_intentional_stop_sentinel(reason=f"signal_{signum}")
         _release_engine_lock()
         # Propagate the default behavior for the signal.
         signal.signal(signum, signal.SIG_DFL)
