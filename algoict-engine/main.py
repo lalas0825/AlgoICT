@@ -784,7 +784,7 @@ async def _run_premarket_scan(components: Components, state: EngineState) -> Non
         logger.info("GEX module not available — skipping gamma scan")
 
     # ── Seed tracked_levels with PDH/PDL/PWH/PWL ──────────────────────
-    # The NY AM strategy needs swept liquidity levels to fire — without
+    # The strategy needs swept liquidity levels to fire — without
     # this seed, `tracked_levels` stays [] forever and every kill-zone
     # evaluation rejects on "no aligned liquidity sweep".
     #
@@ -793,20 +793,82 @@ async def _run_premarket_scan(components: Components, state: EngineState) -> Non
     # PWH are polluted by the running session/week high — e.g. on
     # 2026-04-22 evening PWH read 27,138 (forming week high) instead of
     # the real previous-week high of 26,883.
+    #
+    # 2026-05-04 fix: this path was OVERWRITING tracked_levels with fresh
+    # PDH/PDL/PWH/PWL but WITHOUT calling backfill_swept_flags or
+    # preserving session levels (AH/AL/LH/LL/NAH/NAL/NPH/NPL). The
+    # daily-reset path (_reset_for_new_day) already does both correctly,
+    # so pre-market scan would WIPE today's already-detected sweeps and
+    # any preserved session levels. Caught live 2026-05-04: bot reset at
+    # 10:04:31 had 7 levels with SWEPT flags + 3 preserved session levels;
+    # pre-market scan at 10:04:46 overwrote with 4 fresh-no-sweep levels,
+    # making strategy think NO sweeps had happened today.
+    #
+    # Fix: mirror the _reset_for_new_day logic — preserve session levels
+    # before overwrite, run backfill_swept_flags, re-attach preserved.
     try:
         if not state.bars_1min.empty:
             tf_mgr = components.tf_manager
             df_daily = tf_mgr.aggregate(state.bars_1min, "D")
             df_weekly = tf_mgr.aggregate(state.bars_1min, "W")
             as_of = state.bars_1min.index[-1]
+
+            # Snapshot session levels BEFORE we re-seed (they live in
+            # tracked_levels but build_key_levels only returns daily/weekly).
+            from detectors.liquidity import SESSION_LEVEL_TYPES as _SLT
+            preserved = [
+                lvl for lvl in (components.detectors.get("tracked_levels") or [])
+                if getattr(lvl, "type", "") in _SLT
+                and not getattr(lvl, "swept", False)
+            ]
+
             levels = components.detectors["liquidity"].build_key_levels(
                 df_daily=df_daily, df_weekly=df_weekly, as_of_ts=as_of,
             )
+
+            # Backfill swept flags from warmup bars (essential — otherwise
+            # all 4 daily/weekly levels show up as "active" even though
+            # they were swept hours/days ago).
+            try:
+                df_5min = tf_mgr.aggregate(state.bars_1min, "5min")
+                if df_5min is not None and not df_5min.empty:
+                    components.detectors["liquidity"].backfill_swept_flags(
+                        levels, df_5min,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "tracked_levels premarket backfill failed: %s", exc,
+                )
+
+            # Re-attach preserved session levels (also run them through
+            # backfill so any session level newly swept since previous
+            # seed gets the SWEPT flag).
+            if preserved:
+                try:
+                    df_5min = tf_mgr.aggregate(state.bars_1min, "5min")
+                    if df_5min is not None and not df_5min.empty:
+                        components.detectors["liquidity"].backfill_swept_flags(
+                            preserved, df_5min,
+                        )
+                except Exception:
+                    pass
+                # Drop preserved that the backfill just stamped as swept —
+                # only un-swept session levels are useful as fresh targets.
+                preserved = [
+                    lvl for lvl in preserved
+                    if not getattr(lvl, "swept", False)
+                ]
+                levels.extend(preserved)
+
             components.detectors["tracked_levels"] = levels
             logger.info(
-                "tracked_levels seeded (as_of=%s): %d levels (%s)",
-                as_of, len(levels),
-                ", ".join(f"{lvl.type}@{lvl.price:.2f}" for lvl in levels),
+                "tracked_levels seeded (as_of=%s): %d levels "
+                "(preserved %d session levels) (%s)",
+                as_of, len(levels), len(preserved),
+                ", ".join(
+                    f"{lvl.type}@{lvl.price:.2f}{'/SWEPT' if lvl.swept else ''}"
+                    for lvl in levels
+                ),
             )
         else:
             logger.warning("tracked_levels: no bars yet, skipping seed")
