@@ -103,3 +103,4 @@ algoict-engine/.health.json
 algoict-engine/.monitor_state.json
 algoict-engine/.monitor_alerts.log
 algoict-engine/engine_stdout.log
+algoict-engine/.sb_stopped_setups.json

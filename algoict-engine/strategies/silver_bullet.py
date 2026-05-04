@@ -260,6 +260,94 @@ class SilverBulletStrategy:
         # (19min after 30min cooldown expired), lost identically. -$384.
         self._last_fired_fvg = None
 
+        # 2026-05-04 — persist stopped-setup cooldown across restarts.
+        # When bot restarts mid-session, in-memory state is lost. Without
+        # persistence, the strategy can re-fire the same setup that just
+        # lost. Caught live 2026-05-04: bot restarted at 10:11 CT after
+        # 2 same-setup losses, immediately re-fired same entry 27857.
+        # Persistence: write to .sb_stopped_setups.json on each loss,
+        # read on startup, restore _last_stopped_* state if recent enough.
+        self._stopped_setups_file = (
+            Path(__file__).resolve().parent.parent / ".sb_stopped_setups.json"
+        )
+        self._restore_stopped_setup_state()
+
+    def _restore_stopped_setup_state(self) -> None:
+        """Restore _last_stopped_* state from disk on startup.
+
+        If the bot restarts mid-day after a losing trade, in-memory
+        cooldown state is lost. This reads the persisted file and
+        repopulates state if the recorded loss is recent enough
+        (within SB_SAME_SETUP_COOLDOWN_MIN). 2026-05-04 fix.
+        """
+        try:
+            if not self._stopped_setups_file.exists():
+                return
+            import json as _json
+            with open(self._stopped_setups_file, "r") as f:
+                data = _json.load(f)
+            if not data:
+                return
+            # Take the LATEST stopped setup (newest by ts)
+            latest = max(data, key=lambda r: r.get("ts", ""))
+            ts_str = latest.get("ts")
+            if not ts_str:
+                return
+            ts = pd.Timestamp(ts_str)
+            now = pd.Timestamp.now(tz=getattr(ts, "tz", None) or "US/Central")
+            # Convert if needed
+            if ts.tz is None and now.tz is not None:
+                ts = ts.tz_localize(now.tz)
+            cooldown_min = config.cfg("SB_SAME_SETUP_COOLDOWN_MIN", 240)
+            age_min = (now - ts).total_seconds() / 60
+            if age_min < cooldown_min:
+                self._last_stopped_entry_price = float(latest["entry_price"])
+                self._last_stopped_ts = ts
+                self._last_stopped_kz = str(latest.get("kill_zone", ""))
+                logger.info(
+                    "silver_bullet: restored stopped-setup cooldown from disk — "
+                    "entry %.2f in %s, %.0fmin ago (cooldown %dmin → %.0fmin remaining)",
+                    self._last_stopped_entry_price,
+                    self._last_stopped_kz, age_min, cooldown_min,
+                    cooldown_min - age_min,
+                )
+        except Exception as exc:
+            logger.warning("Restore stopped-setup state failed: %s", exc)
+
+    def _persist_stopped_setup(self, entry_price: float, ts, kz: str) -> None:
+        """Append today's stopped setup to disk for restart recovery."""
+        try:
+            import json as _json
+            data = []
+            if self._stopped_setups_file.exists():
+                try:
+                    with open(self._stopped_setups_file, "r") as f:
+                        data = _json.load(f) or []
+                except Exception:
+                    data = []
+            # Drop entries older than 24h to keep file tidy
+            cutoff = pd.Timestamp.now(tz="US/Central") - pd.Timedelta(hours=24)
+            fresh = []
+            for r in data:
+                try:
+                    r_ts = pd.Timestamp(r.get("ts", ""))
+                    if r_ts.tz is None:
+                        r_ts = r_ts.tz_localize("US/Central")
+                    if r_ts >= cutoff:
+                        fresh.append(r)
+                except Exception:
+                    continue
+            ts_iso = ts.isoformat() if ts is not None else pd.Timestamp.now(tz="US/Central").isoformat()
+            fresh.append({
+                "entry_price": entry_price,
+                "ts": ts_iso,
+                "kill_zone": kz,
+            })
+            with open(self._stopped_setups_file, "w") as f:
+                _json.dump(fresh, f, indent=2)
+        except Exception as exc:
+            logger.warning("Persist stopped-setup failed: %s", exc)
+
     def _set_rejection(
         self,
         ts,
@@ -1070,6 +1158,13 @@ class SilverBulletStrategy:
                 self._last_stopped_kz or "?",
                 self._last_stopped_ts,
             )
+            # 2026-05-04 — persist to disk so restart preserves cooldown.
+            if self._last_stopped_entry_price is not None and self._last_stopped_ts is not None:
+                self._persist_stopped_setup(
+                    self._last_stopped_entry_price,
+                    self._last_stopped_ts,
+                    self._last_stopped_kz,
+                )
             # 2026-05-04 — ICT canonical: a stopped FVG is dead. Mark the
             # FVG used for entry as mitigated so the strategy can't re-pick
             # it once the same-setup cooldown expires. Caught live where
