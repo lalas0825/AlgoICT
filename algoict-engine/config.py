@@ -163,7 +163,12 @@ KILL_SWITCH_AMOUNT = 750      # $750 max daily loss from kill switch
 #   SB_SAME_SETUP_PRICE_TOL_PTS           — strategy "same" tolerance
 KILL_SWITCH_SAME_SETUP_LOSSES = 2
 KILL_SWITCH_SAME_SETUP_PRICE_TOL_PTS = 5.0
-SB_SAME_SETUP_COOLDOWN_MIN = 30
+# 2026-05-04 — bumped 30→240 min after live caught same-setup re-fire:
+# Trade 1 lost at 08:59 (cooldown ARMED 30min → expired 09:29).
+# Trade 2 fired at 09:48 with IDENTICAL entry 27857/stop 27841 (49min later,
+# 19min after cooldown expired) → lost same way. Both trades = -$384 net.
+# 240min covers a full KZ window so same-setup can't repeat within session.
+SB_SAME_SETUP_COOLDOWN_MIN = 240
 SB_SAME_SETUP_PRICE_TOL_PTS = 5.0
 
 # 2026-04-30 v19a — DISABLED time-based age caps for sweeps and structure.

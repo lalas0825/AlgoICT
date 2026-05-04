@@ -251,6 +251,15 @@ class SilverBulletStrategy:
         self._last_stopped_ts = None
         self._last_stopped_kz: str = ""
 
+        # 2026-05-04 hardening — track the FVG used in the most recent
+        # signal so notify_trade_closed (on a loss) can mark it
+        # mitigated. ICT canonical: a stopped FVG is dead. Without this,
+        # the strategy would re-pick the SAME FVG once cooldown expired
+        # and fire the IDENTICAL setup. Caught live 2026-05-04 NY AM:
+        # trade 1 lost at 27857, trade 2 fired same entry 49min later
+        # (19min after 30min cooldown expired), lost identically. -$384.
+        self._last_fired_fvg = None
+
     def _set_rejection(
         self,
         ts,
@@ -980,6 +989,9 @@ class SilverBulletStrategy:
             kill_zone=active_zone,
         )
         self._last_evaluated_bar_ts = ts
+        # 2026-05-04 — save FVG ref so notify_trade_closed can mitigate
+        # it on a loss (ICT canonical: stopped FVG is dead).
+        self._last_fired_fvg = fvg
 
         logger.info(
             "EVAL silver_bullet [%s]: confluence=%d/%d (SB), "
@@ -1058,6 +1070,25 @@ class SilverBulletStrategy:
                 self._last_stopped_kz or "?",
                 self._last_stopped_ts,
             )
+            # 2026-05-04 — ICT canonical: a stopped FVG is dead. Mark the
+            # FVG used for entry as mitigated so the strategy can't re-pick
+            # it once the same-setup cooldown expires. Caught live where
+            # trade 1 lost on FVG 27,853-57, cooldown expired 30min later,
+            # trade 2 fired identical setup on same FVG, lost identically.
+            if self._last_fired_fvg is not None:
+                try:
+                    setattr(self._last_fired_fvg, "mitigated", True)
+                    logger.info(
+                        "silver_bullet: FVG mitigated on stopout — "
+                        "%s [%.2f-%.2f] now dead for the day",
+                        getattr(self._last_fired_fvg, "direction", "?"),
+                        getattr(self._last_fired_fvg, "bottom", 0.0),
+                        getattr(self._last_fired_fvg, "top", 0.0),
+                    )
+                except Exception as exc:
+                    logger.debug("FVG mitigate-on-stopout failed: %s", exc)
+                finally:
+                    self._last_fired_fvg = None
         except Exception as exc:
             logger.debug("notify_trade_closed failed: %s", exc)
 
@@ -1067,3 +1098,5 @@ class SilverBulletStrategy:
         self._trades_by_zone = {z: 0 for z in self.KILL_ZONES}
         self._last_evaluated_bar_ts = None
         self._phantom_cooldown_until = None
+        # 2026-05-04 — clear FVG ref on daily reset; new day = new setups.
+        self._last_fired_fvg = None
