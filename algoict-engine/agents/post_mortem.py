@@ -52,7 +52,12 @@ try:
 except ImportError:
     ANTHROPIC_AVAILABLE = False
 
-from config import ANTHROPIC_API_KEY, AI_MODEL_POST_MORTEM, MAX_CONFLUENCE
+from config import (
+    ANTHROPIC_API_KEY,
+    AI_MODEL_POST_MORTEM,
+    MAX_CONFLUENCE,
+    SB_APPLICABLE_MAX,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -257,15 +262,60 @@ class PostMortemAgent:
         return self._build_result(data, trade)
 
     def _build_prompt(self, trade: dict, ctx: dict) -> str:
-        """Build the analysis prompt for Claude."""
+        """Build the analysis prompt for Claude.
+
+        2026-05-04 — strategy-aware. Silver Bullet has a different framework
+        than NY AM Reversal:
+          - SB scoring is /10 (8 SB-applicable factors), not /19
+          - SB does NOT require HTF bias (informational only — sweep determines
+            direction, not HTF)
+          - SB gates are: sweep + 1min FVG + 5min MSS/BOS + framework ≥ 10pt
+          - SB enters at FVG.proximal + 1tick (NOT OTE 61.8-78.6 retrace)
+          - Common SB failure modes: sweep stale/invalidated, FVG too thin,
+            5min struct misaligned, KZ chop, framework too short.
+        """
         ict_concepts = trade.get("ict_concepts", [])
         if isinstance(ict_concepts, list):
             ict_str = ", ".join(ict_concepts) if ict_concepts else "none specified"
         else:
             ict_str = str(ict_concepts)
 
+        strategy = str(trade.get("strategy", "unknown")).lower()
+        is_sb = strategy == "silver_bullet"
+
+        # Strategy-specific framework block
+        if is_sb:
+            framework_block = f"""STRATEGY: Silver Bullet v19a-WIDE (FVG-only, no HTF requirement)
+- KZ: London 01:00-07:30 CT, NY AM 07:30-12:00 CT, NY PM 12:00-15:00 CT
+- ENTRY MODEL: opposite-side liquidity sweep + 1-min FVG forms in window +
+  5-min MSS/BOS aligned + framework >= 10pt to nearest unswept BSL/SSL pool
+- DIRECTION: determined by 1-min FVG direction (NOT by HTF bias).
+  HTF bias is INFORMATIONAL only — SB can countertrend HTF if structural setup is valid.
+- ENTRY: FVG.proximal +/- 1 tick (NOT OTE retrace 61.8-78.6%)
+- STOP: FVG candle 1 extreme +/- 1 tick (structural, not arbitrary)
+- TARGET: nearest unswept liquidity pool (PDH/PDL/PWH/PWL/AH/AL/LH/LL/NAH/NAL/NPH/NPL),
+  trail last 5min swing if trade-management=trailing
+- SCORING: confluence_score is /{SB_APPLICABLE_MAX} (8 SB-applicable factors).
+  Higher score = better quality but NOT a hard gate. WR ~63% across instruments.
+- COMMON FAILURE MODES:
+  * sweep was technically valid but already faded (low conviction)
+  * FVG too thin (1-2pt gap on noise candle, not real displacement)
+  * 5min MSS happened but immediate counter-CHoCH followed (chop)
+  * Trade fired into HTF resistance/support without enough framework
+  * VPIN was rising into trade (toxic flow, institutional fade likely)"""
+            confluence_max = SB_APPLICABLE_MAX
+        else:
+            framework_block = f"""STRATEGY: NY AM Reversal (OTE retracement)
+- KZ: NY AM (08:30-11:00 CT canonical)
+- ENTRY MODEL: HTF bias + 5min OB + 15min structure + OTE retrace 61.8-78.6%
+- DIRECTION: determined by HTF (Daily + Weekly) bias
+- SCORING: confluence_score is /{MAX_CONFLUENCE} (full 19-factor scoring applies)"""
+            confluence_max = MAX_CONFLUENCE
+
         return f"""You are an expert ICT (Inner Circle Trader) analyst reviewing a losing MNQ futures trade.
 Respond ONLY with a valid JSON object, no other text, no code fences.
+
+{framework_block}
 
 LOSING TRADE DATA:
 - Trade ID: {trade.get("id", "unknown")}
@@ -278,27 +328,34 @@ LOSING TRADE DATA:
 - Loss: ${abs(float(trade.get("pnl", 0))):.2f}
 - Contracts: {trade.get("contracts", 1)}
 - Stop size: {trade.get("stop_points", "N/A")} points
-- Confluence score: {trade.get("confluence_score", "N/A")}/{MAX_CONFLUENCE}
+- Confluence score: {trade.get("confluence_score", "N/A")}/{confluence_max}{" (SB-applicable subset; 0-3 = low quality, 4-6 = standard, 7+ = high)" if is_sb else ""}
 - ICT concepts used: {ict_str}
 - Kill Zone: {trade.get("kill_zone", "N/A")}
 
 MARKET CONTEXT AT TIME OF TRADE:
-- Weekly HTF bias: {ctx.get("weekly_bias", "N/A")}
-- Daily HTF bias: {ctx.get("daily_bias", "N/A")}
-- 15min structure: {ctx.get("structure_15min", "N/A")}
+- Weekly HTF bias: {ctx.get("weekly_bias", "N/A")}{" (informational for SB)" if is_sb else ""}
+- Daily HTF bias: {ctx.get("daily_bias", "N/A")}{" (informational for SB)" if is_sb else ""}
+- 5min structure: {ctx.get("structure_5min", ctx.get("structure_15min", "N/A"))}
 - Active FVGs: {ctx.get("active_fvgs", "N/A")}
+- Recent sweeps: {ctx.get("recent_sweeps", "N/A")}
 - VPIN at entry: {ctx.get("vpin", "N/A")}
 - News events today: {ctx.get("news_events", "none")}
 - Price action after stop: {ctx.get("price_after_stop", "N/A")}
 
 ANALYSIS REQUIRED:
-Analyze this trade from an ICT perspective. What went wrong?
+Analyze this trade against the strategy's actual framework above. Be specific
+about which gate or condition failed in PRACTICE (the gates all PASSED to fire,
+so the failure is qualitative — was the setup low-conviction? Was the sweep
+already faded? Did 5min struct flip immediately?).
+
+Do NOT invent failure modes from a different strategy (e.g. don't blame "OTE
+fib retrace" for an SB trade — SB doesn't use OTE).
 
 Respond with this exact JSON structure:
 {{
-  "reason": "<1-2 sentences: why did this trade fail?>",
-  "htf_analysis": "<Was the HTF bias correctly read? What was missed?>",
-  "entry_analysis": "<Was entry timing/location correct? Any premature entry signs?>",
+  "reason": "<1-2 sentences: why did this trade fail in this strategy's terms?>",
+  "htf_analysis": "<{'For SB: HTF is informational only. Was bias aligned or against the trade? If against, was the setup strong enough to justify countertrend?' if is_sb else 'Was the HTF bias correctly read? What was missed?'}>",
+  "entry_analysis": "<{'For SB: Was the FVG proximal entry timing right? Was the FVG significant or noise?' if is_sb else 'Was entry timing/location correct? Any premature entry signs?'}>",
   "stop_analysis": "<Was stop placement appropriate? Too tight, too wide, wrong location?>",
   "pattern_to_avoid": "<Specific ICT pattern or scenario to avoid in future>",
   "recommendation": "<ONE concrete, actionable adjustment to rules or parameters>",
