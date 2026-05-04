@@ -4965,10 +4965,6 @@ def _acquire_engine_lock() -> bool:
         print(f"[FATAL] Cannot write lock file {_LOCK_PATH}: {exc}", file=sys.stderr)
         return False
 
-    # 2026-05-04: clear any leftover intentional-stop sentinel — we're
-    # alive again, monitor must resume normal alerting.
-    _clear_intentional_stop_sentinel()
-
     atexit.register(_release_engine_lock)
 
     def _signal_release(signum, _frame):
@@ -5017,6 +5013,13 @@ def main() -> int:
 
     if not _acquire_engine_lock():
         return 1
+
+    # 2026-05-04: clear any leftover intentional-stop sentinel — we're
+    # alive again, the external monitor must resume alerting. Done here
+    # (in main(), not inside _acquire_engine_lock) so unit tests that
+    # exercise the lock directly don't accidentally wipe a real
+    # operator-set sentinel.
+    _clear_intentional_stop_sentinel()
 
     if args.mode == "live":
         if not _confirm_live_mode():
