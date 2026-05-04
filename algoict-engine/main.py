@@ -633,8 +633,12 @@ def _init_components(
             logger.warning("Telegram unavailable: %s", exc)
 
     # ── Optional: VPIN engine (shield-enabled) ────────────────────────
+    # 2026-05-04: Gated on config.VPIN_SHIELD_ENABLED (default False).
+    # The 7-yr backtest was run without VPIN, so for live-vs-backtest
+    # parity the shield stays off until proven net-positive in live A/B.
     vpin = None
-    if VPINEngine is not None:
+    vpin_enabled = bool(getattr(config, "VPIN_SHIELD_ENABLED", False))
+    if VPINEngine is not None and vpin_enabled:
         try:
             vpin = VPINEngine(
                 risk_manager=risk,
@@ -645,6 +649,11 @@ def _init_components(
             logger.info("VPIN engine ready (shield-enabled)")
         except Exception as exc:
             logger.warning("VPIN unavailable: %s", exc)
+    elif VPINEngine is not None:
+        logger.info(
+            "VPIN engine DISABLED (config.VPIN_SHIELD_ENABLED=False) — "
+            "backtest parity mode; toxicity gates inactive"
+        )
 
     # ── Optional: GEX engine ──────────────────────────────────────────
     gex_engine = None

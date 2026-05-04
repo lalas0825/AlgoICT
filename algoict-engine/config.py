@@ -289,6 +289,19 @@ HEARTBEAT_FLATTEN = True      # Flatten all on heartbeat failure
 # ---------------------------------------------------------------------------
 # VPIN Toxicity Levels
 # ---------------------------------------------------------------------------
+# 2026-05-04: VPIN_SHIELD_ENABLED defaults to False for live-vs-backtest
+# parity. The 7-yr Silver Bullet backtest ($1.17M NQ, $818K ES, $1.36M YM)
+# was run WITHOUT VPIN — the backtester never imports the toxicity module
+# and no setup is gated on VPIN. In live, VPIN was halting/down-sizing
+# trades that the backtest took at full size, creating a measurable
+# divergence (e.g. 2026-05-04 NY PM trade fired at VPIN 0.621 with size
+# reduced 4→3 contracts). To compare live performance to backtest fairly,
+# the shield is OFF: VPINEngine is not initialized, set_vpin_overrides
+# is never called, no halt/flatten triggers from VPIN.
+#
+# Re-enable later if a live A/B shows VPIN's missed-trade cost is smaller
+# than its phantom-loser-prevention benefit. Until then, parity > theory.
+VPIN_SHIELD_ENABLED = False
 VPIN_CALM = 0.35              # < 0.35: Calm — normal trading
 VPIN_NORMAL = 0.45            # 0.35-0.45: Normal — normal trading
 VPIN_ELEVATED = 0.55          # 0.45-0.55: Elevated — alert only
