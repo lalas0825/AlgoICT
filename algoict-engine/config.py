@@ -463,6 +463,36 @@ SB_APPLICABLE_FACTORS = {
 # The SB-applicable denominator — sum of those 8 factors' weights.
 SB_APPLICABLE_MAX = sum(CONFLUENCE_WEIGHTS[k] for k in SB_APPLICABLE_FACTORS)  # 10
 
+# 2026-05-05 — SB_LIVE_FACTORS: the subset of SB_APPLICABLE_FACTORS that
+# can actually score under the current engine configuration. The full
+# theoretical max (SB_APPLICABLE_MAX = 10) assumes every data feed is
+# wired up: VPIN ticks, GEX options OI, SWC sentiment, OB detection.
+# In live today:
+#   * VPIN_SHIELD_ENABLED = False  → vpin_validated_sweep, vpin_quality_session = 0
+#   * No GEX options data loader   → gex_wall_alignment, gamma_regime = 0
+#   * SWC active (Finnhub + news)  → sentiment_alignment scoreable
+#   * OB detector wired            → order_block scoreable
+#   * HTF bias function wired      → htf_bias_aligned scoreable
+#   * tracked_levels seeded        → target_at_pdh_pdl scoreable
+#
+# So the LIVE-attainable max is 5 pts. Logs + post_mortem + Telegram
+# should display X / SB_LIVE_MAX so a "2/5" reads as "40% of attainable
+# quality" not "20% of theoretical-max-with-modules-we-don't-run".
+#
+# When VPIN/GEX get re-enabled, add their factor names back to
+# SB_LIVE_FACTORS to lift the live max accordingly.
+SB_LIVE_FACTORS = {
+    "target_at_pdh_pdl",      # +1 — tracked_levels active
+    "order_block",            # +2 — OB detector active
+    "htf_bias_aligned",       # +1 — HTF bias function wired
+    "sentiment_alignment",    # +1 — SWC active
+    # +0 — gex_wall_alignment   (no options loader)
+    # +0 — gamma_regime         (no options loader)
+    # +0 — vpin_validated_sweep (VPIN_SHIELD_ENABLED=False)
+    # +0 — vpin_quality_session (VPIN_SHIELD_ENABLED=False)
+}
+SB_LIVE_MAX = sum(CONFLUENCE_WEIGHTS[k] for k in SB_LIVE_FACTORS)  # 5
+
 # ---------------------------------------------------------------------------
 # Timeframes
 # ---------------------------------------------------------------------------

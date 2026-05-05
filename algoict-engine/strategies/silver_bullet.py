@@ -92,19 +92,26 @@ def sb_applicable_score(breakdown: dict) -> tuple[int, int]:
     """
     Compute the SB-applicable sub-score from a ConfluenceResult breakdown.
 
-    Returns (score, max) where:
-      score = sum of pts from factors that actually differentiate SB
-              setup quality (see config.SB_APPLICABLE_FACTORS)
-      max   = the theoretical ceiling (config.SB_APPLICABLE_MAX = 10)
+    Returns (score, live_max) where:
+      score    = sum of pts from factors that actually differentiate SB
+                 setup quality AND are scoreable under current engine
+                 config (see config.SB_LIVE_FACTORS)
+      live_max = sum of weights of currently-scoreable factors
+                 (config.SB_LIVE_MAX, default 5 with VPIN+GEX off)
 
     The full 19-pt score is kept on the Signal/Trade for DB compatibility.
     This sub-score is what we log + send to Telegram so the number is
-    interpretable against the SB-specific scale documented in
-    SILVER_BULLET_STRATEGY_GUIDE.md §8.
+    interpretable against the LIVE attainable scale (e.g. "3/5" reads as
+    "got 3 of the 5 quality factors that can actually score today").
+
+    2026-05-05: switched denominator from SB_APPLICABLE_MAX (10
+    theoretical) to SB_LIVE_MAX (5 live) so "0/10" readings stop being
+    misleading when 5 of those 10 points come from VPIN+GEX modules
+    that aren't running.
     """
-    applicable = config.SB_APPLICABLE_FACTORS
-    score = sum(pts for key, pts in breakdown.items() if key in applicable)
-    return score, config.SB_APPLICABLE_MAX
+    live = config.SB_LIVE_FACTORS
+    score = sum(pts for key, pts in breakdown.items() if key in live)
+    return score, config.SB_LIVE_MAX
 
 
 # Minutes before the end of a Silver Bullet window in which we refuse to
@@ -1106,28 +1113,30 @@ class SilverBulletStrategy:
         # longer reject on it.
 
         # ── 9. Build signal ────────────────────────────────────────────
-        # 2026-05-01 — confluence cleanup: SB has 8 applicable factors out
-        # of the 19-pt total. The other 11 are noise:
-        #   - 7 structural gates (sweep, FVG, OB, MSS, KZ, framework) — these
-        #     are HARD GATES; if absent the signal never reaches the scorer,
-        #     so they always score the same → don't discriminate
-        #   - 2 N/A (OTE fib, HTF OB/FVG) — SB enters on FVG proximal not
-        #     OTE retrace, doesn't scope HTF overlay
-        #   - 2 already counted in SB-applicable subset
-        # Show only the SB-applicable score (out of SB_APPLICABLE_MAX=10)
-        # and store ONLY those factors in the breakdown. Cleaner logs +
-        # Telegram + dashboard.
+        # 2026-05-01 — confluence cleanup. SB has 8 SB_APPLICABLE_FACTORS
+        # out of the 19-pt total — but only the SB_LIVE_FACTORS subset is
+        # actually scoreable today (VPIN+GEX modules off, so 4 of 8 always
+        # score 0). Display and storage use the LIVE subset so a "3/5"
+        # log reads as "3 of the 5 quality factors that can fire today",
+        # not "3 of 10 with 5 dead points dragging it down".
+        #
+        # Structural gates (sweep, FVG, OB, MSS, KZ, framework, stop floor,
+        # 2R target) are HARD — if absent the signal never reaches the
+        # scorer, so the score is purely a quality bonus on top of "all
+        # gates passed". 0/5 means "trade is structurally valid but no
+        # extras aligned"; 5/5 means "trade is structurally valid AND all
+        # 4 extras aligned".
         full_breakdown = dict(conf.breakdown)
         sb_breakdown = {
             k: v for k, v in full_breakdown.items()
-            if k in config.SB_APPLICABLE_FACTORS
+            if k in config.SB_LIVE_FACTORS
         }
         sb_score = sum(sb_breakdown.values())
-        # Filter reasons to those tied to SB-applicable factors.
+        # Filter reasons to those tied to SB-live factors only.
         sb_reasons = [
             r for r in conf.reasons
             if any(f.replace("_", " ") in r.lower() or f in r.lower()
-                   for f in config.SB_APPLICABLE_FACTORS)
+                   for f in config.SB_LIVE_FACTORS)
         ]
 
         signal = Signal(
@@ -1150,10 +1159,11 @@ class SilverBulletStrategy:
         self._last_fired_fvg = fvg
 
         logger.info(
-            "EVAL silver_bullet [%s]: confluence=%d/%d (SB), "
-            "signal=fire, reason=fired (framework=%.1fpts target=%s@%.2f) | %s",
-            _ts_hm(ts), sb_score, config.SB_APPLICABLE_MAX,
-            framework_pts, target.type, target_price, signal,
+            "EVAL silver_bullet [%s]: confluence=%d/%d (SB live), "
+            "signal=fire, reason=fired (framework=%.1fpts %.2fR "
+            "target=%s@%.2f) | %s",
+            _ts_hm(ts), sb_score, config.SB_LIVE_MAX,
+            framework_pts, actual_rr, target.type, target_price, signal,
         )
         return signal
 

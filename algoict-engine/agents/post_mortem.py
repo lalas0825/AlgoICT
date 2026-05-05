@@ -57,6 +57,8 @@ from config import (
     AI_MODEL_POST_MORTEM,
     MAX_CONFLUENCE,
     SB_APPLICABLE_MAX,
+    SB_LIVE_FACTORS,
+    SB_LIVE_MAX,
 )
 
 logger = logging.getLogger(__name__)
@@ -285,25 +287,64 @@ class PostMortemAgent:
 
         # Strategy-specific framework block
         if is_sb:
+            live_factors_str = ", ".join(sorted(SB_LIVE_FACTORS))
             framework_block = f"""STRATEGY: Silver Bullet v19a-WIDE (FVG-only, no HTF requirement)
 - KZ: London 01:00-07:30 CT, NY AM 07:30-12:00 CT, NY PM 12:00-15:00 CT
-- ENTRY MODEL: opposite-side liquidity sweep + 1-min FVG forms in window +
-  5-min MSS/BOS aligned + framework >= 10pt to nearest unswept BSL/SSL pool
-- DIRECTION: determined by 1-min FVG direction (NOT by HTF bias).
-  HTF bias is INFORMATIONAL only — SB can countertrend HTF if structural setup is valid.
+
+HARD GATES (all 6 passed if a trade fired — these are NOT analysis points):
+  1. Kill zone active (London / NY AM / NY PM CT)
+  2. 1-min FVG (not yet mitigated) formed inside the active KZ window
+  3. Opposite-side liquidity sweep, NOT invalidated by close-back:
+     long → swept SSL/PDL/PWL/AL/LL/NAL/NPL/equal_lows
+     short → swept BSL/PDH/PWH/AH/LH/NAH/NPH/equal_highs
+  4. 5-min MSS/BOS/CHoCH aligned with FVG direction (recent: <60min old,
+     <2 opposite events in last 30min, no immediate counter-CHoCH)
+  5. Stop ≥ 15 pts (config.SB_MIN_STOP_POINTS) — sweep must be of REAL
+     liquidity (D1/W1 swings on MNQ are 20-50pt), not 5-7pt noise pivots
+  6. Target ≥ 2R from stop (config.SB_MIN_TARGET_RR) — picks nearest
+     unswept pool that satisfies 2× stop_pts. Mathematical floor for
+     positive expectancy at backtest-historical WR ~63%.
+
+ENTRY MODEL:
+- DIRECTION: determined by 1-min FVG direction (NOT HTF bias).
+  HTF bias is INFORMATIONAL only — SB can countertrend HTF if all
+  6 hard gates pass.
 - ENTRY: FVG.proximal +/- 1 tick (NOT OTE retrace 61.8-78.6%)
-- STOP: FVG candle 1 extreme +/- 1 tick (structural, not arbitrary)
-- TARGET: nearest unswept liquidity pool (PDH/PDL/PWH/PWL/AH/AL/LH/LL/NAH/NAL/NPH/NPL),
-  trail last 5min swing if trade-management=trailing
-- SCORING: confluence_score is /{SB_APPLICABLE_MAX} (8 SB-applicable factors).
-  Higher score = better quality but NOT a hard gate. WR ~63% across instruments.
-- COMMON FAILURE MODES:
-  * sweep was technically valid but already faded (low conviction)
-  * FVG too thin (1-2pt gap on noise candle, not real displacement)
-  * 5min MSS happened but immediate counter-CHoCH followed (chop)
-  * Trade fired into HTF resistance/support without enough framework
-  * VPIN was rising into trade (toxic flow, institutional fade likely)"""
-            confluence_max = SB_APPLICABLE_MAX
+- STOP: FVG candle-1 extreme +/- 1 tick (structural)
+- TARGET: nearest unswept pool ≥ 2R away
+- TRAIL: last 5-min swing if trade-management=trailing
+
+QUALITY EXTRAS (soft score — does NOT gate fire, just signals quality):
+- confluence_score is /{SB_LIVE_MAX} (LIVE-attainable max, not theoretical 10).
+  GEX + VPIN factors auto-zero because those modules aren't running.
+- Live factors that CAN score: {live_factors_str}
+  * target_at_pdh_pdl (+1) — target is at PDH/PDL/PWH/PWL (not session level)
+  * order_block (+2) — OB overlaps the entry zone (Inst. Orderflow Drill)
+  * htf_bias_aligned (+1) — D1/W1 bias matches trade direction
+  * sentiment_alignment (+1) — SWC mood matches trade direction
+- Score interpretation:
+  * 0/5 = structurally valid but zero quality bonus (still a real setup,
+    just no extras — losers expected as part of WR 63% statistical loss bucket)
+  * 1-2/5 = standard quality
+  * 3+/5 = high quality
+  * 5/5 = A+ (all extras aligned)
+
+KNOWN-OFF FACTORS (do NOT mention as failure modes):
+- VPIN_SHIELD_ENABLED = False — VPIN is not gating, not scoring, irrelevant
+- No GEX options data loader — GEX walls / gamma regime irrelevant
+- These will return when modules are wired; for now they're dead config.
+
+COMMON FAILURE MODES (qualitative — apply when score is low):
+- Sweep was technically valid but already faded (low conviction; price
+  already retraced before bot fired)
+- FVG too narrow relative to 5-min displacement (noise gap, not real
+  imbalance) — caught by SB_FVG_QUALITY when enabled
+- 5-min MSS happened but immediate counter-CHoCH followed (chop)
+- Trade entered against fresh D1/W1 reaction off PDH/PDL — passes hard
+  gates but HTF context unfavorable (htf_bias_aligned would be 0)
+- KZ window edge: setup formed in last 5-10 min of KZ (low time for
+  development), pre-arm or past-cancel rejection should have caught"""
+            confluence_max = SB_LIVE_MAX
         else:
             framework_block = f"""STRATEGY: NY AM Reversal (OTE retracement)
 - KZ: NY AM (08:30-11:00 CT canonical)
@@ -328,7 +369,7 @@ LOSING TRADE DATA:
 - Loss: ${abs(float(trade.get("pnl", 0))):.2f}
 - Contracts: {trade.get("contracts", 1)}
 - Stop size: {trade.get("stop_points", "N/A")} points
-- Confluence score: {trade.get("confluence_score", "N/A")}/{confluence_max}{" (SB-applicable subset; 0-3 = low quality, 4-6 = standard, 7+ = high)" if is_sb else ""}
+- Confluence score: {trade.get("confluence_score", "N/A")}/{confluence_max}{" (SB live-attainable; 0 = no extras, 1-2 = standard, 3-4 = high, 5 = A+)" if is_sb else ""}
 - ICT concepts used: {ict_str}
 - Kill Zone: {trade.get("kill_zone", "N/A")}
 

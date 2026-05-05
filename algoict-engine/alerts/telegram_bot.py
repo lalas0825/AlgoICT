@@ -41,6 +41,7 @@ except ImportError:
 from config import (
     TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, MAX_CONFLUENCE, MNQ_POINT_VALUE,
     SB_APPLICABLE_FACTORS, SB_APPLICABLE_MAX,
+    SB_LIVE_FACTORS, SB_LIVE_MAX,
     TELEGRAM_VERBOSITY, TELEGRAM_THROTTLE_SEC,
 )
 import time as _time_mod
@@ -178,14 +179,15 @@ class TelegramBot:
             stop_sign  = "-" if signal.direction == "long" else "+"
             tgt_sign   = "+" if signal.direction == "long" else "-"
 
-            # 2026-05-01 — show SB-applicable score (/10) for Silver Bullet,
-            # full 19-pt for other strategies (e.g. NY AM Reversal). The 11
-            # noise factors (5 gated structural, 2 N/A, 4 partially counted)
-            # were misleading the at-a-glance interpretation.
+            # 2026-05-01 — show SB sub-score for Silver Bullet, full 19-pt
+            # for NY AM Reversal. 2026-05-05: switched SB denom from
+            # SB_APPLICABLE_MAX (10 theoretical) to SB_LIVE_MAX (5 with
+            # GEX+VPIN off) so the displayed ratio reflects what's
+            # actually scoreable today.
             if signal.strategy == "silver_bullet":
-                conf_max = SB_APPLICABLE_MAX  # 10
+                conf_max = SB_LIVE_MAX  # 5 (live), was 10 (theoretical)
             else:
-                conf_max = MAX_CONFLUENCE     # 19
+                conf_max = MAX_CONFLUENCE  # 19
             conf_line = f"Confluence: {signal.confluence_score}/{conf_max}"
 
             lines = [
