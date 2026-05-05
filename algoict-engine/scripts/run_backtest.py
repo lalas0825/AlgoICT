@@ -826,6 +826,27 @@ def main() -> int:
         print(f"    Current DD      : ${rm.current_drawdown:>10,.2f}")
         print(f"    MLL zone        : {rm.mll_zone}")
         print(f"    Target reached  : {'YES' if rm.target_reached else 'NO'}")
+
+        # 2026-05-05 — rolling Combine stats (when reset-on-breach is on)
+        passes = getattr(rm, "combine_passes", 0)
+        fails = getattr(rm, "combine_fails", 0)
+        total_attempts = passes + fails
+        # +1 for the in-progress Combine if not already terminal
+        if not rm.target_reached and rm.mll_zone != "stop":
+            total_attempts += 1
+        if total_attempts > 0:
+            pass_rate = (passes / total_attempts * 100) if total_attempts else 0.0
+            print()
+            print(f"  Rolling Combine pass rate:")
+            print(f"    Combines attempted : {total_attempts}")
+            print(f"    Passed (target hit): {passes}")
+            print(f"    Failed (MLL bust)  : {fails}")
+            print(f"    In-progress        : {1 if (total_attempts > passes + fails) else 0}")
+            print(f"    Pass rate          : {pass_rate:.1f}%")
+            # Topstep $50K Combine: ~$165 reset on fail, $165 to start fresh after pass
+            est_fee_per_combine = 165
+            print(f"    Reset fees (est)   : ${total_attempts * est_fee_per_combine:>5} "
+                  f"(${est_fee_per_combine}/combine × {total_attempts})")
         print()
 
     # Step 5: Supabase write
@@ -869,6 +890,9 @@ def main() -> int:
         # Pull combine reset info off the risk manager if available.
         rm = backtester.risk if hasattr(backtester, "risk") else None
         combine_resets = getattr(rm, "combine_resets", 0) if rm else 0
+        combine_passes = getattr(rm, "combine_passes", 0) if rm else 0
+        combine_fails = getattr(rm, "combine_fails", 0) if rm else 0
+        combine_pass_rate = getattr(rm, "combine_pass_rate", 0.0) if rm else 0.0
         combine_reset_events = getattr(rm, "combine_reset_events", []) if rm else []
         payload = {
             "strategy": result.strategy,
@@ -880,6 +904,9 @@ def main() -> int:
             "max_drawdown_dollars": float(max_dd),
             "peak_equity": float(peak),
             "combine_resets": int(combine_resets),
+            "combine_passes": int(combine_passes),
+            "combine_fails": int(combine_fails),
+            "combine_pass_rate": float(combine_pass_rate),
             "combine_reset_events": combine_reset_events,
             "start_date": str(result.start_date),
             "end_date": str(result.end_date),

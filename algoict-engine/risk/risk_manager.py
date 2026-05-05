@@ -201,24 +201,46 @@ class RiskManager:
             cruise_mode, reset_on_mll_breach,
         )
 
-    def _simulate_combine_reset(self) -> None:
-        """Simulate paying for a Combine reset: balance and peak are
-        restored to the starting value, all daily flags are cleared, and
-        the MLL zone drops back to normal. The reset event is logged and
-        counted so the backtest can compute reset-fee cost later.
+    def _simulate_combine_reset(self, reason: str = "fail") -> None:
+        """Simulate a Combine reset (start a new Combine attempt).
+
+        2026-05-05 — extended to count both PASS and FAIL outcomes.
+        With reset-on-breach mode, the simulator runs ROLLING Combines:
+          * MLL stop hit → reason='fail', count as a failed attempt
+          * Profit target hit → reason='pass', count as passed attempt
+        Total attempts = passes + fails. Pass rate = passes / total.
+
+        On either outcome, balance + peak restore to starting, daily
+        flags clear, MLL zone drops to normal. Both fail and pass log
+        as RESET events so the backtest can compute reset-fee cost
+        (real Topstep charges ~$200 per reset on a failed Combine; a
+        passed Combine doesn't cost anything but starting a new one
+        requires a fresh signup fee — modeled the same here for
+        simplicity).
+
+        Parameters
+        ----------
+        reason : str
+            'fail' (MLL bust) or 'pass' (target reached). Default 'fail'
+            preserves backward compatibility with old call sites.
         """
         self._combine_resets += 1
+        if reason == "pass":
+            self._combine_passes = getattr(self, "_combine_passes", 0) + 1
+        else:
+            self._combine_fails = getattr(self, "_combine_fails", 0) + 1
         dd_at_reset = self.current_drawdown
         self._combine_reset_events.append({
             "reset_n": self._combine_resets,
+            "reason": reason,
             "dd_at_reset": dd_at_reset,
             "balance_before": self._current_balance,
             "peak_before": self._peak_balance_eod,
         })
         logger.warning(
-            "Topstep Combine RESET #%d simulated (dd=$%.2f, bal=$%.2f -> $%.2f)",
-            self._combine_resets, dd_at_reset, self._current_balance,
-            self._starting_balance,
+            "Topstep Combine RESET #%d (%s) simulated (dd=$%.2f, bal=$%.2f -> $%.2f)",
+            self._combine_resets, reason.upper(), dd_at_reset,
+            self._current_balance, self._starting_balance,
         )
         self._current_balance = self._starting_balance
         self._peak_balance_eod = self._starting_balance
@@ -228,11 +250,33 @@ class RiskManager:
         self.kill_switch_active = False
         self.profit_cap_active = False
         self.daily_pnl = 0.0
+        # Re-arm target-reached flag so a new Combine can hit target again.
+        self._target_reached = False
+        self._cruise_mode = False
+        self._protective_mode = False
 
     @property
     def combine_resets(self) -> int:
-        """Number of MLL-breach resets simulated so far."""
+        """Number of total Combine attempts that ended (passes + fails)."""
         return getattr(self, "_combine_resets", 0)
+
+    @property
+    def combine_passes(self) -> int:
+        """Number of Combines that hit the $3K profit target."""
+        return getattr(self, "_combine_passes", 0)
+
+    @property
+    def combine_fails(self) -> int:
+        """Number of Combines that busted MLL."""
+        return getattr(self, "_combine_fails", 0)
+
+    @property
+    def combine_pass_rate(self) -> float:
+        """Fraction of attempted Combines that passed (passes / total)."""
+        total = self.combine_resets
+        if total == 0:
+            return 0.0
+        return self.combine_passes / total
 
     @property
     def combine_reset_events(self) -> list:
@@ -494,18 +538,28 @@ class RiskManager:
                 logger.info(
                     "Topstep: TARGET REACHED at $%.2f", self._current_balance,
                 )
-                # Activate cruise if enabled and not enough trading days
-                if (
-                    self._cruise_enabled
-                    and len(self._trading_days_set) < self._min_trading_days
-                ):
-                    self._cruise_mode = True
-                    logger.info(
-                        "Topstep: CRUISE MODE ON — %d/%d trading days, "
-                        "accumulating remaining days",
-                        len(self._trading_days_set),
-                        self._min_trading_days,
-                    )
+
+                # 2026-05-05 — Rolling Combine mode: when reset-on-breach is
+                # on, target hit = PASS, immediately start a new Combine.
+                # This produces "Combines attempted / passed / failed"
+                # statistics over the year (e.g. "12 attempts, 8 passes,
+                # 4 fails = 67% pass rate") which is the right way to
+                # measure Combine survivability.
+                if getattr(self, "_reset_on_mll_breach", False):
+                    self._simulate_combine_reset(reason="pass")
+                else:
+                    # Legacy: cruise mode if enabled and not enough days
+                    if (
+                        self._cruise_enabled
+                        and len(self._trading_days_set) < self._min_trading_days
+                    ):
+                        self._cruise_mode = True
+                        logger.info(
+                            "Topstep: CRUISE MODE ON — %d/%d trading days, "
+                            "accumulating remaining days",
+                            len(self._trading_days_set),
+                            self._min_trading_days,
+                        )
 
         logger.debug(
             "Trade recorded: pnl=%.2f | daily=%.2f | losses=%d | trades=%d",
