@@ -184,6 +184,23 @@ SB_SAME_SETUP_PRICE_TOL_PTS = 5.0
 # overwhelmingly noise-grade pivots, not institutional liquidity grabs.
 SB_MIN_STOP_POINTS = 15.0
 
+# 2026-05-05 — MIN TARGET R/R (post-Day-2 audit feedback)
+# A target less than 2× the stop distance is mathematically losing for
+# most realistic WR. With the new SB_MIN_STOP_POINTS=15, the legacy
+# MIN_FRAMEWORK_PTS=10 absolute floor was producing 0.67R targets where
+# even 60% WR was barely breakeven.
+#
+# New rule: framework distance must give ≥ SB_MIN_TARGET_RR × stop_pts.
+# Default 2.0 → with 15pt stop, target must be 30pt or more.
+# At 2R, expectancy turns positive at WR > 33% — gives the strategy
+# real edge headroom against backtest WR ~63%.
+#
+# Target selection now picks the NEAREST pool that satisfies the RR,
+# not the absolute nearest. ICT canonical "next major liquidity pool"
+# still holds — but if the next one is too close, skip to the one
+# beyond. No valid pool ≥ required_target_pts → reject (framework_lt_2R).
+SB_MIN_TARGET_RR = 2.0
+
 # 2026-04-30 v19a — DISABLED time-based age caps for sweeps and structure.
 # ICT canonical: sweeps and structure events expire by PRICE ACTION, not by
 # clock time. The age caps were anti-selective — they preferentially rejected

@@ -1002,29 +1002,63 @@ class SilverBulletStrategy:
                 stop_price=stop_price, stop_points=stop_points,
             )
             return None
-        # Nearest unswept pool in direction.
+        # 2026-05-05 — TARGET MUST GIVE ≥ 2R, NOT NEAREST
+        # Old code: pick nearest pool, reject if framework < 10pt absolute.
+        # Math problem: with SB_MIN_STOP_POINTS=15, an "acceptable" 10pt
+        # target = 0.67R. At backtest WR 63%, expectancy = -15×0.37 +
+        # 10×0.63 = +0.75pt — barely positive, gone after slippage.
+        #
+        # New rule: pick the nearest pool that gives ≥ SB_MIN_TARGET_RR
+        # (default 2.0) of risk. With 2R, even WR 40% has positive
+        # expectancy (-1×0.6 + 2×0.4 = +0.2R). The MIN_FRAMEWORK_PTS
+        # absolute floor stays as a backstop for edge cases.
+        min_rr = float(config.cfg("SB_MIN_TARGET_RR", 2.0))
+        min_pts_for_rr = min_rr * stop_points
+        # Effective floor = max(absolute floor, 2R distance)
+        required_target_pts = max(self.MIN_FRAMEWORK_PTS, min_pts_for_rr)
+
+        # Find the NEAREST target that satisfies the RR requirement.
+        # ICT canonical: target = "next major liquidity pool" — but if
+        # the next one is too close (sub-2R), skip to the one beyond.
+        # No valid pool ≥ required_target_pts → reject.
+        valid_targets = [
+            lvl for lvl in candidate_targets
+            if abs(lvl.price - entry_price) >= required_target_pts
+        ]
+        if not valid_targets:
+            # Show what we had and why it didn't qualify
+            nearest = min(
+                candidate_targets,
+                key=lambda lvl: abs(lvl.price - entry_price),
+            )
+            nearest_pts = abs(nearest.price - entry_price)
+            nearest_rr = nearest_pts / stop_points if stop_points > 0 else 0
+            logger.info(
+                "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, "
+                "reason=framework_lt_2R (nearest target=%s@%.2f gives "
+                "%.1fpts = %.2fR < %.1fR min, stop=%.1fpts)",
+                _ts_hm(ts), nearest.type, float(nearest.price),
+                nearest_pts, nearest_rr, min_rr, stop_points,
+            )
+            self._set_rejection(
+                ts, "framework_lt_2R", active_zone, is_near_miss=True,
+                direction=direction, entry_price=entry_price,
+                stop_pts=round(stop_points, 2),
+                nearest_target_type=nearest.type,
+                nearest_target_price=float(nearest.price),
+                nearest_target_pts=round(nearest_pts, 2),
+                nearest_target_rr=round(nearest_rr, 2),
+                min_rr=min_rr,
+                required_target_pts=round(required_target_pts, 2),
+            )
+            return None
         target = min(
-            candidate_targets,
+            valid_targets,
             key=lambda lvl: abs(lvl.price - entry_price),
         )
         target_price = float(target.price)
         framework_pts = abs(target_price - entry_price)
-        if framework_pts < self.MIN_FRAMEWORK_PTS:
-            logger.info(
-                "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, "
-                "reason=no_valid_setup (framework %.1fpts < %.1fpts min, "
-                "target=%s @ %.2f)",
-                _ts_hm(ts), framework_pts, self.MIN_FRAMEWORK_PTS,
-                target.type, target_price,
-            )
-            self._set_rejection(
-                ts, "framework_lt_10pts", active_zone, is_near_miss=True,
-                direction=direction, entry_price=entry_price,
-                target_type=target.type, target_price=target_price,
-                framework_pts=framework_pts,
-                min_framework_pts=self.MIN_FRAMEWORK_PTS,
-            )
-            return None
+        actual_rr = framework_pts / stop_points if stop_points > 0 else 0
 
         # ── 7. Position size ───────────────────────────────────────────
         # Risk amount comes from the RiskManager (ladder-aware when enabled,

@@ -104,12 +104,13 @@ def _build_full_setup(
     """Build a complete Silver Bullet setup.
 
     Components (dims chosen to pass current filters:
-    stop distance ≥ SB_MIN_STOP_POINTS (15pt), framework ≥ 10pts):
+    stop ≥ SB_MIN_STOP_POINTS (15pt), framework ≥ 2R = 35pt):
       - bullish FVG inside AM window (top=102, bottom=99, stop_ref=85 →
         entry=102.25, stop=84.75, stop_dist=17.5pts)
       - SSL sweep before the window
       - 5-min MSS bullish
-      - BSL liquidity target at 120.0 (>= 10 pts framework from entry 102.25)
+      - BSL liquidity target at 140.0 (>= 2R from entry 102.25:
+        140 - 102.25 = 37.75pt = 2.16R, passes the 2R floor.)
     """
     ts = ts or _sb_ts(9, 20)   # 5 min past arm time (09:15) for safe margin
 
@@ -151,10 +152,10 @@ def _build_full_setup(
             timestamp=ts - pd.Timedelta(minutes=5),
         ))
     if inject_target:
-        # BSL >= 10 pts above projected entry (101.25) satisfies the
-        # MIN_FRAMEWORK_PTS filter.
+        # BSL ≥ 2R above projected entry (102.25, stop 84.75 = 17.5pt risk).
+        # 140 - 102.25 = 37.75pt = 2.16R, passes SB_MIN_TARGET_RR=2.0.
         tracked_levels.append(LiquidityLevel(
-            price=120.0, type="BSL", swept=False,
+            price=140.0, type="BSL", swept=False,
             timestamp=ts - pd.Timedelta(hours=1),
         ))
 
@@ -230,8 +231,9 @@ class TestPositiveSetup:
         """Target = nearest unswept liquidity pool in direction."""
         strat, c1, c5 = _build_full_setup()
         sig = strat.evaluate(c1, c5)
-        # Target is the BSL at 120.0 (only one above entry).
-        assert sig.target_price == pytest.approx(120.0)
+        # Target is the BSL at 140.0 (the only one above entry that
+        # satisfies the 2R requirement; 2026-05-05 bumped 120 → 140).
+        assert sig.target_price == pytest.approx(140.0)
 
     def test_signal_has_confluence_score(self):
         """Confluence score still computed and attached to Signal for
@@ -412,16 +414,18 @@ class TestBearishSetup:
         """Bearish FVG → short trade with inverted entry/stop/target logic.
 
         Dimensions chosen to pass current filters:
-          - stop distance ≥ SB_MIN_STOP_POINTS (15pt): FVG.bottom=98,
+          - stop ≥ SB_MIN_STOP_POINTS (15pt): FVG.bottom=98,
             stop_ref=115 → entry=97.75, stop=115.25, stop_dist=17.5pt
-          - framework ≥ 10pts (SSL target at 87 → 10.75pts from entry 97.75)
+          - framework ≥ 2R (35pt): SSL target at 60 → 37.75pt from
+            entry 97.75 = 2.16R, passes SB_MIN_TARGET_RR=2.0.
         """
         ts = _sb_ts(9, 20)
         strat, c1, c5 = _build_full_setup(
             inject_fvg=False, inject_sweep=False, inject_target=False, ts=ts,
         )
         # Bearish FVG + BSL sweep + SSL target below entry.
-        # 2026-05-05: stop_reference 109 → 115 to clear new 15pt stop floor.
+        # 2026-05-05: stop_reference 109 → 115 (15pt floor),
+        # SSL price 87 → 60 (2R floor).
         strat.detectors["fvg"].fvgs.append(FVG(
             top=101.0, bottom=98.0, direction="bearish",
             timeframe="1min", candle_index=10,
@@ -433,7 +437,7 @@ class TestBearishSetup:
             timestamp=ts - pd.Timedelta(minutes=5),
         ))
         strat.detectors["tracked_levels"].append(LiquidityLevel(
-            price=87.0, type="SSL", swept=False,
+            price=60.0, type="SSL", swept=False,
             timestamp=ts - pd.Timedelta(hours=1),
         ))
         # Need bearish structure too (5-min per V9 post-2026-04-23 audit).
@@ -448,7 +452,7 @@ class TestBearishSetup:
         assert sig.direction == "short"
         assert sig.entry_price == pytest.approx(97.75)   # bottom 98 - tick
         assert sig.stop_price == pytest.approx(115.25)   # stop_ref + tick
-        assert sig.target_price == pytest.approx(87.0)
+        assert sig.target_price == pytest.approx(60.0)
 
 
 # ─── Three windows: each zone routes correctly ──────────────────────────────
