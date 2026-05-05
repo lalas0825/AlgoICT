@@ -171,6 +171,19 @@ KILL_SWITCH_SAME_SETUP_PRICE_TOL_PTS = 5.0
 SB_SAME_SETUP_COOLDOWN_MIN = 240
 SB_SAME_SETUP_PRICE_TOL_PTS = 5.0
 
+# 2026-05-05 — MIN STOP FLOOR (post-Day-2 audit)
+# Silver Bullet structural sweep should be of MAJOR liquidity (PDH/PDL/PWH/
+# PWL/AH/AL or fresh HTF swings). When the sweep is just a small intraday
+# pivot (5-8pt poke), the resulting stop is tiny and the position size
+# auto-inflates past 10 contracts — turning a marginal setup into a max-
+# size loss. Live caught 2026-05-05 London: 7.5pt stop, 12 contracts,
+# −$180 in 4 minutes (full risk).
+#
+# Floor at 15pt — roughly the noise level of a 1-min MNQ bar. ICT-canonical
+# sweeps of D1/W1 levels are 20-50pt on MNQ; setups below 15pt are
+# overwhelmingly noise-grade pivots, not institutional liquidity grabs.
+SB_MIN_STOP_POINTS = 15.0
+
 # 2026-04-30 v19a — DISABLED time-based age caps for sweeps and structure.
 # ICT canonical: sweeps and structure events expire by PRICE ACTION, not by
 # clock time. The age caps were anti-selective — they preferentially rejected

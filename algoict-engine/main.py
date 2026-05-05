@@ -4480,6 +4480,54 @@ async def run(
         logger.critical("Broker connect failed: %s", exc, exc_info=True)
         return
 
+    # ── 2b.5. Zombie-order cleanup ─────────────────────────────────────
+    # 2026-05-05: when the bot is killed (taskkill, crash, signal) with
+    # a resting limit at the broker, the order survives the kill but
+    # local state forgets it. Next launch starts with an empty
+    # state.open_positions but the broker still has live orders that
+    # could fill into untracked phantom positions.
+    #
+    # Live caught 2026-05-05 London: bot killed with limit BUY 14 MNQ
+    # @ 27,831 + stop SELL 14 @ 27,824.50 still pending. If MNQ had
+    # touched 27,831, we'd have been long 14 contracts with no bot
+    # tracking it.
+    #
+    # Fix: at startup, query broker for open orders. Local state is
+    # always empty at this point (fresh process), so EVERY broker order
+    # is a zombie — cancel all of them. After this point the engine
+    # tracks orders it places itself.
+    if hasattr(components.broker, "get_open_orders"):
+        try:
+            zombies = await components.broker.get_open_orders()
+            if zombies:
+                logger.warning(
+                    "Startup zombie-order cleanup: %d open order(s) at broker "
+                    "(local state empty) — cancelling all", len(zombies),
+                )
+                for o in zombies:
+                    oid = str(o.get("id") or "")
+                    if not oid:
+                        continue
+                    try:
+                        ok = await components.broker.cancel_order(oid)
+                        logger.warning(
+                            "  cancel zombie order %s: type=%s side=%s size=%s "
+                            "limit=%s stop=%s → %s",
+                            oid, o.get("type"), o.get("side"), o.get("size"),
+                            o.get("limitPrice"), o.get("stopPrice"),
+                            "ok" if ok else "REJECTED",
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "  cancel zombie order %s failed: %s", oid, exc,
+                        )
+            else:
+                logger.info("Startup zombie-order cleanup: 0 open orders at broker")
+        except Exception as exc:
+            logger.warning(
+                "Startup zombie-order cleanup failed (continuing anyway): %s", exc,
+            )
+
     # ── 2c. Reset bot_state to clear stale values from prior runs ──────
     if components.supabase is not None:
         try:

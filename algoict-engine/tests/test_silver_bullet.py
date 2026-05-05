@@ -103,13 +103,13 @@ def _build_full_setup(
 ):
     """Build a complete Silver Bullet setup.
 
-    Components (dims chosen to pass v2 filters:
-    stop distance ≥ 8pts, framework ≥ 10pts):
-      - bullish FVG inside AM window (top=101, bottom=99, stop_ref=91 →
-        entry=101.25, stop=90.75, stop_dist=10.5pts)
+    Components (dims chosen to pass current filters:
+    stop distance ≥ SB_MIN_STOP_POINTS (15pt), framework ≥ 10pts):
+      - bullish FVG inside AM window (top=102, bottom=99, stop_ref=85 →
+        entry=102.25, stop=84.75, stop_dist=17.5pts)
       - SSL sweep before the window
       - 5-min MSS bullish
-      - BSL liquidity target at 120.0 (>= 10 pts framework from entry 101.25)
+      - BSL liquidity target at 120.0 (>= 10 pts framework from entry 102.25)
     """
     ts = ts or _sb_ts(9, 20)   # 5 min past arm time (09:15) for safe margin
 
@@ -126,15 +126,17 @@ def _build_full_setup(
     fvg_det = FairValueGapDetector()
     if inject_fvg:
         # FVG must live INSIDE the active KZ window.
-        # 2026-04-29 — width bumped 2pt → 3pt to satisfy Fix #6 quality
-        # gate (FVG/stop ratio >= 0.20). With stop_ref=91 (stop dist
-        # 10.5pt), 3pt FVG = 0.286 ratio (passes), 2pt was 0.190 (fails).
+        # 2026-05-05: stop_reference moved 91 → 85 so stop distance is
+        # 17.5pt (passes SB_MIN_STOP_POINTS=15.0 floor added today after
+        # the live 7.5pt stop blew up). FVG width stays 3pt — ratio is
+        # now 3/17.5 = 0.171 which would fail the 0.20 quality gate, but
+        # SB_FVG_QUALITY_ENABLED defaults to False (v19a), so OK.
         fvg_det.fvgs.append(FVG(
             top=102.0, bottom=99.0, direction="bullish",
             timeframe="1min", candle_index=10,
             timestamp=ts - pd.Timedelta(minutes=3),
-            # Candle-1 low well below bottom so stop distance passes 8pt min.
-            stop_reference=91.0,
+            # Candle-1 low far below bottom for stop ≥ SB_MIN_STOP_POINTS.
+            stop_reference=85.0,
         ))
 
     # OBs and displacements are passed to the confluence scorer but not
@@ -219,8 +221,10 @@ class TestPositiveSetup:
         """Long stop = FVG.stop_reference - 1 tick (ICT section 5.1)."""
         strat, c1, c5 = _build_full_setup()
         sig = strat.evaluate(c1, c5)
-        # stop_reference = 91.0, tick = 0.25 → stop = 90.75
-        assert sig.stop_price == pytest.approx(90.75)
+        # stop_reference = 85.0, tick = 0.25 → stop = 84.75
+        # (2026-05-05: bumped stop_reference 91 → 85 to clear the new
+        # SB_MIN_STOP_POINTS=15 floor — see _build_full_setup docstring.)
+        assert sig.stop_price == pytest.approx(84.75)
 
     def test_signal_target_is_liquidity_pool(self):
         """Target = nearest unswept liquidity pool in direction."""
@@ -407,22 +411,22 @@ class TestBearishSetup:
     def test_bearish_fvg_produces_short(self):
         """Bearish FVG → short trade with inverted entry/stop/target logic.
 
-        Dimensions chosen to pass v2 filters:
-          - stop distance ≥ 8pts (FVG.bottom=99, stop_ref=109 → stop_dist=10.5)
-          - framework ≥ 10pts (SSL target at 88 → 10.75pts from entry 98.75)
+        Dimensions chosen to pass current filters:
+          - stop distance ≥ SB_MIN_STOP_POINTS (15pt): FVG.bottom=98,
+            stop_ref=115 → entry=97.75, stop=115.25, stop_dist=17.5pt
+          - framework ≥ 10pts (SSL target at 87 → 10.75pts from entry 97.75)
         """
         ts = _sb_ts(9, 20)
         strat, c1, c5 = _build_full_setup(
             inject_fvg=False, inject_sweep=False, inject_target=False, ts=ts,
         )
         # Bearish FVG + BSL sweep + SSL target below entry.
-        # 2026-04-29 — width 2pt → 3pt for Fix #6 quality gate
-        # (3pt / stop_dist 10.5pt = 0.286 ratio passes 0.20 min).
+        # 2026-05-05: stop_reference 109 → 115 to clear new 15pt stop floor.
         strat.detectors["fvg"].fvgs.append(FVG(
             top=101.0, bottom=98.0, direction="bearish",
             timeframe="1min", candle_index=10,
             timestamp=ts - pd.Timedelta(minutes=3),
-            stop_reference=109.0,   # candle-1 high, well above top
+            stop_reference=115.0,   # candle-1 high, well above top
         ))
         strat.detectors["tracked_levels"].append(LiquidityLevel(
             price=105.0, type="BSL", swept=True,
@@ -443,7 +447,7 @@ class TestBearishSetup:
         assert sig is not None
         assert sig.direction == "short"
         assert sig.entry_price == pytest.approx(97.75)   # bottom 98 - tick
-        assert sig.stop_price == pytest.approx(109.25)   # stop_ref + tick
+        assert sig.stop_price == pytest.approx(115.25)   # stop_ref + tick
         assert sig.target_price == pytest.approx(87.0)
 
 

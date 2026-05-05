@@ -845,6 +845,40 @@ class SilverBulletStrategy:
             )
             return None
 
+        # ── 2026-05-05 — MIN STOP FLOOR ────────────────────────────────
+        # ICT canonical: Silver Bullet hunts sweeps of MAJOR liquidity
+        # (PDH/PDL/PWH/PWL/AH/AL or fresh higher-timeframe swing highs/
+        # lows). A 6-7pt stop means the "swept level" was a tiny intraday
+        # pivot — not real institutional liquidity. Caught 2026-05-05
+        # London KZ: trade #1 fired short with 7.5pt stop @ 27839 →
+        # stopped out cleanly @ 27846.50 in 4 minutes for −$180. The
+        # tight stop also inflated size to 12 contracts ($250 risk /
+        # 7.5pts / $2 = 16 → after risk_manager floors), so the loss
+        # was full-fat despite being a marginal setup.
+        #
+        # Minimum stop floor rejects fires where the structural sweep
+        # was too small to be a genuine liquidity grab. 15pt MNQ floor
+        # corresponds to ~0.05% of price — roughly the noise floor of
+        # a 1-min bar. Real ICT sweeps of D1/W1 levels are typically
+        # 20-50pts on MNQ.
+        min_stop_pts = float(config.cfg("SB_MIN_STOP_POINTS", 15.0))
+        if stop_points < min_stop_pts:
+            logger.info(
+                "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, "
+                "reason=stop_too_tight (stop %.2fpts < %.1fpts min — "
+                "sweep was likely intraday noise, not major liquidity)",
+                _ts_hm(ts), stop_points, min_stop_pts,
+            )
+            self._set_rejection(
+                ts, "stop_too_tight", active_zone, is_near_miss=True,
+                stop_pts=round(stop_points, 2),
+                threshold_pts=min_stop_pts,
+                entry=entry_price,
+                stop=stop_price,
+                direction=direction,
+            )
+            return None
+
         # ── 2026-04-29 FIX #6 — FVG QUALITY FILTER ─────────────────────
         # ICT canonical: a "true" FVG comes from a strong displacement
         # (candle 2 big body) where candle 1 and candle 3 wicks DON'T

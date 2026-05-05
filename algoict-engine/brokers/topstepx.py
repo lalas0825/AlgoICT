@@ -568,6 +568,42 @@ class TopstepXClient:
         )
         return False
 
+    async def get_open_orders(self) -> list[dict]:
+        """
+        Return all open (resting) orders for the current account.
+
+        Returns the raw order dicts from POST /Order/searchOpen so callers
+        can inspect order_id, type, side, size, price, etc. We don't wrap
+        in a typed dataclass because callers (startup reconciler, audit
+        scripts) usually want fields not in OrderResult (limitPrice,
+        stopPrice, contractId, status).
+
+        2026-05-05: added for startup zombie-order cleanup. When the bot
+        is killed (taskkill, crash) with a resting limit at the broker,
+        the order survives the kill but the bot's local state forgets
+        it. Next launch must query open orders and cancel zombies that
+        aren't in our reborn local state.
+
+        Response shape from ProjectX:
+            {"orders": [{id, accountId, contractId, symbolId, type, side,
+                         size, status, limitPrice, stopPrice, ...}, ...],
+             "success": bool, "errorCode": int, "errorMessage": str}
+        """
+        data = await self._post(
+            "/Order/searchOpen",
+            {"accountId": int(self._account_id)},
+        )
+        if not isinstance(data, dict):
+            logger.error("get_open_orders: unexpected response shape: %r", data)
+            return []
+        if not data.get("success", True):
+            logger.error(
+                "get_open_orders: ProjectX error code=%s msg=%s",
+                data.get("errorCode"), data.get("errorMessage"),
+            )
+            return []
+        return list(data.get("orders") or [])
+
     async def _submit_order(
         self,
         payload: dict,
