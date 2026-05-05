@@ -441,6 +441,29 @@ class Backtester:
                             daily_pnl.get(current_date, 0.0) + trade.pnl
                         )
 
+                        # 2026-05-05 — FIX #1: notify strategy of trade close
+                        # so it can update _last_stopped_* state for the
+                        # same-setup cooldown gate. Pre-fix, the backtester
+                        # never called this hook, so the strategy never
+                        # knew a setup just stopped out → re-fired the same
+                        # entry within bars. Caught in 2024 backtest:
+                        # 2024-03-11 had two identical -$499 trades 3min
+                        # apart (long 18272.75 → 18023.25, twice). The
+                        # second was a phantom that should have been
+                        # blocked by same_setup_cooldown but wasn't.
+                        if hasattr(self.strategy, "notify_trade_closed"):
+                            try:
+                                self.strategy.notify_trade_closed({
+                                    "pnl": trade.pnl,
+                                    "entry_price": trade.entry_price,
+                                    "exit_time": trade.exit_time,
+                                    "kill_zone": getattr(trade, "kill_zone", ""),
+                                })
+                            except Exception as exc:
+                                logger.debug(
+                                    "Backtester: notify_trade_closed failed: %s", exc,
+                                )
+
                     if open_position.get("closed"):
                         open_position = None
 

@@ -431,6 +431,34 @@ class RiskManager:
                 self.daily_pnl,
             )
 
+        # ── 2026-05-05 — Kill switch: TOTAL daily losses count ──────────
+        # Independent of consecutive_losses (which a winner resets) and
+        # of daily_pnl (which big winners can mask). If we've lost N
+        # times today regardless of order, the strategy isn't working
+        # today — halt for the rest of the day.
+        #
+        # Caught 2024-03-11 in full-year backtest: 4 trades for the day
+        # = 3 losses + 1 win between them. consecutive_losses got reset
+        # by the win, daily_pnl swung but never quite hit -750 before
+        # the next trade fired, and MLL eventually busted.
+        #
+        # Applies to ALL backtests + live (not Combine-specific) — this
+        # is sanity-grade risk management, not a Topstep rule.
+        daily_loss_count_thresh = int(getattr(
+            config, "KILL_SWITCH_DAILY_LOSSES", 0,
+        ))
+        if (
+            daily_loss_count_thresh > 0
+            and self._losses_today >= daily_loss_count_thresh
+        ):
+            if not self.kill_switch_active:
+                kill_reason = "daily_loss_count"
+            self.kill_switch_active = True
+            logger.warning(
+                "KILL SWITCH: %d daily losses (daily_pnl=%.2f, threshold=%d)",
+                self._losses_today, self.daily_pnl, daily_loss_count_thresh,
+            )
+
         # ── Ladder exhausted: all shots used, halt for the day ──────────
         if (
             self._ladder_enabled

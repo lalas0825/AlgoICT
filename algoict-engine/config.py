@@ -150,6 +150,20 @@ MNQ_TICK_SIZE = 0.25          # minimum price increment (used for order rounding
 KILL_SWITCH_LOSSES = 3        # 3 consecutive losses = done for the day
 KILL_SWITCH_AMOUNT = 750      # $750 max daily loss from kill switch
 
+# 2026-05-05 — DAILY TOTAL LOSSES KILL SWITCH (post-Day-2 audit)
+# The existing KILL_SWITCH_LOSSES counts CONSECUTIVE losses — a winner
+# resets the counter to 0. The 2024 full-year backtest revealed a hole:
+# on 2024-03-11 the bot took 4 trades — 3 losses + 1 small win between
+# them. consecutive_losses got reset by the win, but TOTAL losses for
+# the day were still 3, daily P&L was -$1,501, and the bot busted MLL.
+#
+# This new gate trips on TOTAL losses regardless of order. After
+# KILL_SWITCH_DAILY_LOSSES (default 3), halt for the rest of the day.
+# Tighter than KILL_SWITCH_AMOUNT alone because it triggers BEFORE
+# you've lost $750 — 3 small losses ($250 each = $750) gets you to the
+# limit, but 3 mid losses ($300 + $400 + $500 = $1,200) blow past it.
+KILL_SWITCH_DAILY_LOSSES = 3
+
 # 2026-04-29 hardening — same-setup tighter kill-switch + cooldown.
 # Caught 2026-04-29 NY PM: bot took 3 SHORTs at IDENTICAL entry/stop
 # (27,199.25 / 27,212.75) within 35 min, all stopped out (-$331.50
