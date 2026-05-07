@@ -666,26 +666,86 @@ class SilverBulletStrategy:
         # CHoCH in the invalidator too (see below). Strategy behavior
         # is unchanged except that a bear CHoCH followed by a bull
         # CHoCH now correctly invalidates the bear.
-        aligned = [
+        #
+        # 2026-05-07 — BIAS-FLIP GATE (Day 4 audit fix):
+        # The Gate B structure_invalidator below has a window-edge bug:
+        # at bar [13:05] CT, window [12:35, 13:05] catches 2 bears
+        # → reject. At bar [13:06] CT (1 min later), window slid to
+        # [12:36, 13:06], 12:35 bear fell out → count=1 < threshold=2
+        # → PASS, fired LONG in clearly bearish context (bears at 12:35
+        # & 12:40 still recent). The trade lost.
+        #
+        # Root cause: the strategy treats "last_struct = latest aligned
+        # event" without checking if a more recent OPPOSITE event has
+        # since happened. ICT canonical: if the most recent structural
+        # event was opposite to your bias, bias has flipped and the
+        # setup is counter-trend, regardless of what previous aligned
+        # events you can point to.
+        #
+        # Fix: aligned events must come AFTER the most recent opposite
+        # event. If no aligned event after the most recent opposite,
+        # bias has clearly flipped → reject.
+        all_struct_events = [
             e for e in fresh_events
-            if e.type in ("MSS", "BOS", "CHoCH") and e.direction == bias_dir
+            if e.type in ("MSS", "BOS", "CHoCH")
         ]
+        opposite_dir = "bullish" if bias_dir == "bearish" else "bearish"
+        opp_events_all = [
+            e for e in all_struct_events if e.direction == opposite_dir
+        ]
+        most_recent_opp = opp_events_all[-1] if opp_events_all else None
+        if most_recent_opp is not None:
+            aligned = [
+                e for e in all_struct_events
+                if e.direction == bias_dir
+                and e.timestamp > most_recent_opp.timestamp
+            ]
+        else:
+            aligned = [
+                e for e in all_struct_events if e.direction == bias_dir
+            ]
         if not aligned:
             total_stale = len(structure_events) - len(fresh_events)
+            # Distinguish bias-flip (opposite event AFTER any aligned)
+            # from genuine no-struct cases for clearer telemetry.
+            if most_recent_opp is not None:
+                reason_str = (
+                    f"bias_flipped (last 5min struct event was %s @ %s — "
+                    f"setup direction %s contradicts current bias)"
+                    % (
+                        most_recent_opp.type,
+                        _ts_hm(most_recent_opp.timestamp),
+                        bias_dir,
+                    )
+                )
+                reject_code = "bias_flipped"
+            else:
+                reason_str = (
+                    f"no_5min_struct in {bias_dir}, "
+                    f"{len(structure_events)} events total, "
+                    f"{len(fresh_events)} from today, "
+                    f"stale filtered={total_stale}"
+                )
+                reject_code = "no_5min_struct"
             logger.info(
                 "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, "
-                "reason=no_valid_setup (no_5min_struct in %s, %d events total, "
-                "%d from today, stale filtered=%d)",
-                _ts_hm(ts), bias_dir,
-                len(structure_events), len(fresh_events), total_stale,
+                "reason=no_valid_setup (%s)",
+                _ts_hm(ts), reason_str,
             )
+            extra = {
+                "fvg_direction": bias_dir,
+                "sweep_type": sweep.type,
+                "sweep_price": float(sweep.price),
+                "structure_events_total": len(structure_events),
+                "structure_events_today": len(fresh_events),
+                "structure_events_stale_filtered": total_stale,
+            }
+            if most_recent_opp is not None:
+                extra["most_recent_opp_type"] = most_recent_opp.type
+                extra["most_recent_opp_dir"] = most_recent_opp.direction
+                extra["most_recent_opp_ts"] = _ts_hm(most_recent_opp.timestamp)
             self._set_rejection(
-                ts, "no_5min_struct", active_zone, is_near_miss=True,
-                fvg_direction=bias_dir,
-                sweep_type=sweep.type, sweep_price=float(sweep.price),
-                structure_events_total=len(structure_events),
-                structure_events_today=len(fresh_events),
-                structure_events_stale_filtered=total_stale,
+                ts, reject_code, active_zone, is_near_miss=True, **extra,
             )
             return None
         last_struct = aligned[-1]
