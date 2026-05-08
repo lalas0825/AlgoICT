@@ -1266,17 +1266,57 @@ class SilverBulletStrategy:
 
     def notify_trade_closed(self, trade: dict) -> None:
         """
-        2026-04-29 — record last stopout for the same-setup cooldown gate.
-
         Called from main._on_trade_closed after broker confirms the
-        trade closed. We track only LOSING trades here — a profitable
-        setup is fine to re-attempt; a stopped-out setup is invalidated
-        per ICT (broken FVG / consumed liquidity).
+        trade closed.
+
+        Two responsibilities:
+
+        1. **Mark FVG as consumed (always)** — once we've taken a trade
+           on an FVG, that FVG is "used up" regardless of win/loss.
+           Caught live 2026-05-08: bot fired Day 5 winner +$377.50 on
+           bull FVG @ 28800-13. 2 hours later (after trade closed) bot
+           fired SAME entry/stop/target on SAME FVG — limit was placed
+           waiting for re-fill of an already-consumed setup. Pre-fix,
+           the FVG was only marked mitigated on LOSS. Now it's marked
+           on every close. ICT canonical: an FVG that's been tested
+           and traded → not a fresh entry source on the next test.
+
+        2. **Same-setup cooldown (loss only)** — record stopout to
+           block immediate re-fire of similar setup within cooldown
+           window. Winners don't need this gate (FVG already mitigated
+           by #1).
         """
         try:
             pnl = float(trade.get("pnl") or 0)
+
+            # ── 1. Mark FVG mitigated (ALWAYS — winner or loser) ────
+            # 2026-05-08 — moved out of loss-only branch to fix Day 5
+            # re-fire bug. An FVG used for entry is "consumed" per ICT,
+            # whether the trade won or lost. Re-firing on the same FVG
+            # is silly (waiting for re-fill of a position that already
+            # played out).
+            if self._last_fired_fvg is not None:
+                try:
+                    was_mit = bool(getattr(self._last_fired_fvg, "mitigated", False))
+                    setattr(self._last_fired_fvg, "mitigated", True)
+                    outcome = "win" if pnl >= 0 else "loss"
+                    logger.info(
+                        "silver_bullet: FVG mitigated on close (%s, pnl=%.2f) — "
+                        "%s [%.2f-%.2f] now consumed (was_mit=%s)",
+                        outcome, pnl,
+                        getattr(self._last_fired_fvg, "direction", "?"),
+                        getattr(self._last_fired_fvg, "bottom", 0.0),
+                        getattr(self._last_fired_fvg, "top", 0.0),
+                        was_mit,
+                    )
+                except Exception as exc:
+                    logger.debug("FVG mitigate-on-close failed: %s", exc)
+                finally:
+                    self._last_fired_fvg = None
+
+            # ── 2. Same-setup cooldown (LOSS only) ─────────────────
             if pnl >= 0:
-                # Winner / scratch — don't arm the cooldown
+                # Winner / scratch — FVG is mitigated above, no cooldown
                 return
             self._last_stopped_entry_price = float(
                 trade.get("entry_price") or 0
@@ -1303,25 +1343,6 @@ class SilverBulletStrategy:
                     self._last_stopped_ts,
                     self._last_stopped_kz,
                 )
-            # 2026-05-04 — ICT canonical: a stopped FVG is dead. Mark the
-            # FVG used for entry as mitigated so the strategy can't re-pick
-            # it once the same-setup cooldown expires. Caught live where
-            # trade 1 lost on FVG 27,853-57, cooldown expired 30min later,
-            # trade 2 fired identical setup on same FVG, lost identically.
-            if self._last_fired_fvg is not None:
-                try:
-                    setattr(self._last_fired_fvg, "mitigated", True)
-                    logger.info(
-                        "silver_bullet: FVG mitigated on stopout — "
-                        "%s [%.2f-%.2f] now dead for the day",
-                        getattr(self._last_fired_fvg, "direction", "?"),
-                        getattr(self._last_fired_fvg, "bottom", 0.0),
-                        getattr(self._last_fired_fvg, "top", 0.0),
-                    )
-                except Exception as exc:
-                    logger.debug("FVG mitigate-on-stopout failed: %s", exc)
-                finally:
-                    self._last_fired_fvg = None
         except Exception as exc:
             logger.debug("notify_trade_closed failed: %s", exc)
 
