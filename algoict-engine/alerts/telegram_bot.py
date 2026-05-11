@@ -87,6 +87,40 @@ class TelegramBot:
             chat_id, self._verbosity,
         )
 
+    async def _send_message(self, text: str) -> None:
+        """
+        Send a Telegram message with auto-retry on "Event loop is closed".
+
+        2026-05-11 — bug fix for Day 6 missed signal-fire alert.
+        python-telegram-bot's Bot creates an internal httpx async client
+        tied to whichever event loop was active at Bot() construction
+        time. If that loop later gets recycled (e.g. between asyncio.run
+        invocations in the main engine), the httpx client raises
+        RuntimeError('Event loop is closed') the next time it's used.
+
+        Live caught 2026-05-11 04:09 CT: signal_fired alert for Trade #2
+        failed with this exact error. Trade_opened 7 minutes later worked
+        (loop had been re-initialized by then), so the bug only hits the
+        FIRST send after a loop change.
+
+        Fix: catch the specific error, rebuild self._bot (creates a fresh
+        httpx client on the CURRENT loop), retry once.
+        """
+        try:
+            await self._bot.send_message(chat_id=self._chat_id, text=text)
+            return
+        except RuntimeError as exc:
+            if "Event loop is closed" not in str(exc):
+                raise
+            logger.warning(
+                "Telegram: event loop was closed on existing Bot client; "
+                "rebuilding and retrying once",
+            )
+        # Recreate the Bot — its httpx client will be bound to the
+        # currently-running loop.
+        self._bot = Bot(token=self._token)
+        await self._bot.send_message(chat_id=self._chat_id, text=text)
+
     # ------------------------------------------------------------------ #
     # Throttling / verbosity helpers
     # ------------------------------------------------------------------ #
@@ -243,7 +277,7 @@ class TelegramBot:
             ]
 
             msg = "\n".join(lines)
-            await self._bot.send_message(chat_id=self._chat_id, text=msg)
+            await self._send_message(msg)
             logger.info("Signal fired alert sent: %s %s score=%d", signal.strategy, direction, signal.confluence_score)
             return True
 
@@ -262,7 +296,7 @@ class TelegramBot:
         try:
             side = "BUY" if direction == "long" else "SELL"
             msg = f"✅ TRADE OPENED: {side} {contracts}x {symbol} @ ${fill_price:,.2f}"
-            await self._bot.send_message(chat_id=self._chat_id, text=msg)
+            await self._send_message(msg)
             logger.info("Trade opened alert sent: %s %s %dx @ %.2f", symbol, side, contracts, fill_price)
             return True
         except Exception as exc:
@@ -283,7 +317,7 @@ class TelegramBot:
             outcome = "WIN" if is_win else "LOSS"
             label = "target hit" if reason == "target" else "stop hit"
             msg = f"{emoji} {outcome}: ${abs(pnl):+,.0f} ({label}) @ ${close_price:,.2f} | {symbol}"
-            await self._bot.send_message(chat_id=self._chat_id, text=msg)
+            await self._send_message(msg)
             logger.info("Trade closed alert sent: %s %s pnl=%.2f", symbol, outcome, pnl)
             return True
         except Exception as exc:
@@ -322,7 +356,7 @@ class TelegramBot:
             if confluence_score is not None:
                 msg += f"Confluence: {confluence_score}/{MAX_CONFLUENCE}\n"
 
-            await self._bot.send_message(chat_id=self._chat_id, text=msg)
+            await self._send_message(msg)
             logger.info("Trade alert sent: %s %s %s", symbol, side_upper, status)
             return True
 
@@ -345,7 +379,7 @@ class TelegramBot:
                 f"TRAIL: {symbol} {direction.upper()} stop "
                 f"{old_stop:.2f} → {new_stop:.2f} ({sign}{delta:.1f}pts)"
             )
-            await self._bot.send_message(chat_id=self._chat_id, text=msg)
+            await self._send_message(msg)
             logger.info("Trailing stop alert sent: %s %.2f → %.2f", symbol, old_stop, new_stop)
             return True
         except Exception as exc:
@@ -402,7 +436,7 @@ class TelegramBot:
             if swc_mood:
                 lines.append(f"SWC mood: {swc_mood}")
             msg = "\n".join(lines)
-            await self._bot.send_message(chat_id=self._chat_id, text=msg)
+            await self._send_message(msg)
             logger.info("KZ enter alert sent: %s", kz)
             return True
         except Exception as exc:
@@ -456,7 +490,7 @@ class TelegramBot:
                 for r, n in ordered:
                     lines.append(f"  - {r}: {n}x")
             msg = "\n".join(lines)
-            await self._bot.send_message(chat_id=self._chat_id, text=msg)
+            await self._send_message(msg)
             logger.info("KZ summary alert sent: %s", kz)
             return True
         except Exception as exc:
@@ -502,7 +536,7 @@ class TelegramBot:
                 f"Type:    {direction}\n"
                 f"Watch:   {implication}"
             )
-            await self._bot.send_message(chat_id=self._chat_id, text=msg)
+            await self._send_message(msg)
             logger.info("Sweep alert sent: %s @ %.2f", level_type, price)
             return True
         except Exception as exc:
@@ -540,7 +574,7 @@ class TelegramBot:
                 for k, v in details.items():
                     lines.append(f"  {k}: {v}")
             msg = "\n".join(lines)
-            await self._bot.send_message(chat_id=self._chat_id, text=msg)
+            await self._send_message(msg)
             logger.info("Near-miss alert sent: %s/%s", kz, reason)
             return True
         except Exception as exc:
@@ -571,7 +605,7 @@ Reason: {reason}
 
 Trading HALTED for remainder of day.
 """
-            await self._bot.send_message(chat_id=self._chat_id, text=msg)
+            await self._send_message(msg)
             logger.warning("Kill switch alert sent: %s", reason)
             return True
 
@@ -610,7 +644,7 @@ Trading HALTED for remainder of day.
             if age_seconds is not None:
                 msg += f"Age: {age_seconds:.1f}s\n"
 
-            await self._bot.send_message(chat_id=self._chat_id, text=msg)
+            await self._send_message(msg)
             logger.info("Heartbeat alert sent: %s", status)
             return True
 
@@ -672,7 +706,7 @@ Sharpe: {sharpe:.2f}
             if total_pnl < -1000:
                 msg += "\n⚠️ NEGATIVE DAY — Monitor closely\n"
 
-            await self._bot.send_message(chat_id=self._chat_id, text=msg)
+            await self._send_message(msg)
             logger.info("Daily summary sent: %s | P&L: %.2f", date_str, total_pnl)
             return True
 
@@ -744,7 +778,7 @@ Value: {vpin:.3f}
             elif toxicity_level == "high":
                 msg += "\nPosition size reduced 25%. Tighter stops.\n"
 
-            await self._bot.send_message(chat_id=self._chat_id, text=msg)
+            await self._send_message(msg)
             logger.info("VPIN alert sent: %s (%.3f)", toxicity_level, vpin)
             return True
 
@@ -786,7 +820,7 @@ Value: {vpin:.3f}
                 f"Position size: {position_size_pct:.0%}\n"
                 f"{summary}"
             )
-            await self._bot.send_message(chat_id=self._chat_id, text=msg)
+            await self._send_message(msg)
             logger.info("Daily mood sent: %s", mood)
             return True
         except Exception as exc:
@@ -816,7 +850,7 @@ Value: {vpin:.3f}
 
 Immediate action required!
 """
-            await self._bot.send_message(chat_id=self._chat_id, text=msg)
+            await self._send_message(msg)
             logger.critical("Emergency alert sent: %s", message)
             return True
 
