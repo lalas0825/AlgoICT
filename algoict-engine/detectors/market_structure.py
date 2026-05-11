@@ -153,8 +153,23 @@ class MarketStructureDetector:
             swing_points, "low", timeframe, last_ts, consumed_l,
         )
 
-        broke_high = latest_sh is not None and last_close > latest_sh.price
-        broke_low = latest_sl is not None and last_close < latest_sl.price
+        # 2026-05-11 — minimum break magnitude filter (Day 6 audit).
+        # Raw `close > swing.price` counts ANY break, including 0.5pt
+        # noise. On a chop day this produces phantom BOS/CHoCH/MSS
+        # events. Require breaks to clear MIN_BREAK_PCT % of price.
+        # Default 0.05% ≈ 15pt at NQ 29,000 → matches SB stop floor +
+        # realistic institutional displacement threshold.
+        import config as _cfg
+        _min_break_pct = float(_cfg.cfg("STRUCT_MIN_BREAK_PCT", 0.05))
+        _min_break = last_close * _min_break_pct / 100.0 if _min_break_pct > 0 else 0.0
+        broke_high = (
+            latest_sh is not None
+            and (last_close - latest_sh.price) > _min_break
+        )
+        broke_low = (
+            latest_sl is not None
+            and (latest_sl.price - last_close) > _min_break
+        )
 
         state = self.state.get(timeframe, "neutral")
 

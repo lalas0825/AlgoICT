@@ -224,6 +224,46 @@ SB_MIN_STOP_POINTS = 15.0
 # beyond. No valid pool ≥ required_target_pts → reject (framework_lt_2R).
 SB_MIN_TARGET_RR = 2.0
 
+# 2026-05-11 — MAX CAPS (Day 6 audit, Trade #5 lesson)
+# Trade #5 (NY AM SHORT) had stop 59.5pt and target 19.04R — far outside
+# any realistic ICT setup. Bot fired anyway because gates only enforce
+# MINIMUMS. These caps close that hole:
+#   - SB_MAX_STOP_POINTS: rejects setups where structural stop is too
+#     wide (typical 15-30pt healthy, 30+ likely a structural anomaly).
+#   - SB_MAX_TARGET_RR: rejects setups where the nearest qualifying
+#     liquidity pool is so far that the framework is unrealistic. 8R
+#     covers any reasonable major-level target while filtering the
+#     "next major pool is 1,000+ pts away" edge cases.
+SB_MAX_STOP_POINTS = 30.0
+SB_MAX_TARGET_RR = 8.0
+
+# 2026-05-11 — STRUCTURE EVENT MAGNITUDE FILTER (Day 6 bug)
+# The MarketStructureDetector calls every close-beyond-prior-swing a
+# BOS / CHoCH / MSS — including breaks of just 1-2 pts. On chop days
+# this produces a stream of noise "structural events" that the strategy
+# treats as institutional signals. Day 6 example: 07:20 "CHoCH bear"
+# came from a 13pt break of a recent swing low during a normal pullback
+# inside a clear uptrend.
+#
+# Fix: require structural breaks to clear a minimum % of price. At
+# NQ 29,300 a 0.05% filter is ~15pt — matches the SB stop floor and
+# the realistic threshold for an institutional structural shift on
+# 5-min. Tune via STRUCT_MIN_BREAK_PCT.
+STRUCT_MIN_BREAK_PCT = 0.05    # % of price; breaks below this are ignored
+
+# 2026-05-11 — HTF DISPLACEMENT OVERRIDE (Day 6 bug)
+# If a recent 5-min displacement is in the OPPOSITE direction with
+# significant magnitude, counter-trend setups become institutional
+# fades and consistently lose. Day 6 Trade #5: bot fired SHORT 6 min
+# after a +132pt bull spike. Override blocks the trade.
+#
+# Activation: last displacement on 5-min within
+# SB_HTF_DISP_OVERRIDE_WINDOW_MIN AND magnitude >=
+# SB_HTF_DISP_OVERRIDE_MIN_PTS → reject opposite-direction setups.
+SB_HTF_DISP_OVERRIDE_ENABLED = True
+SB_HTF_DISP_OVERRIDE_WINDOW_MIN = 30   # only last N min counts
+SB_HTF_DISP_OVERRIDE_MIN_PTS = 80      # min magnitude to trigger
+
 # 2026-04-30 v19a — DISABLED time-based age caps for sweeps and structure.
 # ICT canonical: sweeps and structure events expire by PRICE ACTION, not by
 # clock time. The age caps were anti-selective — they preferentially rejected

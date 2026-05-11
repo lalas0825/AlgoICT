@@ -980,6 +980,81 @@ class SilverBulletStrategy:
             )
             return None
 
+        # ── 2026-05-11 — MAX STOP CAP (Day 6 Trade #5 fix) ─────────────
+        # Reject setups with structural stop wider than SB_MAX_STOP_POINTS.
+        # A 30pt+ structural stop on MNQ is almost always a wide bear FVG
+        # spanning a recent spike — institutional fade material. Trade #5
+        # had 59.5pt stop on a counter-bull-spike short → -$21 quick stop.
+        max_stop_pts = float(config.cfg("SB_MAX_STOP_POINTS", 0))
+        if max_stop_pts > 0 and stop_points > max_stop_pts:
+            logger.info(
+                "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, "
+                "reason=stop_too_wide (stop %.2fpts > %.1fpts max — "
+                "structural stop too wide for an SB setup)",
+                _ts_hm(ts), stop_points, max_stop_pts,
+            )
+            self._set_rejection(
+                ts, "stop_too_wide", active_zone, is_near_miss=True,
+                stop_pts=round(stop_points, 2),
+                threshold_pts=max_stop_pts,
+                entry=entry_price,
+                stop=stop_price,
+                direction=direction,
+            )
+            return None
+
+        # ── 2026-05-11 — HTF DISPLACEMENT OVERRIDE (Day 6 fix) ─────────
+        # If a recent 5-min displacement is in the OPPOSITE direction and
+        # large enough, this setup is a counter-trend fade. Reject.
+        # Day 6 Trade #5: bot fired SHORT 6 min after a +132pt bull spike
+        # → -$21 quick stop. Override blocks this scenario.
+        if config.cfg("SB_HTF_DISP_OVERRIDE_ENABLED", True):
+            disp_det = self.detectors.get("displacement")
+            if disp_det is not None:
+                try:
+                    recent_disps = disp_det.get_recent(n=1, timeframe="5min")
+                    if recent_disps:
+                        ld = recent_disps[0]
+                        disp_age_min = (ts - ld.timestamp).total_seconds() / 60
+                        window_min = float(config.cfg(
+                            "SB_HTF_DISP_OVERRIDE_WINDOW_MIN", 30
+                        ))
+                        min_pts = float(config.cfg(
+                            "SB_HTF_DISP_OVERRIDE_MIN_PTS", 80
+                        ))
+                        opposite = (
+                            (direction == "long" and ld.direction == "bearish")
+                            or (direction == "short" and ld.direction == "bullish")
+                        )
+                        if (
+                            0 <= disp_age_min <= window_min
+                            and abs(ld.magnitude) >= min_pts
+                            and opposite
+                        ):
+                            logger.info(
+                                "EVAL silver_bullet [%s]: confluence=N/A, "
+                                "signal=reject, reason=htf_disp_override "
+                                "(last 5min %s disp %.1fpts @ %s, %.0fmin ago, "
+                                "blocks %s direction)",
+                                _ts_hm(ts), ld.direction, abs(ld.magnitude),
+                                _ts_hm(ld.timestamp), disp_age_min, direction,
+                            )
+                            self._set_rejection(
+                                ts, "htf_disp_override", active_zone,
+                                is_near_miss=True,
+                                direction=direction,
+                                disp_direction=ld.direction,
+                                disp_magnitude=round(abs(ld.magnitude), 2),
+                                disp_age_min=round(disp_age_min, 1),
+                                threshold_pts=min_pts,
+                                window_min=window_min,
+                            )
+                            return None
+                except Exception as exc:
+                    logger.debug(
+                        "HTF disp override check failed: %s", exc,
+                    )
+
         # ── 2026-04-29 FIX #6 — FVG QUALITY FILTER ─────────────────────
         # ICT canonical: a "true" FVG comes from a strong displacement
         # (candle 2 big body) where candle 1 and candle 3 wicks DON'T
@@ -1186,6 +1261,32 @@ class SilverBulletStrategy:
         target_price = float(target.price)
         framework_pts = abs(target_price - entry_price)
         actual_rr = framework_pts / stop_points if stop_points > 0 else 0
+
+        # ── 2026-05-11 — MAX TARGET RR CAP (Day 6 Trade #5 fix) ────────
+        # Reject if the nearest qualifying target is unrealistically far.
+        # Trade #5 had target 19R (1,132pts away) because all closer pools
+        # were swept and the next active level was a distant session low.
+        # 8R cap covers any reasonable institutional target.
+        max_rr = float(config.cfg("SB_MAX_TARGET_RR", 0))
+        if max_rr > 0 and actual_rr > max_rr:
+            logger.info(
+                "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, "
+                "reason=target_too_far (nearest qualifying target=%s@%.2f "
+                "gives %.1fpts = %.2fR > %.1fR max, stop=%.1fpts)",
+                _ts_hm(ts), target.type, target_price,
+                framework_pts, actual_rr, max_rr, stop_points,
+            )
+            self._set_rejection(
+                ts, "target_too_far", active_zone, is_near_miss=True,
+                direction=direction, entry_price=entry_price,
+                stop_pts=round(stop_points, 2),
+                target_type=target.type,
+                target_price=target_price,
+                target_pts=round(framework_pts, 2),
+                target_rr=round(actual_rr, 2),
+                max_rr=max_rr,
+            )
+            return None
 
         # ── 7. Position size ───────────────────────────────────────────
         # Risk amount comes from the RiskManager (ladder-aware when enabled,
