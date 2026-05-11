@@ -254,6 +254,18 @@ class SilverBulletStrategy:
         # signal in the SAME kz tries to fire at an entry within
         # SB_SAME_SETUP_PRICE_TOL_PTS within SB_SAME_SETUP_COOLDOWN_MIN
         # of the loss → reject. ICT: a stopped-out FVG is invalidated.
+        #
+        # 2026-05-11 — MULTI-STOPOUT COOLDOWN LIST (bug fix).
+        # Previously kept only the SINGLE most recent stopout. Caught
+        # live 2026-05-11 Day 6: Trade #1 long @ 29,339.50 stopped,
+        # Trade #2 short @ 29,297.50 stopped (overwrote Trade #1's
+        # cooldown), Trade #3 fired IDENTICAL to Trade #1 ($-162.50)
+        # because the cooldown only knew about Trade #2's price.
+        # Fix: keep ALL recent stopouts in a list, expire on age, gate
+        # checks ANY active cooldown match.
+        self._active_cooldowns: list[dict] = []  # [{entry, ts, kz}]
+        # Legacy single-state attrs retained for backward-compat readers
+        # (always reflect the MOST RECENT stopout).
         self._last_stopped_entry_price: Optional[float] = None
         self._last_stopped_ts = None
         self._last_stopped_kz: str = ""
@@ -280,12 +292,13 @@ class SilverBulletStrategy:
         self._restore_stopped_setup_state()
 
     def _restore_stopped_setup_state(self) -> None:
-        """Restore _last_stopped_* state from disk on startup.
+        """Restore active stopout cooldowns from disk on startup.
 
-        If the bot restarts mid-day after a losing trade, in-memory
-        cooldown state is lost. This reads the persisted file and
-        repopulates state if the recorded loss is recent enough
-        (within SB_SAME_SETUP_COOLDOWN_MIN). 2026-05-04 fix.
+        2026-05-11 — multi-stopout: loads ALL recent stopouts within
+        cooldown window, not just the latest. Each one becomes an
+        active cooldown that the gate can match against. The legacy
+        single-state attrs (_last_stopped_*) are set to the MOST
+        RECENT entry for backward-compat readers.
         """
         try:
             if not self._stopped_setups_file.exists():
@@ -295,29 +308,50 @@ class SilverBulletStrategy:
                 data = _json.load(f)
             if not data:
                 return
-            # Take the LATEST stopped setup (newest by ts)
-            latest = max(data, key=lambda r: r.get("ts", ""))
-            ts_str = latest.get("ts")
-            if not ts_str:
-                return
-            ts = pd.Timestamp(ts_str)
-            now = pd.Timestamp.now(tz=getattr(ts, "tz", None) or "US/Central")
-            # Convert if needed
-            if ts.tz is None and now.tz is not None:
-                ts = ts.tz_localize(now.tz)
+            now = pd.Timestamp.now(tz="US/Central")
             cooldown_min = config.cfg("SB_SAME_SETUP_COOLDOWN_MIN", 240)
-            age_min = (now - ts).total_seconds() / 60
-            if age_min < cooldown_min:
-                self._last_stopped_entry_price = float(latest["entry_price"])
-                self._last_stopped_ts = ts
-                self._last_stopped_kz = str(latest.get("kill_zone", ""))
-                logger.info(
-                    "silver_bullet: restored stopped-setup cooldown from disk — "
-                    "entry %.2f in %s, %.0fmin ago (cooldown %dmin → %.0fmin remaining)",
-                    self._last_stopped_entry_price,
-                    self._last_stopped_kz, age_min, cooldown_min,
-                    cooldown_min - age_min,
-                )
+            restored: list[dict] = []
+            for rec in data:
+                ts_str = rec.get("ts")
+                if not ts_str:
+                    continue
+                try:
+                    ts = pd.Timestamp(ts_str)
+                    if ts.tz is None:
+                        ts = ts.tz_localize("US/Central")
+                except Exception:
+                    continue
+                age_min = (now - ts).total_seconds() / 60
+                if age_min < 0 or age_min >= cooldown_min:
+                    continue
+                restored.append({
+                    "entry_price": float(rec["entry_price"]),
+                    "ts": ts,
+                    "kz": str(rec.get("kill_zone", "")),
+                    "age_min": age_min,
+                })
+            if not restored:
+                return
+            # Sort by ts (oldest first → newest last)
+            restored.sort(key=lambda r: r["ts"])
+            self._active_cooldowns = [
+                {"entry_price": r["entry_price"], "ts": r["ts"], "kz": r["kz"]}
+                for r in restored
+            ]
+            # Legacy single-state: most recent
+            most_recent = restored[-1]
+            self._last_stopped_entry_price = most_recent["entry_price"]
+            self._last_stopped_ts = most_recent["ts"]
+            self._last_stopped_kz = most_recent["kz"]
+            logger.info(
+                "silver_bullet: restored %d active cooldown(s) from disk "
+                "(cooldown_min=%d). Entries: %s",
+                len(restored), cooldown_min,
+                [
+                    f"{r['entry_price']:.2f}/{r['kz']}/{r['age_min']:.0f}min"
+                    for r in restored
+                ],
+            )
         except Exception as exc:
             logger.warning("Restore stopped-setup state failed: %s", exc)
 
@@ -998,41 +1032,67 @@ class SilverBulletStrategy:
                     return None
 
         # ── 2026-04-29 SAME-SETUP STOPOUT COOLDOWN ─────────────────────
-        # If the last loss in THIS kz was at a similar entry price within
+        # If a recent loss in THIS kz was at a similar entry price within
         # the cooldown window, skip — that FVG just stopped us out and is
         # invalidated. ICT: a stopped-out FVG is broken structure, not a
         # second-chance setup. Caught 2026-04-29 NY PM: trades #2 and #3
         # had IDENTICAL entry/stop (27,199.25 / 27,212.75), 13min apart,
         # both stopped out for -$108 each.
-        if (
-            self._last_stopped_entry_price is not None
-            and self._last_stopped_kz == active_zone
-            and self._last_stopped_ts is not None
-        ):
-            try:
-                cooldown_min = config.cfg("SB_SAME_SETUP_COOLDOWN_MIN", 30)
-                price_tol = config.cfg("SB_SAME_SETUP_PRICE_TOL_PTS", 5.0)
-                age_s = (ts - self._last_stopped_ts).total_seconds()
-                price_diff = abs(entry_price - self._last_stopped_entry_price)
-                if age_s <= cooldown_min * 60 and price_diff <= price_tol:
-                    logger.info(
-                        "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, "
-                        "reason=same_setup_cooldown (entry %.2f within %.1fpts of "
-                        "last stopout %.2f, %.0fmin ago)",
-                        _ts_hm(ts), entry_price, price_tol,
-                        self._last_stopped_entry_price, age_s / 60,
-                    )
-                    self._set_rejection(
-                        ts, "same_setup_cooldown", active_zone, is_near_miss=True,
-                        attempted_entry=entry_price,
-                        last_stopped_entry=self._last_stopped_entry_price,
-                        price_diff_pts=round(price_diff, 2),
-                        cooldown_min=cooldown_min,
-                        age_min=round(age_s / 60, 1),
-                    )
-                    return None
-            except Exception as exc:
-                logger.debug("Same-setup cooldown check failed: %s", exc)
+        #
+        # 2026-05-11 — MULTI-STOPOUT (Day 6 bug fix).
+        # Previously checked only the most-recent stopout. Trade #2 in a
+        # different price zone would OVERWRITE Trade #1's cooldown, letting
+        # Trade #3 re-fire Trade #1's identical setup. Now iterates
+        # _active_cooldowns and rejects on ANY match.
+        try:
+            cooldown_min = config.cfg("SB_SAME_SETUP_COOLDOWN_MIN", 30)
+            price_tol = config.cfg("SB_SAME_SETUP_PRICE_TOL_PTS", 5.0)
+            # Prune expired cooldowns first
+            cutoff_age_s = cooldown_min * 60
+            still_active: list[dict] = []
+            for cd in self._active_cooldowns:
+                cd_ts = cd.get("ts")
+                if cd_ts is None:
+                    continue
+                try:
+                    age_s = (ts - cd_ts).total_seconds()
+                except Exception:
+                    continue
+                if 0 <= age_s <= cutoff_age_s:
+                    still_active.append(cd)
+            self._active_cooldowns = still_active
+
+            # Check each active cooldown for a match
+            for cd in self._active_cooldowns:
+                if cd.get("kz") != active_zone:
+                    continue
+                cd_entry = float(cd.get("entry_price") or 0)
+                price_diff = abs(entry_price - cd_entry)
+                if price_diff > price_tol:
+                    continue
+                cd_ts = cd.get("ts")
+                age_s = (ts - cd_ts).total_seconds()
+                logger.info(
+                    "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, "
+                    "reason=same_setup_cooldown (entry %.2f within %.1fpts of "
+                    "stopout #%d/%d at %.2f, %.0fmin ago)",
+                    _ts_hm(ts), entry_price, price_tol,
+                    self._active_cooldowns.index(cd) + 1,
+                    len(self._active_cooldowns),
+                    cd_entry, age_s / 60,
+                )
+                self._set_rejection(
+                    ts, "same_setup_cooldown", active_zone, is_near_miss=True,
+                    attempted_entry=entry_price,
+                    last_stopped_entry=cd_entry,
+                    price_diff_pts=round(price_diff, 2),
+                    cooldown_min=cooldown_min,
+                    age_min=round(age_s / 60, 1),
+                    active_cooldowns_total=len(self._active_cooldowns),
+                )
+                return None
+        except Exception as exc:
+            logger.debug("Same-setup cooldown check failed: %s", exc)
 
         # Min-stop gate (disabled by default in v3; MIN_STOP_PTS=0).
         # The v2 absolute 8pt floor was price-dependent and over-filtered
@@ -1318,31 +1378,41 @@ class SilverBulletStrategy:
             if pnl >= 0:
                 # Winner / scratch — FVG is mitigated above, no cooldown
                 return
-            self._last_stopped_entry_price = float(
-                trade.get("entry_price") or 0
-            ) or None
+            entry_px = float(trade.get("entry_price") or 0) or None
             # exit_time is a string; the strategy compares against
             # incoming bar timestamps (pd.Timestamp). Convert.
             try:
                 import pandas as _pd
-                self._last_stopped_ts = _pd.Timestamp(trade.get("exit_time"))
+                stop_ts = _pd.Timestamp(trade.get("exit_time"))
             except Exception:
-                self._last_stopped_ts = None
-            self._last_stopped_kz = str(trade.get("kill_zone") or "")
+                stop_ts = None
+            kz = str(trade.get("kill_zone") or "")
+
+            # 2026-05-11 — APPEND to active cooldowns list (was: overwrite)
+            # Multi-stopout fix: each loss adds an independent cooldown
+            # entry. The gate iterates ALL of them and rejects on any
+            # match. Prevents Trade #2 from wiping Trade #1's cooldown.
+            if entry_px is not None and stop_ts is not None:
+                self._active_cooldowns.append({
+                    "entry_price": entry_px,
+                    "ts": stop_ts,
+                    "kz": kz,
+                })
+
+            # Legacy single-state for backward-compat readers (most recent)
+            self._last_stopped_entry_price = entry_px
+            self._last_stopped_ts = stop_ts
+            self._last_stopped_kz = kz
+
             logger.info(
-                "silver_bullet: same-setup cooldown ARMED — last stopout "
-                "@ %.2f in %s at %s",
-                self._last_stopped_entry_price or 0.0,
-                self._last_stopped_kz or "?",
-                self._last_stopped_ts,
+                "silver_bullet: same-setup cooldown ARMED — stopout "
+                "@ %.2f in %s at %s (%d active cooldowns total)",
+                entry_px or 0.0, kz or "?", stop_ts,
+                len(self._active_cooldowns),
             )
             # 2026-05-04 — persist to disk so restart preserves cooldown.
-            if self._last_stopped_entry_price is not None and self._last_stopped_ts is not None:
-                self._persist_stopped_setup(
-                    self._last_stopped_entry_price,
-                    self._last_stopped_ts,
-                    self._last_stopped_kz,
-                )
+            if entry_px is not None and stop_ts is not None:
+                self._persist_stopped_setup(entry_px, stop_ts, kz)
         except Exception as exc:
             logger.debug("notify_trade_closed failed: %s", exc)
 

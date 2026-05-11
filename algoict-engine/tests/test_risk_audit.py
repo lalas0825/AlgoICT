@@ -213,8 +213,12 @@ class TestMinConfluence:
 # ---------------------------------------------------------------------------
 
 class TestKillSwitch:
-    def test_3_losses_stop_4th(self):
-        """4th trade on same day after 3 consecutive losses = violation."""
+    def test_3_losses_stop_4th(self, monkeypatch):
+        """4th trade on same day after 3 consecutive losses = violation.
+        2026-05-11: count-based gate is opt-in (KILL_SWITCH_LOSSES=0
+        disabled by default in favor of P&L-only). Re-enable here so
+        the boundary semantics are still covered."""
+        monkeypatch.setattr("config.KILL_SWITCH_LOSSES", 3)
         base_time = _ts(9, 0, day=1)
         def loss_trade(offset_min):
             t = _good_trade(

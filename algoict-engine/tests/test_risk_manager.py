@@ -50,7 +50,12 @@ class TestRecordTrade:
         rm.record_trade(200)
         assert rm.daily_pnl == pytest.approx(400)
 
-    def test_three_losses_activate_kill_switch(self):
+    def test_three_losses_activate_kill_switch(self, monkeypatch):
+        """When KILL_SWITCH_LOSSES is enabled (>0), 3 consecutive losses
+        trigger the kill switch. 2026-05-11: count-based gate now respects
+        a 0-disabled default — test re-enables it explicitly."""
+        from config import KILL_SWITCH_LOSSES as _default  # noqa
+        monkeypatch.setattr("config.KILL_SWITCH_LOSSES", 3)
         rm = RiskManager()
         rm.record_trade(-250)
         rm.record_trade(-250)
@@ -58,13 +63,18 @@ class TestRecordTrade:
         rm.record_trade(-250)
         assert rm.kill_switch_active
 
-    def test_loss_exceeds_750_activates_kill_switch(self):
-        """Single large loss exceeds KILL_SWITCH_AMOUNT."""
+    def test_loss_exceeds_amount_activates_kill_switch(self):
+        """Single large loss exceeds KILL_SWITCH_AMOUNT (default $900 per
+        2026-05-11; was $750)."""
         rm = RiskManager()
-        rm.record_trade(-800)
+        rm.record_trade(-1000)  # > $900 default
         assert rm.kill_switch_active
 
-    def test_two_losses_plus_partial_no_kill_switch(self):
+    def test_two_losses_plus_partial_no_kill_switch(self, monkeypatch):
+        """Two losses below the 3-loss count gate (when enabled) keep the
+        kill switch off. 2026-05-11: gate is opt-in; this test pins it on
+        to verify the boundary behavior is preserved."""
+        monkeypatch.setattr("config.KILL_SWITCH_LOSSES", 3)
         rm = RiskManager()
         rm.record_trade(-250)
         rm.record_trade(-250)
@@ -222,7 +232,10 @@ class TestResetDaily:
         assert rm._min_confluence_adj == 0
         assert rm.position_multiplier == pytest.approx(1.0)
 
-    def test_can_trade_after_reset(self):
+    def test_can_trade_after_reset(self, monkeypatch):
+        """3 consecutive losses halt trading; reset_daily restores it.
+        2026-05-11: count-based gate is opt-in; test pins it on."""
+        monkeypatch.setattr("config.KILL_SWITCH_LOSSES", 3)
         rm = RiskManager()
         rm.record_trade(-250)
         rm.record_trade(-250)

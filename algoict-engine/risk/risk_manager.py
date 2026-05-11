@@ -426,8 +426,13 @@ class RiskManager:
         # 3-loss halt would block shots 4 + 5 ($100 + $50) which the
         # ladder explicitly budgets for inside the DLL. Daily-loss and
         # ladder-exhaustion checks below still trip the kill switch.
+        # 2026-05-11 — gate now respects KILL_SWITCH_LOSSES=0 as "disabled".
+        # User decision Day 6: replace count-based limit with P&L-only
+        # ($900 via KILL_SWITCH_AMOUNT). Setting KILL_SWITCH_LOSSES=0
+        # disables this gate while keeping the code path for future use.
         if (
             not self._ladder_enabled
+            and config.KILL_SWITCH_LOSSES > 0
             and self.consecutive_losses >= config.KILL_SWITCH_LOSSES
         ):
             if not self.kill_switch_active:

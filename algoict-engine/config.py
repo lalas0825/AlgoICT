@@ -147,8 +147,17 @@ RISK_PER_TRADE = 250          # $250 max risk per trade
 MNQ_POINT_VALUE = 2.0         # USD per point per contract (4 ticks × $0.50)
 MNQ_TICK_VALUE = 0.50         # USD per tick per contract (0.25 pts)
 MNQ_TICK_SIZE = 0.25          # minimum price increment (used for order rounding)
-KILL_SWITCH_LOSSES = 3        # 3 consecutive losses = done for the day
-KILL_SWITCH_AMOUNT = 750      # $750 max daily loss from kill switch
+
+# 2026-05-11 — KILL SWITCH SIMPLIFIED TO P&L-ONLY
+# Old: 3 consecutive losses OR 3 total daily losses OR $750 daily P&L.
+# Count-based gates blocked the bot prematurely on days where 3 small
+# losses still left room for profit recovery. User decision Day 6:
+# replace count gates with a single $900 P&L drawdown threshold
+# (Topstep $50K DLL is $1,000 — $900 leaves a $100 buffer).
+#
+# 0 disables the count-based gates. Only KILL_SWITCH_AMOUNT remains.
+KILL_SWITCH_LOSSES = 0        # 0 = disabled (was: 3 consecutive losses)
+KILL_SWITCH_AMOUNT = 900      # $900 max daily P&L drawdown (was: 750)
 
 # 2026-05-05 — DAILY TOTAL LOSSES KILL SWITCH (post-Day-2 audit)
 # The existing KILL_SWITCH_LOSSES counts CONSECUTIVE losses — a winner
@@ -162,7 +171,7 @@ KILL_SWITCH_AMOUNT = 750      # $750 max daily loss from kill switch
 # Tighter than KILL_SWITCH_AMOUNT alone because it triggers BEFORE
 # you've lost $750 — 3 small losses ($250 each = $750) gets you to the
 # limit, but 3 mid losses ($300 + $400 + $500 = $1,200) blow past it.
-KILL_SWITCH_DAILY_LOSSES = 3
+KILL_SWITCH_DAILY_LOSSES = 0   # 2026-05-11: disabled — see KILL_SWITCH_AMOUNT above
 
 # 2026-04-29 hardening — same-setup tighter kill-switch + cooldown.
 # Caught 2026-04-29 NY PM: bot took 3 SHORTs at IDENTICAL entry/stop

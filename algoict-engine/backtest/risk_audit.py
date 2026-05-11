@@ -165,7 +165,13 @@ def audit_trades(trades) -> AuditResult:
             # ── Rule 5: Kill switch ────────────────────────────────────────
             # A trade is a violation if it was taken AFTER the kill switch
             # would have been triggered by previous losses that day.
-            if consecutive_losses >= config.KILL_SWITCH_LOSSES:
+            # 2026-05-11: KILL_SWITCH_LOSSES=0 disables the count-based gate
+            # (P&L-only kill switch via KILL_SWITCH_AMOUNT). Skip violation
+            # check when disabled.
+            if (
+                config.KILL_SWITCH_LOSSES > 0
+                and consecutive_losses >= config.KILL_SWITCH_LOSSES
+            ):
                 v = TradeViolation(
                     trade_index=i,
                     entry_time=t.entry_time,
