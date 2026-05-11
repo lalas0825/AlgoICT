@@ -249,7 +249,14 @@ SB_MAX_TARGET_RR = 8.0       # cap absurd 19R+ target scenarios
 # NQ 29,300 a 0.05% filter is ~15pt — matches the SB stop floor and
 # the realistic threshold for an institutional structural shift on
 # 5-min. Tune via STRUCT_MIN_BREAK_PCT.
-STRUCT_MIN_BREAK_PCT = 0.05    # % of price; breaks below this are ignored
+# 2026-05-11 PM revert: hybrid v20d baseline. Full-year 2025 backtest
+# showed this filter (at 0.05) regressed P&L from +$83,740 (v20d biasflip)
+# to +$25,054 (-70%). Live diagnosis revealed Day 6 chop was caused by
+# cooldown re-fires + 7.5pt-stop bug, NOT structure noise. Real anti-chop
+# already deployed via cooldown multi-stopout list (7292cc7), min_stop
+# 15pt (ca03e19), bias-flip (bbb3a73), FVG-mitigate-on-any-close
+# (d5570eb). Disabling magnitude filter restores v20d trade pace + WR.
+STRUCT_MIN_BREAK_PCT = 0       # 0 = disabled (was: 0.05, too restrictive)
 
 # 2026-05-11 — HTF DISPLACEMENT OVERRIDE (Day 6 bug)
 # If a recent 5-min displacement is in the OPPOSITE direction with
@@ -260,9 +267,14 @@ STRUCT_MIN_BREAK_PCT = 0.05    # % of price; breaks below this are ignored
 # Activation: last displacement on 5-min within
 # SB_HTF_DISP_OVERRIDE_WINDOW_MIN AND magnitude >=
 # SB_HTF_DISP_OVERRIDE_MIN_PTS → reject opposite-direction setups.
-SB_HTF_DISP_OVERRIDE_ENABLED = True
-SB_HTF_DISP_OVERRIDE_WINDOW_MIN = 30   # only last N min counts
-SB_HTF_DISP_OVERRIDE_MIN_PTS = 80      # min magnitude to trigger
+# 2026-05-11 PM revert: disabled per v20d hybrid baseline. The Day 6
+# counter-trend short trade (Trade #5) was caused by a 19R target setup,
+# already neutralized by SB_MAX_TARGET_RR=8.0 above. v20d biasflip
+# backtest 2025 had no such override and scored 72.4% WR / +$83,740 —
+# adding this filter cut WR -10pp without reducing DD materially.
+SB_HTF_DISP_OVERRIDE_ENABLED = False   # was: True (over-filtered NY AM/PM)
+SB_HTF_DISP_OVERRIDE_WINDOW_MIN = 30   # only last N min counts (if re-enabled)
+SB_HTF_DISP_OVERRIDE_MIN_PTS = 80      # min magnitude to trigger (if re-enabled)
 
 # 2026-04-30 v19a — DISABLED time-based age caps for sweeps and structure.
 # ICT canonical: sweeps and structure events expire by PRICE ACTION, not by
