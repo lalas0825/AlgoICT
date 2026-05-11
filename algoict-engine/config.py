@@ -226,16 +226,16 @@ SB_MIN_TARGET_RR = 2.0
 
 # 2026-05-11 — MAX CAPS (Day 6 audit, Trade #5 lesson)
 # Trade #5 (NY AM SHORT) had stop 59.5pt and target 19.04R — far outside
-# any realistic ICT setup. Bot fired anyway because gates only enforce
-# MINIMUMS. These caps close that hole:
-#   - SB_MAX_STOP_POINTS: rejects setups where structural stop is too
-#     wide (typical 15-30pt healthy, 30+ likely a structural anomaly).
-#   - SB_MAX_TARGET_RR: rejects setups where the nearest qualifying
-#     liquidity pool is so far that the framework is unrealistic. 8R
-#     covers any reasonable major-level target while filtering the
-#     "next major pool is 1,000+ pts away" edge cases.
-SB_MAX_STOP_POINTS = 30.0
-SB_MAX_TARGET_RR = 8.0
+# any realistic ICT setup. The real problem was the 19R target (next
+# qualifying pool 1,132 pts away), NOT the wide stop. A 50-80pt stop
+# with a 2R+ target is mathematically valid (e.g., 80pt stop / 160pt
+# target = 1:2 = same math as 15pt stop / 30pt target).
+#
+# Decision 2026-05-11: keep SB_MAX_TARGET_RR cap, disable
+# SB_MAX_STOP_POINTS. Wide stops alone aren't disqualifying — only
+# combined with disproportionate targets.
+SB_MAX_STOP_POINTS = 0       # 0 = disabled (was: 30, too restrictive)
+SB_MAX_TARGET_RR = 8.0       # cap absurd 19R+ target scenarios
 
 # 2026-05-11 — STRUCTURE EVENT MAGNITUDE FILTER (Day 6 bug)
 # The MarketStructureDetector calls every close-beyond-prior-swing a
