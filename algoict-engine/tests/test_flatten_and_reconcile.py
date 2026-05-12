@@ -115,6 +115,14 @@ def _make_components_and_state(open_positions_count: int = 1):
         )
         state.open_positions[f"pos_{i}"] = {
             "signal": signal,
+            # 2026-05-12: entry_order with filled_price so phantom-purge fix
+            # in _flatten_all (added post NY PM audit) treats these as
+            # legitimate filled positions, not unfilled-limit phantoms.
+            "entry_order": SimpleNamespace(
+                order_id=f"entry_{i}",
+                filled_price=20000.00 + i * 10,
+            ),
+            "entry_fill_confirmed": True,
             "stop_order": SimpleNamespace(order_id=f"stop_{i}"),
             "target_order": SimpleNamespace(order_id=f"target_{i}"),
             "current_stop_price": float(signal.stop_price),
@@ -203,6 +211,8 @@ class TestFlattenPnLSynthesis:
         )
         state.open_positions["short_1"] = {
             "signal": sig_short,
+            "entry_order": SimpleNamespace(order_id="e1", filled_price=20010.00),
+            "entry_fill_confirmed": True,
             "stop_order": SimpleNamespace(order_id="s1"),
             "target_order": SimpleNamespace(order_id="t1"),
             "current_stop_price": float(sig_short.stop_price),
@@ -269,6 +279,73 @@ class TestFlattenPnLSynthesis:
         # All 3 positions attempted, state cleared regardless of the raise.
         assert calls["n"] == 3
         assert state.open_positions == {}
+
+    @pytest.mark.asyncio
+    async def test_flatten_purges_phantom_unfilled_positions_without_synth_pnl(
+        self, monkeypatch,
+    ):
+        """2026-05-12 NY PM regression: unfilled limit entry sits in
+        state.open_positions waiting for fill. If hard_close (or any other
+        flatten) triggers BEFORE the fill, the old code synthesized a fake
+        P&L using `last_close_proxy` vs `signal.entry_price` (the unfilled
+        limit price) and blasted Telegram with a fake WIN/LOSS alert.
+        After the fix, phantoms (entry_fill_confirmed=False) are PURGED
+        with NO P&L recorded and NO trade-closed callback fired.
+        """
+        import main as engine_main
+        import pandas as pd
+
+        components, state = _make_components_and_state(open_positions_count=0)
+
+        # Phantom: unfilled limit position (entry_fill_confirmed=False).
+        sig_phantom = _make_signal(
+            entry=20000.00, stop=19985.00, target=20030.00,
+            contracts=3, kill_zone="ny_pm",
+        )
+        state.open_positions["phantom_1"] = {
+            "signal": sig_phantom,
+            "entry_order": SimpleNamespace(order_id="e_phantom", filled_price=None),
+            "entry_fill_confirmed": False,   # NEVER FILLED
+            "stop_order": SimpleNamespace(order_id="s_phantom"),
+            "target_order": SimpleNamespace(order_id="t_phantom"),
+            "current_stop_price": float(sig_phantom.stop_price),
+            "opened_at": sig_phantom.timestamp,
+        }
+        # Also a legitimate filled position for contrast.
+        sig_filled = _make_signal(
+            entry=20050.00, stop=20040.00, target=20070.00,
+            contracts=2, kill_zone="ny_pm",
+        )
+        state.open_positions["filled_1"] = {
+            "signal": sig_filled,
+            "entry_order": SimpleNamespace(order_id="e_real", filled_price=20050.00),
+            "entry_fill_confirmed": True,
+            "stop_order": SimpleNamespace(order_id="s_real"),
+            "target_order": SimpleNamespace(order_id="t_real"),
+            "current_stop_price": float(sig_filled.stop_price),
+            "opened_at": sig_filled.timestamp,
+        }
+
+        recorded: list[dict] = []
+        async def _cap(comp, st, trade):
+            recorded.append(trade)
+        monkeypatch.setattr(engine_main, "_on_trade_closed", _cap)
+
+        await engine_main._flatten_all(components, state, reason="hard_close")
+
+        # Only the FILLED position should produce a trade-closed event.
+        # The PHANTOM should be silently cancelled with NO synthesized P&L.
+        assert len(recorded) == 1
+        assert recorded[0]["entry_price"] == 20050.00
+        assert recorded[0]["reason"] == "flatten:hard_close"
+        # State fully cleared (phantoms removed too).
+        assert state.open_positions == {}
+        # Phantom's entry_order MUST have been cancelled at broker.
+        cancelled_ids = {call.args[0] for call in
+                        components.broker.cancel_order.await_args_list}
+        assert "e_phantom" in cancelled_ids
+        # Filled position's entry_order was NOT cancelled (only stop+target).
+        assert "e_real" not in cancelled_ids
 
 
 # ─── _reconcile_positions symbol normalization ─────────────────────────────

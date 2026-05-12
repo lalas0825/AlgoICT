@@ -3760,6 +3760,19 @@ async def _flatten_all(
     #      better than the prior silent P&L loss)
     #   5. Call _on_trade_closed per position (risk.record_trade + Supabase
     #      trade row + Telegram exit alert + post-mortem if loss)
+    # 2026-05-12 — PHANTOM PURGE (post NY PM audit, fake $601 win bug).
+    # `state.open_positions` includes UNFILLED limit entries (entry_fill_confirmed=False)
+    # waiting for fill. If a flatten triggers while limits are still pending,
+    # the old loop would synthesize a fake P&L for these phantoms using
+    # `last_close_proxy` as exit and `signal.entry_price` (the unfilled limit
+    # price) as entry — producing fake wins/losses that get blasted to
+    # Telegram and Supabase. Observed 2026-05-12 NY PM: unfilled limit BUY
+    # @ 29072.75 sat for 28 min, hard close synthesized fake "WIN $601.50".
+    #
+    # Fix: separate phantom (never filled) positions from filled positions.
+    # Phantoms get cancelled cleanly with NO P&L event — they are not
+    # trades, they were just resting orders.
+    phantom_keys: list = []
     captured: list[dict] = []
     for pos_key, pos in list(state.open_positions.items()):
         signal = pos.get("signal")
@@ -3786,6 +3799,37 @@ async def _flatten_all(
                         "Pre-flatten cancel of %s %s failed (continuing): %s",
                         order_attr, ord_obj.order_id, exc,
                     )
+
+        # ── Phantom detection ─────────────────────────────────────────────
+        # If the entry limit never filled (broker has no position for this
+        # order), DO NOT synthesize a P&L. Just cancel + log + skip.
+        entry_filled = bool(pos.get("entry_fill_confirmed", False))
+        ent_ord = pos.get("entry_order")
+        if not entry_filled:
+            # Also cancel the unfilled entry limit itself.
+            try:
+                if ent_ord is not None and getattr(ent_ord, "order_id", None):
+                    ok = await components.broker.cancel_order(str(ent_ord.order_id))
+                    if not ok:
+                        logger.warning(
+                            "Pre-flatten cancel of unfilled entry limit %s "
+                            "returned False — may still be working on broker",
+                            ent_ord.order_id,
+                        )
+            except Exception as exc:
+                logger.debug(
+                    "Pre-flatten cancel of entry limit failed (continuing): %s",
+                    exc,
+                )
+            logger.warning(
+                "FLATTEN: phantom position purged (entry limit %s @ %.2f "
+                "NEVER FILLED, %s) — no P&L recorded, no trade alert sent",
+                getattr(ent_ord, "order_id", "?") if ent_ord else "?",
+                float(signal.entry_price),
+                reason,
+            )
+            phantom_keys.append(pos_key)
+            continue
 
         captured.append({
             "pos_key": pos_key,
@@ -3932,6 +3976,20 @@ async def _flatten_all(
             await _on_trade_closed(components, state, trade_dict)
         except Exception as exc:
             logger.error("_on_trade_closed raised during flatten: %s", exc)
+
+    # 2026-05-12 — Phantom purge visibility. If any unfilled-limit phantoms
+    # were purged in this flatten, send a Telegram alert so the user knows
+    # WHY no trade-closed alert fired for them (previously they got a fake
+    # WIN alert with synthesized P&L — see bug audit 2026-05-12 NY PM).
+    if phantom_keys and components.telegram is not None:
+        try:
+            await components.telegram.send_emergency_alert(
+                f"Flatten ({reason}): {len(phantom_keys)} phantom position(s) "
+                f"purged (unfilled limit orders cancelled, NO P&L recorded). "
+                f"This is correct behavior — replaces the prior fake-WIN bug."
+            )
+        except Exception:
+            pass
 
     state.open_positions.clear()
     if emergency:
