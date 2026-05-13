@@ -498,13 +498,59 @@ class Backtester:
             # ── 5. Sweep check on current 1-min bar ────────────────────
             self._update_sweeps(bar_high, bar_low, bar_close, bar_ts=current_ts)
 
-            # ── 6. Strategy evaluation — skip if a limit order is waiting
+            # ── 5b. AUTO-CANCEL pending on bias-flip (2026-05-13 Tier 1.5) ──
+            # If a pending limit has been sitting and an OPPOSITE 5min
+            # CHoCH/MSS event has now registered, the structural thesis is
+            # dead — cancel proactively (no need to wait for new signal).
             if pending_entry is not None:
-                continue
+                try:
+                    from strategies.opportunity_replace import should_autocancel_pending
+                    struct_det = self.detectors.get("structure")
+                    if struct_det is not None:
+                        all_struct = struct_det.get_events(timeframe="5min")
+                        pending_ts = pending_entry.get("entry_time")
+                        cancel, reason = should_autocancel_pending(
+                            pending_entry, all_struct, pending_ts,
+                        )
+                        if cancel:
+                            logger.debug(
+                                "LIMIT AUTOCANCEL: %s %s limit @ %.2f cancelled — %s",
+                                pending_entry.get("strategy"),
+                                pending_entry.get("direction"),
+                                pending_entry.get("limit_price"),
+                                reason,
+                            )
+                            pending_entry = None
+                except Exception as exc:
+                    logger.debug("autocancel check failed: %s", exc)
 
+            # ── 6. Strategy evaluation (Tier 1/2/2.5 — always evaluate,
+            # then decide to replace pending or queue new) ───────────────
             signal = self.strategy.evaluate(df_entry_slice, df_context_slice)
-            if signal is None:
+            if signal is None and pending_entry is None:
                 continue
+            if signal is None:
+                # No new signal; keep waiting on pending.
+                continue
+            # New signal AND a pending exists → check replacement
+            if pending_entry is not None:
+                from strategies.opportunity_replace import should_replace_pending
+                bars_pending = pending_entry.get("bars_waiting", 0)
+                replace, reason = should_replace_pending(
+                    signal, pending_entry,
+                    current_price=bar_close,
+                    bars_pending=bars_pending,
+                )
+                if not replace:
+                    # Suppress new (keep pending). Same as original behavior.
+                    continue
+                logger.debug(
+                    "LIMIT REPLACE: pending %s @ %.2f replaced by new %s @ %.2f — %s",
+                    pending_entry.get("direction"), pending_entry.get("limit_price"),
+                    signal.direction, float(signal.entry_price), reason,
+                )
+                # Fall through — replaces pending with the new signal below.
+                pending_entry = None
 
             # ── 6b. Cruise mode overrides ─────────────────────────────
             sig_contracts = int(signal.contracts)
@@ -790,17 +836,51 @@ class Backtester:
                     candidate_stops.append(ratchet)
                     pos["ratcheted_to_1R"] = True
 
+        # ── 1b. R-step trail (2026-05-12, post NY AM audit) ─────────
+        # NY AM trade 2026-05-12 reached +4.58R peak but trail (swing-
+        # based) exited at +1R, leaving 3.58R on the table. User
+        # proposed continuous R-step trail with 2R buffer:
+        #   peak +2R → trail at 0R (break-even)
+        #   peak +3R → trail at +1R
+        #   peak +4R → trail at +2R
+        #   peak +NR (N≥2) → trail at (N - buffer)R
+        # Buffer defaults to 2.0R, configurable via TRAIL_R_STEP_BUFFER.
+        # Set TRAIL_R_STEP_ENABLED=False to disable.
+        if entry is not None and bar_high is not None and bar_low is not None:
+            import config as _cfg
+            r_step_enabled = bool(_cfg.cfg("TRAIL_R_STEP_ENABLED", True))
+            r_step_buffer = float(_cfg.cfg("TRAIL_R_STEP_BUFFER", 2.0))
+            R = abs(entry - initial_stop)
+            if r_step_enabled and R > 0:
+                peak_R = pos.get("peak_R", 0.0)
+                if peak_R >= r_step_buffer:
+                    trail_R = peak_R - r_step_buffer
+                    trail_R = max(0.0, trail_R)  # floor at BE
+                    if direction == "long":
+                        r_step = entry + (trail_R * R)
+                    else:
+                        r_step = entry - (trail_R * R)
+                    candidate_stops.append(r_step)
+
         # ── 2. Swing-based trail ────────────────────────────────────
-        swing = self.detectors.get("swing_entry")
-        if swing is not None:
-            if direction == "long":
-                sp = swing.get_latest_swing_low()
-                if sp is not None:
-                    candidate_stops.append(sp.price)
-            else:
-                sp = swing.get_latest_swing_high()
-                if sp is not None:
-                    candidate_stops.append(sp.price)
+        # 2026-05-12 — Optionally disabled when R-step is on (TRAIL_USE_SWING=False).
+        # User feedback after NY AM audit: swing trail is too aggressive on
+        # fast moves (mini swings form during the ramp, prematurely tightening
+        # trail and capping big winners at 1-2R instead of letting R-step's
+        # 2R-buffer trail capture 3-4R).
+        import config as _cfg2
+        _use_swing = bool(_cfg2.cfg("TRAIL_USE_SWING", True))
+        if _use_swing:
+            swing = self.detectors.get("swing_entry")
+            if swing is not None:
+                if direction == "long":
+                    sp = swing.get_latest_swing_low()
+                    if sp is not None:
+                        candidate_stops.append(sp.price)
+                else:
+                    sp = swing.get_latest_swing_high()
+                    if sp is not None:
+                        candidate_stops.append(sp.price)
 
         # Pick the tightest candidate that's also better than current stop.
         if direction == "long":

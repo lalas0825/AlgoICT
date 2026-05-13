@@ -119,19 +119,33 @@ class MarketStructureDetector:
         consumed_l = self._consumed_low_ts.setdefault(timeframe, set())
 
         # ── Step 1: try to confirm a pending CHoCH ────────────────────
+        # 2026-05-12 — MSS follow-through magnitude filter (London audit).
+        # The MSS confirmation step previously triggered on ANY close
+        # beyond the CHoCH bar's close — even a 1-tick continuation.
+        # On 2026-05-12 London this produced a fake "MSS bull @ 05:10"
+        # with only +7.25pt of follow-through above the CHoCH close.
+        # Price then dropped 117pt, but the fake MSS had already blocked
+        # bearish setups via the bias-flip gate for an hour.
+        # Fix: require the follow-through close to clear the CHoCH close
+        # by STRUCT_MSS_MIN_FOLLOWTHROUGH_PCT (default 0.05% ≈ 15pt at
+        # NQ 29K). Matches the magnitude semantics used for BOS/CHoCH.
+        import config as _cfg
+        _mss_min_pct = float(_cfg.cfg("STRUCT_MSS_MIN_FOLLOWTHROUGH_PCT", 0.05))
+        _mss_min = last_close * _mss_min_pct / 100.0 if _mss_min_pct > 0 else 0.0
+
         pending = self._pending_choch.get(timeframe)
         if pending is not None:
             choch_close = self._pending_choch_close[timeframe]
 
             confirmed = False
-            if pending.direction == "bearish" and last_close < choch_close:
+            if pending.direction == "bearish" and (choch_close - last_close) > _mss_min:
                 mss = self._make_event(
                     "MSS", "bearish", pending.level, last_ts, timeframe,
                 )
                 new_events.append(mss)
                 self.state[timeframe] = "bearish"
                 confirmed = True
-            elif pending.direction == "bullish" and last_close > choch_close:
+            elif pending.direction == "bullish" and (last_close - choch_close) > _mss_min:
                 mss = self._make_event(
                     "MSS", "bullish", pending.level, last_ts, timeframe,
                 )

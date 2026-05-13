@@ -3225,6 +3225,204 @@ async def _manage_open_positions(
                     logger.debug("Trailing stop Telegram alert failed: %s", exc)
 
 
+# ────────────────────────────────────────────────────────────────────────────
+# 2026-05-13 — Opportunity replacement helpers (Day 8 audit, Trade #3 lockup)
+# ────────────────────────────────────────────────────────────────────────────
+# Problem: When the bot has a pending limit that doesn't fill (price moves
+# away), `state.open_positions` retains the phantom and `single-position
+# rule` suppresses ALL new signals until TTL expires (3-4 hours typical).
+# Live 2026-05-13 NY AM observed: 5 unique fresher setups MISSED during a
+# single Trade #3 lockup.
+#
+# Phase 1 features (Tier 1, 2, 2.5, 1.5):
+#   - Tier 1: New OPPOSITE-direction signal → replace pending (bias flip)
+#   - Tier 2: New SAME-direction signal materially closer to price → replace
+#   - Tier 2.5: Pending stale (>N bars) → easy to replace
+#   - Tier 1.5: Opposite 5min CHoCH/MSS during pending → autocancel
+#
+# Decision logic lives in strategies/opportunity_replace.py (pure functions,
+# unit-tested). These main.py helpers handle the I/O side: cancel orders,
+# clean state, alert.
+
+async def _cancel_pending_for_replace(
+    components: Components,
+    state: EngineState,
+    pos_key,
+    pos: dict,
+    reason: str,
+) -> None:
+    """Cancel a pending limit's broker orders + clean up local state.
+
+    Used by both replace (Tier 1, 2, 2.5) and autocancel (Tier 1.5) paths.
+    """
+    signal = pos.get("signal")
+
+    # Cancel entry + stop + (target) at broker.
+    for kind in ("entry_order", "stop_order", "target_order"):
+        ord_obj = pos.get(kind)
+        if ord_obj is None:
+            continue
+        oid = getattr(ord_obj, "order_id", None)
+        if not oid:
+            continue
+        try:
+            ok = await components.broker.cancel_order(str(oid))
+            if not ok:
+                logger.warning(
+                    "OPPORTUNITY: cancel of %s %s returned False (broker may "
+                    "still have it working — reconcile will sweep)",
+                    kind, oid,
+                )
+        except Exception as exc:
+            logger.debug(
+                "OPPORTUNITY: cancel of %s %s failed (continuing): %s",
+                kind, oid, exc,
+            )
+
+    # Remove from local state.
+    state.open_positions.pop(pos_key, None)
+
+    # Rollback per-zone / per-day trade counters — this trade never happened.
+    if signal is not None:
+        strat_name = getattr(signal, "strategy", "")
+        strat = None
+        if strat_name == "ny_am_reversal":
+            strat = getattr(components, "ny_am_strategy", None)
+        elif strat_name == "silver_bullet":
+            strat = getattr(components, "silver_bullet_strategy", None)
+        if strat is not None:
+            kz = getattr(signal, "kill_zone", "") or ""
+            try:
+                zbz = getattr(strat, "_trades_by_zone", None)
+                if isinstance(zbz, dict) and kz in zbz and zbz[kz] > 0:
+                    zbz[kz] -= 1
+                if hasattr(strat, "trades_today") and strat.trades_today > 0:
+                    strat.trades_today -= 1
+            except Exception as exc:
+                logger.warning(
+                    "OPPORTUNITY: KZ counter rollback failed: %s", exc,
+                )
+            # Release dedup so same-ts can re-evaluate freshly.
+            if hasattr(strat, "rollback_last_evaluated_bar"):
+                try:
+                    strat.rollback_last_evaluated_bar(signal.timestamp)
+                except Exception:
+                    pass
+
+    # Telegram alert (visibility for user).
+    if components.telegram is not None and signal is not None:
+        try:
+            await components.telegram.send_emergency_alert(
+                f"OPPORTUNITY {reason.upper()}: pending "
+                f"{signal.direction.upper()} @ {float(signal.entry_price):.2f} "
+                f"cancelled."
+            )
+        except Exception:
+            pass
+
+
+async def _try_opportunity_replace(
+    signal,
+    components: Components,
+    state: EngineState,
+) -> bool:
+    """Tier 1, 2, 2.5 — try to replace pending limit with new signal.
+
+    Returns True if pending was cancelled (caller may proceed with new
+    signal execution). Returns False if pending was kept (suppress new).
+    """
+    if not bool(config.cfg("OPPORTUNITY_REPLACE_ENABLED", True)):
+        return False
+
+    # Find a pending (unfilled) position. Pick the FIRST one — typically
+    # only one exists due to single-position rule.
+    pending_key = None
+    pending = None
+    for k, p in state.open_positions.items():
+        if not p.get("entry_fill_confirmed", False):
+            pending_key = k
+            pending = p
+            break
+    if pending is None:
+        return False  # All filled — single-position rule still applies.
+
+    # Current price.
+    try:
+        last_price = float(state.bars_1min["close"].iloc[-1])
+    except Exception:
+        return False
+    bars_pending = int(pending.get("bars_pending", 0))
+
+    from strategies.opportunity_replace import should_replace_pending
+    replace, reason = should_replace_pending(
+        signal, pending, last_price, bars_pending=bars_pending,
+    )
+    if not replace:
+        return False
+
+    logger.info(
+        "OPPORTUNITY REPLACE: pending %s @ %.2f → new %s @ %.2f — %s",
+        pending["signal"].direction, float(pending["signal"].entry_price),
+        signal.direction, float(signal.entry_price), reason,
+    )
+    await _cancel_pending_for_replace(
+        components, state, pending_key, pending,
+        reason=f"replace:{reason}",
+    )
+    return True
+
+
+async def _check_autocancel_pending(
+    components: Components,
+    state: EngineState,
+) -> None:
+    """Tier 1.5 — proactive autocancel on bias-flip CHoCH/MSS.
+
+    Called per bar, BEFORE strategy evaluation. Cancels pending limits
+    whose structural thesis has been invalidated by an opposite-direction
+    structure event.
+    """
+    if not bool(config.cfg("OPPORTUNITY_REPLACE_ENABLED", True)):
+        return
+    if not bool(config.cfg("AUTOCANCEL_ON_BIAS_FLIP", True)):
+        return
+
+    from strategies.opportunity_replace import should_autocancel_pending
+
+    for pos_key, pos in list(state.open_positions.items()):
+        if pos.get("entry_fill_confirmed", False):
+            continue
+        signal = pos.get("signal")
+        if signal is None:
+            continue
+
+        # Pick the strategy whose detectors hold the 5min structure events.
+        strat_name = getattr(signal, "strategy", "")
+        if strat_name == "silver_bullet":
+            strat = getattr(components, "silver_bullet_strategy", None)
+        elif strat_name == "ny_am_reversal":
+            strat = getattr(components, "ny_am_strategy", None)
+        else:
+            strat = None
+        if strat is None or not hasattr(strat, "detectors"):
+            continue
+        struct_det = strat.detectors.get("structure")
+        if struct_det is None:
+            continue
+
+        events = struct_det.get_events(timeframe="5min")
+        cancel, reason = should_autocancel_pending(pos, events, signal.timestamp)
+        if cancel:
+            logger.warning(
+                "OPPORTUNITY AUTOCANCEL: pending %s @ %.2f — %s",
+                signal.direction, float(signal.entry_price), reason,
+            )
+            await _cancel_pending_for_replace(
+                components, state, pos_key, pos,
+                reason=f"autocancel:{reason}",
+            )
+
+
 async def _on_new_bar(
     bar: dict,
     components: Components,
@@ -3570,6 +3768,15 @@ async def _on_new_bar(
                 except Exception as exc:
                     logger.debug("KZ enter Telegram failed: %s", exc)
 
+        # ── 5a. Opportunity autocancel (Tier 1.5) ─────────────────────────
+        # Cancel pending limits whose structural thesis has been invalidated
+        # by an opposite 5min CHoCH/MSS event. Runs BEFORE strategy eval so
+        # the freshly-cancelled slot can immediately be used by a new fire.
+        try:
+            await _check_autocancel_pending(components, state)
+        except Exception as exc:
+            logger.debug("autocancel check failed: %s", exc)
+
         # ── 5b. Drain sweep-alert queue (populated by _update_detectors) ──
         # _update_detectors is sync and cannot await, so it appends sweep
         # alert specs to state.pending_sweep_alerts. Flush them here where
@@ -3613,12 +3820,17 @@ async def _on_new_bar(
                 # TTL cancels after 10 bars. This guard prevents stacking
                 # back-to-back signals on the same setup while a prior
                 # limit order is still pending fill.
+                # 2026-05-13 Day 8 audit: opportunity-replace before suppress.
                 if state.open_positions:
-                    logger.info(
-                        "NY AM signal suppressed: already %d open position(s) "
-                        "(single-position rule)", len(state.open_positions),
+                    replaced = await _try_opportunity_replace(
+                        signal, components, state,
                     )
-                else:
+                    if not replaced:
+                        logger.info(
+                            "NY AM signal suppressed: already %d open position(s) "
+                            "(single-position rule)", len(state.open_positions),
+                        )
+                if not state.open_positions:
                     allowed, reason = components.risk.can_trade()
                     if allowed:
                         if state.pending_signal_ts is not None:
@@ -3657,15 +3869,21 @@ async def _on_new_bar(
                 except Exception:
                     pass
                 # SINGLE-POSITION GUARD (2026-04-23 fix): see NY AM branch.
-                # Blocks new SB fires while a prior position is still in
-                # state.open_positions (pending fill, filled, or mid-close).
+                # 2026-05-13 Day 8 audit: extended with opportunity-replace
+                # so we don't sit blocked for hours on a limit that won't
+                # fill while fresher setups (closer to price OR opposite
+                # direction) go by suppressed.
                 if state.open_positions:
-                    logger.info(
-                        "Silver Bullet signal suppressed: already %d open "
-                        "position(s) (single-position rule)",
-                        len(state.open_positions),
+                    replaced = await _try_opportunity_replace(
+                        signal, components, state,
                     )
-                else:
+                    if not replaced:
+                        logger.info(
+                            "Silver Bullet signal suppressed: already %d open "
+                            "position(s) (single-position rule)",
+                            len(state.open_positions),
+                        )
+                if not state.open_positions:
                     allowed, reason = components.risk.can_trade()
                     if allowed:
                         if state.pending_signal_ts is not None:

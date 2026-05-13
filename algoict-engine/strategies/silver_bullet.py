@@ -784,6 +784,63 @@ class SilverBulletStrategy:
             return None
         last_struct = aligned[-1]
 
+        # ── 2026-05-12 — BOS EXHAUSTION GATE (ICT "rule of three") ─────
+        # ICT canonical sequence after a liquidity sweep:
+        #   1. Sweep of opposite-side liquidity
+        #   2. CHoCH (first reversal sign — close beyond opposite swing)
+        #   3. MSS (CHoCH confirmed by follow-through = first BOS in new dir)
+        #   4. Continuation BOS #2 (still part of "fresh trend" window)
+        #   5. BOS #3+ → EXHAUSTION, expect mean reversion or larger retrace
+        #
+        # The bot's structure detector cascades through old unconsumed swing
+        # lows during a trend extension, producing 10+ "BOS bear" labels in
+        # a row even when the actual move has already exhausted. Today
+        # 2026-05-12 NY PM: 14 BOS bear between MSS bear @ 09:45 and the
+        # SB fire @ 12:27 — far past ICT's "rule of three" exhaustion line.
+        # Trade lost -$149 stop-out.
+        #
+        # Fix: identify the trend-change anchor (most recent MSS, or CHoCH
+        # if no MSS yet) and count BOS events strictly AFTER it. If count
+        # exceeds SB_MAX_BOS_AFTER_MSS (default 2), reject as exhausted.
+        max_bos_after_mss = int(config.cfg("SB_MAX_BOS_AFTER_MSS", 2))
+        if max_bos_after_mss > 0:
+            # Trend-change anchor: prefer MSS > CHoCH (skip pure BOS chains).
+            mss_aligned = [e for e in aligned if e.type == "MSS"]
+            choch_aligned = [e for e in aligned if e.type == "CHoCH"]
+            if mss_aligned:
+                anchor = mss_aligned[-1]
+                anchor_type = "MSS"
+            elif choch_aligned:
+                anchor = choch_aligned[-1]
+                anchor_type = "CHoCH"
+            else:
+                anchor = None
+                anchor_type = None
+
+            if anchor is not None:
+                bos_after = [
+                    e for e in aligned
+                    if e.type == "BOS" and e.timestamp > anchor.timestamp
+                ]
+                if len(bos_after) > max_bos_after_mss:
+                    logger.info(
+                        "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, "
+                        "reason=trend_exhausted_past_mss (%d BOS %s since %s @ %s "
+                        "> %d max — ICT rule-of-three, continuation likely failed)",
+                        _ts_hm(ts), len(bos_after), bias_dir,
+                        anchor_type, _ts_hm(anchor.timestamp), max_bos_after_mss,
+                    )
+                    self._set_rejection(
+                        ts, "trend_exhausted_past_mss", active_zone,
+                        is_near_miss=True,
+                        fvg_direction=bias_dir,
+                        bos_count_after_anchor=len(bos_after),
+                        anchor_type=anchor_type,
+                        anchor_ts=_ts_hm(anchor.timestamp),
+                        max_allowed=max_bos_after_mss,
+                    )
+                    return None
+
         # ── 2026-04-29 FIX #5 — SMART STRUCTURE VALIDATOR ──────────────
         # Two gates that close the "stale bear MSS used during fresh bull
         # context" hole that caused 3 SHORT losers on 2026-04-29 NY PM.
@@ -1475,10 +1532,22 @@ class SilverBulletStrategy:
                 finally:
                     self._last_fired_fvg = None
 
-            # ── 2. Same-setup cooldown (LOSS only) ─────────────────
-            if pnl >= 0:
-                # Winner / scratch — FVG is mitigated above, no cooldown
-                return
+            # ── 2. Same-setup cooldown (ANY close — win or loss) ──
+            # 2026-05-13 — Live audit caught Day 8 London/NY-AM duplicate:
+            # Trade #1 short @ 29307.75 → trail WIN +$105 @ 08:44 CT.
+            # Trade #2 EXECUTING same entry/stop/target at 08:45 CT (1 min!),
+            # mitigated FVG flag confirmed via log but a SECOND bear FVG
+            # at the overlapping price zone (29306-29349) was selected
+            # by the FVG picker — pre-fix the FVG mitigation only marks
+            # one FVG OBJECT, not the PRICE ZONE.
+            #
+            # Cooldown is price-zone based (5pt around entry), so arming
+            # it after wins blocks all same-zone re-fires regardless of
+            # how many overlapping FVG objects exist.
+            #
+            # ICT canonical: once price has traded through a level/FVG,
+            # the displacement is "done" — re-entry at the same level is
+            # waiting for a re-fill of a setup that already played out.
             entry_px = float(trade.get("entry_price") or 0) or None
             # exit_time is a string; the strategy compares against
             # incoming bar timestamps (pd.Timestamp). Convert.
@@ -1505,10 +1574,11 @@ class SilverBulletStrategy:
             self._last_stopped_ts = stop_ts
             self._last_stopped_kz = kz
 
+            outcome_label = "WIN" if pnl >= 0 else "STOPOUT"
             logger.info(
-                "silver_bullet: same-setup cooldown ARMED — stopout "
-                "@ %.2f in %s at %s (%d active cooldowns total)",
-                entry_px or 0.0, kz or "?", stop_ts,
+                "silver_bullet: same-setup cooldown ARMED — %s "
+                "@ %.2f in %s at %s (pnl=%.2f, %d active cooldowns total)",
+                outcome_label, entry_px or 0.0, kz or "?", stop_ts, pnl,
                 len(self._active_cooldowns),
             )
             # 2026-05-04 — persist to disk so restart preserves cooldown.

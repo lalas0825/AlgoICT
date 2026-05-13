@@ -235,7 +235,21 @@ SB_MIN_TARGET_RR = 2.0
 # SB_MAX_STOP_POINTS. Wide stops alone aren't disqualifying — only
 # combined with disproportionate targets.
 SB_MAX_STOP_POINTS = 0       # 0 = disabled (was: 30, too restrictive)
-SB_MAX_TARGET_RR = 8.0       # cap absurd 19R+ target scenarios
+# 2026-05-12 (post London/NY AM audit): target cap removed. With
+# TRADE_MANAGEMENT="trailing" the target order is skipped — bot trails
+# until stopped. The "target" is just (a) initial RR math sanity at
+# entry, and (b) telemetry. A distant target doesn't actually drag
+# the trade out — trail captures whatever the move gives. Today's
+# London had ~19 setups rejected by target_too_far where targets
+# were 950+pts away (PDL/PWH/PWL all swept pre-session, next pool was
+# AL@28245 = 30-60R away). Those would have been valid trail-managed
+# trades — bot was MATEMATICALLY impossibilitated from trading the
+# 134pt bearish move just because the framework picker couldn't find
+# a closer named target. Disable cap; keep MIN_TARGET_RR=2.0 for
+# math sanity. Note: Trade #5-style absurd 19R targets are still
+# bounded by the stop floor (15pt) — they'd risk 1R = ~$30, trail
+# handles the rest.
+SB_MAX_TARGET_RR = 0         # 0 = disabled (was: 8.0, blocking valid trail trades)
 
 # 2026-05-11 — STRUCTURE EVENT MAGNITUDE FILTER (Day 6 bug)
 # The MarketStructureDetector calls every close-beyond-prior-swing a
@@ -257,6 +271,83 @@ SB_MAX_TARGET_RR = 8.0       # cap absurd 19R+ target scenarios
 # 15pt (ca03e19), bias-flip (bbb3a73), FVG-mitigate-on-any-close
 # (d5570eb). Disabling magnitude filter restores v20d trade pace + WR.
 STRUCT_MIN_BREAK_PCT = 0       # 0 = disabled (was: 0.05, too restrictive)
+
+# 2026-05-12 — MSS confirmation follow-through magnitude filter.
+# London audit 2026-05-12 found a fake "MSS bull @ 05:10 CT" confirmed
+# with only +7.25pt of follow-through above the CHoCH bar close. The
+# 5-min bar that triggered it closed 29238 vs CHoCH close of 29230.75.
+# Price then dropped 117pt to 29121 — the fake MSS had blocked bearish
+# setups via bias-flip gate for an hour. The MSS confirmation in the
+# market_structure detector previously had NO magnitude filter (unlike
+# BOS/CHoCH which can use STRUCT_MIN_BREAK_PCT). Fix: require the
+# follow-through close to clear the CHoCH close by this % of price.
+# Default 0.05% ≈ 15pt at NQ 29K — matches the BOS/CHoCH magnitude
+# semantics. Set to 0 to disable.
+STRUCT_MSS_MIN_FOLLOWTHROUGH_PCT = 0.05    # v20g config: MSS filter at 0.05% (catches fake MSS like 2026-05-12 London; zero effect in Q1 2025)
+
+# 2026-05-12 — R-STEP TRAIL (post NY AM audit experiment).
+# NY AM trade 2026-05-12 reached +4.58R peak but trail (swing-based)
+# exited at +1R = $184/3c. Left ~3.58R = ~$660 on the table.
+# Proposed continuous R-step trail: trail = peak_R - buffer.
+#   peak +2R → trail at 0R (break-even)
+#   peak +3R → +1R
+#   peak +4R → +2R
+#   peak +NR (N≥2) → trail at (N - buffer)R
+# Default buffer = 2R (always 2R away from peak).
+# Backtester only for now — live bot's _manage_open_positions
+# would need separate mirror update.
+# 2026-05-12 — BOS EXHAUSTION GATE (ICT rule of three).
+# After a Market Structure Shift (MSS) in the new trend direction, ICT
+# canonical only considers the first 2 BOS continuation events as valid
+# SB entry zones. Beyond that, the trend is in "exhaustion" territory
+# and continuation entries lose statistically (mean reversion or larger
+# retrace is more likely). Observed 2026-05-12 NY PM: bot fired SHORT
+# 14 BOS bear past the MSS bear @ 09:45 — stop hit. Set to 0 to disable.
+# 2026-05-13 — Disabled per full 2025 backtest comparison (v20g winner):
+#   v20g (no gate):  451 trades, +$50,006, PF 2.55
+#   v20j (gate=2):   364 trades, +$42,376, PF 2.57 (-$7.6K)
+#   v20k (gate=3):   381 trades, +$44,148, PF 2.57 (-$5.9K)
+# Gate cost more than it saved on full year. ICT "rule of three" doesn't
+# materially improve PF (2.55 → 2.57 marginal), only cuts volume by 15-20%.
+# Today 2026-05-12 NY PM short was a real exhaustion (14 BOS) but those
+# extreme cases are rare; backtest dominance favors no-gate.
+SB_MAX_BOS_AFTER_MSS = 0       # 0 = disabled (v20g final config)
+
+# 2026-05-13 — OPPORTUNITY REPLACEMENT (Day 8 audit, post-Trade #3 duplicate).
+# Default behavior was: any pending limit order blocks all subsequent
+# signal evaluation via "single-position rule" — bot could be locked
+# for 3-4 hours on a limit that never fills, missing better setups.
+#
+# This module enables 4 smart cancel/replace behaviors:
+#
+#   TIER 1 — Opposite-direction replace: new signal in opposite direction
+#     ALWAYS replaces pending limit (bias has structurally flipped).
+#
+#   TIER 2 — Closer-fill replace: same direction, but new entry is
+#     materially closer to current price (≥30% closer AND ≥5pt closer).
+#     Higher probability of actually filling.
+#
+#   TIER 2.5 — Stale aging: after N bars without fill, ANY decent new
+#     signal can replace the pending (priority decays).
+#
+#   TIER 1.5 — Bias-flip auto-cancel: if an opposite 5-min CHoCH/MSS
+#     event registers AFTER the limit was placed, cancel proactively
+#     (even without a new signal yet). The structural thesis is dead.
+#
+# Set OPPORTUNITY_REPLACE_ENABLED=False to disable all 4 features.
+OPPORTUNITY_REPLACE_ENABLED = True
+REPLACE_MIN_PROXIMITY_PCT = 0.70   # new must be ≤70% of pending distance
+REPLACE_MIN_PROXIMITY_PTS = 5.0    # AND new must be ≥5pt closer than pending
+STALE_LIMIT_BARS = 10              # bars without fill before stale-aging kicks in
+AUTOCANCEL_ON_BIAS_FLIP = True     # cancel pending when opposite CHoCH/MSS fires
+
+TRAIL_R_STEP_ENABLED = True     # v20g/v20i config: R-step trail enabled
+TRAIL_R_STEP_BUFFER = 2.0
+# 2026-05-12 — TRAIL_USE_SWING: when False, the swing-based trail is
+# skipped entirely. v20i Q1 test confirmed disabling swing is CATASTROPHIC
+# (WR 70%→36%, P&L +$18K → -$814). Swing trail does critical work at
+# 0-2R range that R-step + ratchet alone can't replicate. Keep TRUE.
+TRAIL_USE_SWING = True
 
 # 2026-05-11 — HTF DISPLACEMENT OVERRIDE (Day 6 bug)
 # If a recent 5-min displacement is in the OPPOSITE direction with
