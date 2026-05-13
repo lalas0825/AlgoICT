@@ -66,6 +66,37 @@ def should_replace_pending(
     new_direction = new_signal.direction
     new_entry_price = float(new_signal.entry_price)
 
+    # ── No-op detection: new signal IDENTICAL to pending ─────────
+    # 2026-05-13 Day 8 audit: Tier 2.5 stale_aging was firing on the
+    # SAME setup as pending (same entry/stop/target), churning broker
+    # orders + Telegram alerts without changing the trade. Detect this
+    # and skip — re-submitting an identical limit just wastes resources.
+    pending_stop = (
+        pending.get("stop_price")
+        or getattr(pending.get("signal"), "stop_price", None)
+    )
+    pending_target = (
+        pending.get("target_price")
+        or getattr(pending.get("signal"), "target_price", None)
+    )
+    new_stop = float(getattr(new_signal, "stop_price", 0.0) or 0.0)
+    new_target = float(getattr(new_signal, "target_price", 0.0) or 0.0)
+    # Tolerance: 0.25pt (1 MNQ tick) for float-equality.
+    _TICK = 0.25
+    if (
+        new_direction == pending_direction
+        and abs(new_entry_price - pending_entry_price) < _TICK
+        and pending_stop is not None
+        and abs(new_stop - float(pending_stop)) < _TICK
+        and pending_target is not None
+        and abs(new_target - float(pending_target)) < _TICK
+    ):
+        return False, (
+            f"noop_same_setup "
+            f"(new entry/stop/target identical to pending: "
+            f"{new_entry_price:.2f}/{new_stop:.2f}/{new_target:.2f})"
+        )
+
     # ── TIER 1: Opposite direction → always replace ──────────────
     if new_direction != pending_direction:
         return True, (

@@ -241,6 +241,12 @@ class EngineState:
     # and signals fire on stub/neutral detector state.
     warmup_complete: bool = False
 
+    # 2026-05-13 — Bot startup timestamp (UTC). Used by GHOST P&L recovery
+    # to bound the search_trades window so we only recover orphan fills
+    # from THIS bot session (not prior sessions whose P&L was already
+    # recorded by that bot's instance of risk_manager).
+    start_time: Optional[datetime] = None
+
     # True while a reconcile task is in flight. Prevents duplicate
     # spawns when multiple 1-min bars arrive within the same ts.minute%5
     # window (burst / replay after a WS hiccup).
@@ -2635,13 +2641,126 @@ async def _reconcile_positions(components: Components, state: EngineState) -> No
     if ghosts:
         logger.warning(
             "Position reconcile: GHOST at broker (not in local state): %s — "
-            "attempting flatten",
+            "attempting flatten + P&L recovery",
             sorted(ghosts),
         )
+        # 2026-05-13 Day 8 audit: Trade #3 was a GHOST (orphan limit filled
+        # before bot startup, then bot 27088 detected position at broker
+        # with no local record). Pre-fix the flatten cleared the position
+        # but never called _on_trade_closed, so daily_pnl missed the ~$34
+        # loss. Fix: flatten first, give broker 1.5s to register fills,
+        # then search_trades since bot startup and synthesize a trade_dict
+        # for accounting. Tracks recovered trade IDs in state to avoid
+        # double-counting on subsequent reconciles.
+        flatten_at = datetime.now(timezone.utc)
         try:
             await components.broker.flatten_all()
         except Exception as exc:
             logger.warning("Reconcile: flatten_all for ghost failed: %s", exc)
+
+        # Brief wait for broker to register fills.
+        try:
+            await asyncio.sleep(1.5)
+        except Exception:
+            pass
+
+        # Lookback: from bot startup (state.start_time) or 4h, whichever later.
+        lookback_start = getattr(state, "start_time", None)
+        if lookback_start is None:
+            lookback_start = flatten_at - timedelta(hours=4)
+        elif not getattr(lookback_start, "tzinfo", None):
+            lookback_start = lookback_start.replace(tzinfo=timezone.utc)
+        # Also pad start by 30s for clock skew.
+        lookback_start = lookback_start - timedelta(seconds=30)
+
+        # Track already-recovered trade.id so future reconciles don't dupe.
+        if not hasattr(state, "_ghost_recovered_trade_ids"):
+            state._ghost_recovered_trade_ids = set()
+
+        for ghost_sym in sorted(ghosts):
+            try:
+                if hasattr(components.broker, "search_trades"):
+                    fills = await components.broker.search_trades(lookback_start)
+                else:
+                    fills = []
+            except Exception as exc:
+                logger.warning(
+                    "GHOST P&L recovery: search_trades failed for %s: %s",
+                    ghost_sym, exc,
+                )
+                continue
+
+            # Filter to this contract + un-recovered.
+            contract_fills = []
+            for t in fills:
+                cid = str(t.get("contractId") or "")
+                if ghost_sym not in cid:
+                    continue
+                tid = t.get("id")
+                if tid in state._ghost_recovered_trade_ids:
+                    continue
+                contract_fills.append(t)
+
+            if not contract_fills:
+                logger.warning(
+                    "GHOST recovery: no un-recovered fills for %s in window",
+                    ghost_sym,
+                )
+                continue
+
+            # Pair entry (first) with close (last) — round-trip P&L is the
+            # sum of profitAndLoss across all fills.
+            sorted_fills = sorted(
+                contract_fills,
+                key=lambda t: t.get("creationTimestamp", ""),
+            )
+            entry_fill = sorted_fills[0]
+            close_fill = sorted_fills[-1]
+            total_pnl = sum(
+                float(t.get("profitAndLoss") or 0) for t in contract_fills
+            )
+
+            entry_side = int(entry_fill.get("side", 0) or 0)  # 1=SELL, 0=BUY
+            direction = "short" if entry_side == 1 else "long"
+            contracts = int(entry_fill.get("size", 1) or 1)
+            entry_price = float(entry_fill.get("price") or 0)
+            exit_price = float(close_fill.get("price") or 0)
+
+            trade_dict = {
+                "id": f"ghost_{ghost_sym}_{int(flatten_at.timestamp())}",
+                "strategy": "ghost_recover",
+                "direction": direction,
+                "symbol": ghost_sym,
+                "entry_price": entry_price,
+                "exit_price": exit_price,
+                "entry_time": str(entry_fill.get("creationTimestamp", "")),
+                "exit_time": str(close_fill.get("creationTimestamp", "")),
+                "pnl": total_pnl,
+                "confluence_score": 0,
+                "ict_concepts": [],
+                "kill_zone": "ghost",
+                "stop_points": abs(entry_price - exit_price),
+                "contracts": contracts,
+                "reason": "ghost_recovered_from_broker",
+            }
+            logger.warning(
+                "GHOST RECOVERY: %s %s %dx — entry=%.2f exit=%.2f pnl=$%.2f "
+                "(synthesized from %d broker fills)",
+                ghost_sym, direction, contracts, entry_price, exit_price,
+                total_pnl, len(contract_fills),
+            )
+            try:
+                await _on_trade_closed(components, state, trade_dict)
+            except Exception as exc:
+                logger.error(
+                    "GHOST recovery: _on_trade_closed raised: %s", exc,
+                )
+
+            # Mark trade IDs as recovered so future reconciles don't dupe.
+            for t in contract_fills:
+                tid = t.get("id")
+                if tid is not None:
+                    state._ghost_recovered_trade_ids.add(tid)
 
     if orphans:
         logger.warning(
@@ -4712,6 +4831,7 @@ async def run(
         return
 
     state = EngineState(mode=mode)
+    state.start_time = datetime.now(timezone.utc)  # for ghost P&L recovery window
     components._state_ref["bars_1min"] = state.bars_1min  # type: ignore[attr-defined]
 
     # ── 2a. Register bar callback BEFORE connect so _on_open subscribes ─

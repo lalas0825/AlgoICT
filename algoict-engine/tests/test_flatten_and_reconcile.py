@@ -380,9 +380,16 @@ class TestReconcileSymbolNormalization:
         ])
         with caplog.at_level(logging.WARNING, logger="algoict.main"):
             await engine_main._reconcile_positions(components, state)
-        ghosts = [r for r in caplog.records if "GHOST" in r.message]
-        assert len(ghosts) == 1
-        assert "ES" in ghosts[0].message  # ROOT symbol in the alert, not full id
+        # 2026-05-13: GHOST flow now emits TWO warnings — the detection
+        # warning AND a P&L-recovery-attempt warning (which logs "no
+        # un-recovered fills" when search_trades returns empty in tests).
+        # Just check that the DETECTION fired.
+        detection = [
+            r for r in caplog.records
+            if "GHOST at broker" in r.message
+        ]
+        assert len(detection) == 1
+        assert "ES" in detection[0].message  # ROOT symbol in the alert, not full id
 
     @pytest.mark.asyncio
     async def test_orphan_detected_when_local_has_extra_symbol(self, caplog):

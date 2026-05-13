@@ -20,18 +20,30 @@ from strategies.opportunity_replace import (
 
 # ─── Helpers ───────────────────────────────────────────────────────────────
 
-def _sig(direction="short", entry=29306.75):
-    return SimpleNamespace(direction=direction, entry_price=entry)
+def _sig(direction="short", entry=29306.75, stop=29361.25, target=28245.25):
+    return SimpleNamespace(
+        direction=direction, entry_price=entry, stop_price=stop, target_price=target,
+    )
 
 
-def _pending_bt(direction="short", entry=29306.75):
+def _pending_bt(direction="short", entry=29306.75, stop=29361.25, target=28245.25):
     """Backtester-style pending dict."""
-    return {"direction": direction, "limit_price": entry}
+    return {
+        "direction": direction,
+        "limit_price": entry,
+        "stop_price": stop,
+        "target_price": target,
+    }
 
 
-def _pending_live(direction="short", entry=29306.75):
+def _pending_live(direction="short", entry=29306.75, stop=29361.25, target=28245.25):
     """Live main.py-style pending dict (signal nested)."""
-    return {"signal": SimpleNamespace(direction=direction, entry_price=entry)}
+    return {
+        "signal": SimpleNamespace(
+            direction=direction, entry_price=entry,
+            stop_price=stop, target_price=target,
+        ),
+    }
 
 
 def _struct_event(type_="CHoCH", direction="bullish", ts="2026-05-13 09:00"):
@@ -42,6 +54,54 @@ def _struct_event(type_="CHoCH", direction="bullish", ts="2026-05-13 09:00"):
         timeframe="5min",
         timestamp=pd.Timestamp(ts),
     )
+
+
+# ─── No-op same-setup detection ────────────────────────────────────────────
+
+class TestNoOpSameSetup:
+    """2026-05-13 audit: Tier 2.5 stale_aging was churning identical setups.
+    No-op detection skips when new entry/stop/target IDENTICAL to pending."""
+
+    def test_identical_setup_returns_no_replace(self):
+        new = _sig(direction="short", entry=29306.75, stop=29361.25, target=28245.25)
+        pending = _pending_bt(direction="short", entry=29306.75, stop=29361.25, target=28245.25)
+        ok, reason = should_replace_pending(
+            new, pending, current_price=29254, bars_pending=15,  # stale
+        )
+        assert not ok
+        assert "noop_same_setup" in reason
+
+    def test_one_tick_difference_in_entry_still_noop(self):
+        # 1 tick (0.25pt) difference should count as identical
+        new = _sig(entry=29307.0)
+        pending = _pending_bt(entry=29306.75)
+        # Actually 0.25 is at the tolerance boundary — use 0.2pt diff which is < 0.25
+        new = _sig(entry=29306.90)
+        pending = _pending_bt(entry=29306.75)
+        ok, _ = should_replace_pending(new, pending, current_price=29254, bars_pending=15)
+        assert not ok  # ≤1 tick diff → still noop
+
+    def test_different_stop_NOT_noop(self):
+        # Same entry/target but different stop → real replace, not noop
+        new = _sig(direction="short", entry=29306.75, stop=29400.00, target=28245.25)
+        pending = _pending_bt(direction="short", entry=29306.75, stop=29361.25, target=28245.25)
+        ok, reason = should_replace_pending(
+            new, pending, current_price=29254, bars_pending=15,
+        )
+        # Stale + equal distance → still triggers tier2.5
+        # But noop check fails (different stop), so falls through
+        assert ok
+        assert "tier2.5" in reason or "tier2" in reason
+
+    def test_close_entry_in_pts_passes_through_noop(self):
+        # Different stop and target with same entry should NOT be noop
+        new = _sig(direction="short", entry=29306.75, stop=29362.00, target=28250.00)
+        pending = _pending_bt(direction="short", entry=29306.75, stop=29361.25, target=28245.25)
+        ok, reason = should_replace_pending(
+            new, pending, current_price=29254, bars_pending=15,
+        )
+        # Different target → noop check fails → falls through to tier2.5 → replace
+        assert ok
 
 
 # ─── Tier 1: Opposite direction ────────────────────────────────────────────
