@@ -3178,7 +3178,21 @@ async def _manage_open_positions(
         # constant once trail tightens). When peak excursion crosses 2R,
         # promote stop to +1R and mark ratcheted (one-shot per position).
         # Closes 2026-04-27 London give-back: 4R unrealized → +1R lock.
+        #
+        # 2026-05-14 BUG FIX (live audit): previously `ratcheted_to_1R`
+        # was marked True at candidate-add time, BEFORE the safety check
+        # ran. If the safety check then skipped the stop update (e.g.,
+        # ratchet stop computed BELOW current price because the bar's
+        # wick was deep but close bounced back), the ratchet was lost
+        # forever — never re-attempted on subsequent bars even when
+        # price stayed safely below the ratchet stop. Live evidence
+        # 2026-05-14 London short: peak_R=4.36 (wick to 29499), stop
+        # 29552.75 vs price 29563.50 → skipped; trade then stayed at
+        # +2.3R for 8+ bars with stop stuck at +0.47R. Fix: track which
+        # candidate is the ratchet, only mark ratcheted_to_1R=True if
+        # the final new_stop achieved the +1R lock level (or better).
         candidate_stops: list[float] = []
+        ratchet_target: Optional[float] = None
         initial_stop = pos.setdefault("initial_stop_price", float(signal.stop_price))
         if last_bar_high is not None and last_bar_low is not None and entry_filled_price is not None:
             R = abs(float(entry_filled_price) - float(initial_stop))
@@ -3190,14 +3204,15 @@ async def _manage_open_positions(
                 pos["peak_R"] = max(pos.get("peak_R", 0.0), bar_excursion_R)
                 if pos["peak_R"] >= 2.0 and not pos.get("ratcheted_to_1R"):
                     if direction == "long":
-                        ratchet = float(entry_filled_price) + R
+                        ratchet_target = float(entry_filled_price) + R
                     else:
-                        ratchet = float(entry_filled_price) - R
-                    candidate_stops.append(ratchet)
-                    pos["ratcheted_to_1R"] = True
+                        ratchet_target = float(entry_filled_price) - R
+                    candidate_stops.append(ratchet_target)
+                    # NOTE: do NOT set ratcheted_to_1R=True here — wait
+                    # until the safety check confirms the stop was placed.
                     logger.info(
                         "RATCHET-TO-PROFIT armed: %s %s peak=%.2fR → lock stop @ %.2f (+1R)",
-                        direction, symbol, pos["peak_R"], ratchet,
+                        direction, symbol, pos["peak_R"], ratchet_target,
                     )
 
         if direction == "long":
@@ -3323,6 +3338,29 @@ async def _manage_open_positions(
         )
         pos["stop_order"] = new_stop_order
         pos["current_stop_price"] = new_stop
+
+        # 2026-05-14 — Mark ratchet as fired ONLY after the stop has
+        # actually moved to the +1R lock level (or beyond, in profit
+        # direction). If the safety check skipped or the new_stop didn't
+        # reach the ratchet target, leave ratcheted_to_1R=False so next
+        # bar can re-attempt. This fixes the bug where a wick-triggered
+        # ratchet on a single bar got "consumed" before the actual stop
+        # placement succeeded, leaving the position with only swing-trail
+        # protection at +0.47R while +1R was reachable for many subsequent
+        # bars.
+        if ratchet_target is not None and not pos.get("ratcheted_to_1R"):
+            if direction == "long" and new_stop >= ratchet_target:
+                pos["ratcheted_to_1R"] = True
+                logger.info(
+                    "RATCHET-TO-PROFIT confirmed: stop @ %.2f >= +1R target %.2f",
+                    new_stop, ratchet_target,
+                )
+            elif direction == "short" and new_stop <= ratchet_target:
+                pos["ratcheted_to_1R"] = True
+                logger.info(
+                    "RATCHET-TO-PROFIT confirmed: stop @ %.2f <= +1R target %.2f",
+                    new_stop, ratchet_target,
+                )
 
         # Telegram alert — throttled: only send if delta >= threshold OR
         # enough time has passed since last alert (avoids spam on fast moves).
