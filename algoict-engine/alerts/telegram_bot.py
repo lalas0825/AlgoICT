@@ -106,15 +106,33 @@ class TelegramBot:
         Fix: catch the specific error, rebuild self._bot (creates a fresh
         httpx client on the CURRENT loop), retry once.
         """
+        # 2026-05-14 — Live caught a wrapped variant of the same bug.
+        # python-telegram-bot wraps lower-level errors in its own classes
+        # (NetworkError, TimedOut, etc.) and the underlying RuntimeError
+        # appears in __cause__ or in the message string. Today's NY AM
+        # Trade #6 (long @ 29495) lost its signal_fired alert with:
+        #   "Unknown error in HTTP implementation: RuntimeError('Event loop is closed')"
+        # That's a NetworkError, NOT a raw RuntimeError, so the previous
+        # `except RuntimeError` didn't catch it.
+        #
+        # Fix: catch the broader Exception, then check both str(exc) and
+        # str(exc.__cause__) for the event-loop-closed signature before
+        # deciding to retry. Any other exception still re-raises.
         try:
             await self._bot.send_message(chat_id=self._chat_id, text=text)
             return
-        except RuntimeError as exc:
-            if "Event loop is closed" not in str(exc):
+        except Exception as exc:
+            msg = str(exc)
+            cause_msg = str(getattr(exc, "__cause__", "") or "")
+            if (
+                "Event loop is closed" not in msg
+                and "Event loop is closed" not in cause_msg
+            ):
                 raise
             logger.warning(
-                "Telegram: event loop was closed on existing Bot client; "
-                "rebuilding and retrying once",
+                "Telegram: event loop was closed on existing Bot client "
+                "(exc_type=%s, msg=%s); rebuilding and retrying once",
+                type(exc).__name__, msg[:120],
             )
         # Recreate the Bot — its httpx client will be bound to the
         # currently-running loop.
