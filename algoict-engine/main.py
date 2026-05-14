@@ -512,6 +512,13 @@ def _init_detectors(risk: RiskManager) -> dict:
     """Build the detectors dict required by strategies."""
     structure = MarketStructureDetector()
     swing = SwingPointDetector()
+    # 2026-05-14 — Dedicated 1-min swing detector for trail management.
+    # Backtester uses "swing_entry" fed on 1-min bars for trail. Live was
+    # using the multi-tf "swing" detector (5min + 15min) which lagged
+    # vs the 1-min entries. Simulation on today's trades shows 1-min
+    # trail saves ~$400 across normal trades (Trade #1: -$162 → +$42,
+    # Trade #9: -$156 → +$22). See analysis/trail_1min_simulation.py.
+    swing_1min = SwingPointDetector()
     fvg = FairValueGapDetector()
     ob = OrderBlockDetector()
     liquidity = LiquidityDetector()
@@ -520,6 +527,7 @@ def _init_detectors(risk: RiskManager) -> dict:
 
     return {
         "swing": swing,
+        "swing_1min": swing_1min,  # 2026-05-14 — for trail (1-min swings)
         "structure": structure,
         "fvg": fvg,
         "ob": ob,
@@ -1275,6 +1283,16 @@ def _update_detectors(
         components.detectors["fvg"].detect(state.bars_1min, "1min")
     except Exception as exc:
         logger.debug("1min FVG detect failed: %s", exc)
+
+    # 2026-05-14 — 1-min swing detection for the trail (mirror backtester).
+    # Live trail was using the multi-tf "swing" detector (5min + 15min),
+    # too coarse vs 1-min entries. Now feeding 1-min bars into a
+    # dedicated `swing_1min` detector. _manage_open_positions uses this
+    # for trail tightening — same approach as backtester's swing_entry.
+    try:
+        components.detectors["swing_1min"].detect(state.bars_1min, "1min")
+    except Exception as exc:
+        logger.debug("1min swing detect failed: %s", exc)
 
     # 2026-04-27 BUG FIX — 1-min FVGs must be mitigated by 1-min closes.
     # Previous wiring only called update_mitigation with the 5-min close
@@ -3118,11 +3136,15 @@ async def _manage_open_positions(
     state: EngineState,
 ) -> None:
     """
-    Trail the protective stop to the most recent 5min swing low (long) or
+    Trail the protective stop to the most recent 1-min swing low (long) or
     swing high (short) for every open position.
 
     Mirrors backtester._update_trailing_stop exactly:
-      - Same swing source: components.detectors["swing"] (5min + 15min)
+      - 2026-05-14 fix: swing source is `swing_1min` (1-min bars, matches
+        backtester `swing_entry`). Previously used the multi-tf `swing`
+        detector (5min + 15min) which lagged vs 1-min entries; today's
+        live audit showed Trade #1 (-$162) and Trade #9 (-$156) would
+        have been small wins (+$42, +$22) with a 1-min trail.
       - Same tighten-only logic: LONG new_stop > current_stop;
         SHORT new_stop < current_stop
       - On improvement: cancel old stop order, place new stop order
@@ -3131,7 +3153,13 @@ async def _manage_open_positions(
     have been executed (position closed), so we log a warning and skip the
     replace to avoid double-cancelling a filled order.
     """
-    swing = components.detectors.get("swing")
+    # 2026-05-14 — prefer swing_1min (matches backtester swing_entry).
+    # Falls back to multi-tf swing if 1-min detector unavailable (e.g.,
+    # legacy state from before this change).
+    swing = (
+        components.detectors.get("swing_1min")
+        or components.detectors.get("swing")
+    )
     if swing is None or not state.open_positions:
         return
 
