@@ -1179,7 +1179,25 @@ class SilverBulletStrategy:
         try:
             cooldown_min = config.cfg("SB_SAME_SETUP_COOLDOWN_MIN", 30)
             price_tol = config.cfg("SB_SAME_SETUP_PRICE_TOL_PTS", 5.0)
-            # Prune expired cooldowns first
+            # Prune expired cooldowns first.
+            #
+            # 2026-05-14 London audit fix: previously the prune logic kept
+            # cooldowns only where `0 <= age_s <= cutoff`. NEGATIVE age
+            # (cooldown ts > bar ts) was treated as "expired" and pruned —
+            # but negative age happens NORMALLY because:
+            #   - cooldown.ts comes from the trade exit_time (wall-clock UTC
+            #     when the close fill was logged, e.g. 02:00:03.270564 CT)
+            #   - bar ts is the bar's nominal timestamp (the bar that just
+            #     completed, e.g., 02:00:00.000000 CT — 3 seconds EARLIER
+            #     than the wall-clock close)
+            # So the very-fresh cooldown got pruned IMMEDIATELY on the next
+            # evaluation, and an identical setup re-fired and lost again
+            # (London 2026-05-14: Trade #1 close 02:00:03, Trade #2 fire
+            # 02:01:00 bar [02:00] → cooldown pruned, identical -$162.50
+            # loss = -$325 total).
+            #
+            # Fix: treat negative age as "extremely fresh" (kept). Only
+            # prune when age STRICTLY exceeds the cooldown window.
             cutoff_age_s = cooldown_min * 60
             still_active: list[dict] = []
             for cd in self._active_cooldowns:
@@ -1190,7 +1208,8 @@ class SilverBulletStrategy:
                     age_s = (ts - cd_ts).total_seconds()
                 except Exception:
                     continue
-                if 0 <= age_s <= cutoff_age_s:
+                # Keep if age <= cutoff (negative age = freshly armed, keep).
+                if age_s <= cutoff_age_s:
                     still_active.append(cd)
             self._active_cooldowns = still_active
 
@@ -1204,14 +1223,16 @@ class SilverBulletStrategy:
                     continue
                 cd_ts = cd.get("ts")
                 age_s = (ts - cd_ts).total_seconds()
+                # Negative age (bar ts < cd ts wall-clock) is "very fresh" — clamp for display.
+                age_min_display = max(0, age_s) / 60
                 logger.info(
                     "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, "
                     "reason=same_setup_cooldown (entry %.2f within %.1fpts of "
-                    "stopout #%d/%d at %.2f, %.0fmin ago)",
+                    "stopout #%d/%d at %.2f, %.1fmin ago)",
                     _ts_hm(ts), entry_price, price_tol,
                     self._active_cooldowns.index(cd) + 1,
                     len(self._active_cooldowns),
-                    cd_entry, age_s / 60,
+                    cd_entry, age_min_display,
                 )
                 self._set_rejection(
                     ts, "same_setup_cooldown", active_zone, is_near_miss=True,
@@ -1219,7 +1240,7 @@ class SilverBulletStrategy:
                     last_stopped_entry=cd_entry,
                     price_diff_pts=round(price_diff, 2),
                     cooldown_min=cooldown_min,
-                    age_min=round(age_s / 60, 1),
+                    age_min=round(max(0, age_s) / 60, 1),
                     active_cooldowns_total=len(self._active_cooldowns),
                 )
                 return None

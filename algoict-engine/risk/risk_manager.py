@@ -708,13 +708,25 @@ class RiskManager:
         Daily losses still accumulate toward DLL. If DLL is hit the full
         kill_switch would re-activate on next trade anyway.
         """
-        if self.consecutive_losses > 0 or self.kill_switch_active:
+        if (
+            self.consecutive_losses > 0
+            or self.kill_switch_active
+            or self._same_setup_loss_count > 0
+        ):
             logger.info(
-                "Kill switch RESET (%s): losses %d -> 0, kill_active %s -> False",
-                reason, self.consecutive_losses, self.kill_switch_active,
+                "Kill switch RESET (%s): losses %d -> 0, same_setup_losses %d -> 0, kill_active %s -> False",
+                reason, self.consecutive_losses, self._same_setup_loss_count, self.kill_switch_active,
             )
         self.consecutive_losses = 0
         self.kill_switch_active = False
+        # 2026-05-14 — Also reset the same-setup-loss counter. London 2026-05-14
+        # had 2 same-setup losses on the same FVG → KILL_SWITCH_SAME_SETUP_LOSSES=2
+        # tripped. That signature was specific to London's repeat; NY AM
+        # would be evaluating completely different FVGs, so resetting the
+        # counter at the KZ boundary is correct.
+        self._same_setup_loss_count = 0
+        self._last_loss_entry_price = None
+        self._last_loss_kz = None
         # CRITICAL: If the risk ladder is exhausted (5 losses already
         # spent across any combination of KZs), KZ-boundary reset must NOT
         # re-open trading. The ladder is day-global and kill_switch must

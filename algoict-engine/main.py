@@ -3858,6 +3858,29 @@ async def _on_new_bar(
             state.kz_stats = _fresh_kz_stats()
             state.active_kz = current_kz
             state.kz_opened_at = ts
+
+            # 2026-05-14 — KZ-BOUNDARY KILL SWITCH RESET (London audit fix).
+            # CLAUDE.md spec: "kill switch: 3 consecutive losses per SESSION
+            # (not day) — halt that KZ only". The reset function existed in
+            # risk_manager (reset_kill_switch_only) but was NEVER wired up
+            # in main.py. As a result, today's London 2-loss kill_switch
+            # would have permanently locked NY AM + NY PM trading until
+            # midnight daily reset.
+            #
+            # Fix: when transitioning into a NEW non-None KZ, reset the
+            # consecutive-losses + kill-switch state. Daily P&L still
+            # accumulates toward DLL; if DLL is breached, the day-wide
+            # gate still fires. Only the per-session 2-loss / 3-loss
+            # circuit-breaker is what resets.
+            if current_kz is not None and components.risk is not None:
+                try:
+                    components.risk.reset_kill_switch_only(
+                        reason=f"kz_enter:{current_kz}",
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "KZ-boundary kill-switch reset failed: %s", exc,
+                    )
             if current_kz is not None and components.telegram is not None:
                 try:
                     vpin_snap = state.vpin_status
