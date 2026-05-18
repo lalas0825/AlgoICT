@@ -285,6 +285,53 @@ STRUCT_MIN_BREAK_PCT = 0       # 0 = disabled (was: 0.05, too restrictive)
 # semantics. Set to 0 to disable.
 STRUCT_MSS_MIN_FOLLOWTHROUGH_PCT = 0.05    # v20g config: MSS filter at 0.05% (catches fake MSS like 2026-05-12 London; zero effect in Q1 2025)
 
+# 2026-05-14 — FIXED R TARGET (v20n experiment).
+# Override the liquidity-based target with a fixed R-multiple. Default
+# (0 = disabled) keeps "next unswept pool" logic. When > 0, target =
+# entry ± (SB_FIXED_TARGET_R × stop_points). Trade-off:
+#   PROS: guaranteed full +NR capture on winners that reach target
+#   CONS: caps upside on >NR moves (Trade #3 today peak +4.36R would
+#         have capped at +3R)
+# Validation (≥2R, valid pool in direction) still applies — the fixed
+# target only overrides the EXIT level, not the structural check.
+# 2026-05-14 — Tested 3R (v20n: -12% P&L) and 2R (v20q: -14% P&L) vs
+# v20g baseline ($18,621 Q1). Both fixed targets underperform the
+# dynamic liquidity-based target. Trail+ratchet handles upside cap
+# naturally; fixed target just removes good winners. Disabled.
+SB_FIXED_TARGET_R = 0      # disabled — v20g uses liquidity-based target
+
+# 2026-05-18 — A/B test flag: when True, Silver Bullet requires
+# `htf_bias_aligned` in the confluence breakdown before firing. Counter-
+# trend setups (e.g. SHORT in bullish Daily/Weekly HTF) get rejected.
+#
+# Motivation: London 2026-05-18 had 3 counter-trend losses (T1, T2 shorts
+# in bullish HTF), 2026-05-14 NY PM also had a counter-trend loss. Across
+# 4 trading days the counter-trend SB tail is 3/3 losses. This gate is
+# the cheapest filter that removes that tail without touching structural
+# gates.
+#
+# Default OFF until Q1 2025 backtest confirms positive expectancy delta.
+SB_REQUIRE_HTF_BIAS = False  # A/B test, default off — Q1 2025 backtest 2026-05-18 showed -63% P&L vs baseline
+
+# 2026-05-18 — A/B test flag: minimum SB-live confluence sub-score
+# threshold. When > 0, signals with sb_score < threshold are rejected.
+# Lighter-touch alternative to SB_REQUIRE_HTF_BIAS (which mandates a
+# specific factor): require any combination of factors summing to N pts.
+#
+# Threshold semantics:
+#   0 = no gate (default, canonical SB)
+#   1 = block pure score=0 trades (no quality factors at all)
+#   2 = require 2 pts (HTF+SWC, or OB alone, etc.)
+#   3+ = stricter
+#
+# Default OFF until Q1 2025 backtest confirms positive expectancy delta.
+# 2026-05-18 BACKTEST RESULT
+#   Q1 2025 baseline:    183 trades, WR 64.5%, $23,911, PF 2.96
+#   Q1 2025 treatment:   185 trades, WR 67.6%, $29,510, PF 3.70 (+23% P&L)
+#   Full 2025 treatment: 570 trades, WR 63.7%, $76,248, PF 3.06
+# Pareto-dominant on Q1. Shipping as default.
+SB_MIN_LIVE_CONFLUENCE = 1  # ON — block pure score=0 noise trades
+
 # 2026-05-12 — R-STEP TRAIL (post NY AM audit experiment).
 # NY AM trade 2026-05-12 reached +4.58R peak but trail (swing-based)
 # exited at +1R = $184/3c. Left ~3.58R = ~$660 on the table.

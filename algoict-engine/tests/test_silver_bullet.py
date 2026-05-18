@@ -227,13 +227,29 @@ class TestPositiveSetup:
         # SB_MIN_STOP_POINTS=15 floor — see _build_full_setup docstring.)
         assert sig.stop_price == pytest.approx(84.75)
 
-    def test_signal_target_is_liquidity_pool(self):
-        """Target = nearest unswept liquidity pool in direction."""
+    def test_signal_target_is_liquidity_pool(self, monkeypatch):
+        """Target = nearest unswept liquidity pool in direction.
+
+        2026-05-14: when SB_FIXED_TARGET_R > 0, the target is overridden
+        with a fixed R-multiple. Test the liquidity-pool path by setting
+        SB_FIXED_TARGET_R = 0 explicitly. The fixed-target path is
+        covered by test_signal_target_is_fixed_R_when_configured below.
+        """
+        monkeypatch.setattr("config.SB_FIXED_TARGET_R", 0)
         strat, c1, c5 = _build_full_setup()
         sig = strat.evaluate(c1, c5)
         # Target is the BSL at 140.0 (the only one above entry that
         # satisfies the 2R requirement; 2026-05-05 bumped 120 → 140).
         assert sig.target_price == pytest.approx(140.0)
+
+    def test_signal_target_is_fixed_R_when_configured(self, monkeypatch):
+        """2026-05-14: SB_FIXED_TARGET_R overrides liquidity-based target."""
+        monkeypatch.setattr("config.SB_FIXED_TARGET_R", 3.0)
+        strat, c1, c5 = _build_full_setup()
+        sig = strat.evaluate(c1, c5)
+        # entry + 3 × stop_points (for long); stop_points = |entry - stop|
+        expected = sig.entry_price + 3.0 * abs(sig.entry_price - sig.stop_price)
+        assert sig.target_price == pytest.approx(expected)
 
     def test_signal_has_confluence_score(self):
         """Confluence score still computed and attached to Signal for
@@ -410,7 +426,7 @@ class TestSweepDirection:
 
 class TestBearishSetup:
 
-    def test_bearish_fvg_produces_short(self):
+    def test_bearish_fvg_produces_short(self, monkeypatch):
         """Bearish FVG → short trade with inverted entry/stop/target logic.
 
         Dimensions chosen to pass current filters:
@@ -418,7 +434,11 @@ class TestBearishSetup:
             stop_ref=115 → entry=97.75, stop=115.25, stop_dist=17.5pt
           - framework ≥ 2R (35pt): SSL target at 60 → 37.75pt from
             entry 97.75 = 2.16R, passes SB_MIN_TARGET_RR=2.0.
+
+        2026-05-14: Disable SB_FIXED_TARGET_R to test the
+        liquidity-pool path; the fixed-R override has its own test.
         """
+        monkeypatch.setattr("config.SB_FIXED_TARGET_R", 0)
         ts = _sb_ts(9, 20)
         strat, c1, c5 = _build_full_setup(
             inject_fvg=False, inject_sweep=False, inject_target=False, ts=ts,

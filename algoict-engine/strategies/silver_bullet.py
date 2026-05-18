@@ -1366,6 +1366,27 @@ class SilverBulletStrategy:
             )
             return None
 
+        # ── 2026-05-14 — FIXED R TARGET OVERRIDE (v20n test) ───────────
+        # By default the target = next unswept liquidity pool. Pool
+        # distance varies widely (2R - 70R). User idea: cap target at
+        # a fixed R-multiple to guarantee a clean exit on big movers
+        # before trail giveback. Trade-off: lose upside on >3R moves
+        # but guarantee +3R locked when reached.
+        #
+        # Validation (≥2R, valid pool exists in direction) is still
+        # required. The fixed target only overrides the EXIT level,
+        # not the structural validation.
+        #
+        # Set SB_FIXED_TARGET_R = 0 to disable (default = liquidity-based).
+        fixed_target_r = float(config.cfg("SB_FIXED_TARGET_R", 0))
+        if fixed_target_r > 0:
+            if direction == "long":
+                target_price = entry_price + (fixed_target_r * stop_points)
+            else:
+                target_price = entry_price - (fixed_target_r * stop_points)
+            framework_pts = abs(target_price - entry_price)
+            actual_rr = fixed_target_r
+
         # ── 7. Position size ───────────────────────────────────────────
         # Risk amount comes from the RiskManager (ladder-aware when enabled,
         # else flat config.RISK_PER_TRADE). When the ladder is exhausted
@@ -1437,6 +1458,70 @@ class SilverBulletStrategy:
             if any(f.replace("_", " ") in r.lower() or f in r.lower()
                    for f in config.SB_LIVE_FACTORS)
         ]
+
+        # ── 2026-05-18 — Optional HTF-bias mandatory gate (A/B test) ──────
+        # When config.SB_REQUIRE_HTF_BIAS = True, reject any signal whose
+        # confluence breakdown does NOT include `htf_bias_aligned`. This
+        # blocks counter-trend SB setups (e.g. SHORT in bullish HTF).
+        #
+        # Default OFF: SB v4 RTH Mode canonical does NOT require HTF bias.
+        # The gate is provided so we can A/B-test mandatory HTF alignment
+        # against the canonical no-HTF behavior on historical data.
+        #
+        # Today's observations (2026-05-14 NY PM, 2026-05-18 London):
+        #   * 3/3 counter-trend SB shorts in bullish HTF → losses
+        #   * 0/0 counter-trend SB longs in bearish HTF → no sample yet
+        #   * HTF-aligned trades: mixed (need WR boost from secondary factor)
+        # If Q1 2025 backtest confirms positive expectancy delta we ship True.
+        if config.cfg("SB_REQUIRE_HTF_BIAS", False):
+            if "htf_bias_aligned" not in sb_breakdown:
+                logger.info(
+                    "EVAL silver_bullet [%s]: confluence=%d/%d (SB live), "
+                    "signal=reject, reason=htf_bias_misaligned "
+                    "(SB_REQUIRE_HTF_BIAS=True, counter-trend blocked)",
+                    _ts_hm(ts), sb_score, config.SB_LIVE_MAX,
+                )
+                self._last_evaluated_bar_ts = ts
+                self.last_rejection = {
+                    "reason": "htf_bias_misaligned",
+                    "is_near_miss": True,  # near-miss: structurally valid, only HTF blocks
+                    "kz": active_zone,
+                    "ts": ts,
+                }
+                return None
+
+        # ── 2026-05-18 — Optional SB-live score threshold gate (A/B) ──────
+        # When config.SB_MIN_LIVE_CONFLUENCE > 0, reject signals whose
+        # SB live confluence sub-score is below the threshold. Default 0
+        # preserves canonical SB behavior (no confluence gate, structural
+        # gates handle filtering). This is the lighter-touch alternative
+        # to SB_REQUIRE_HTF_BIAS: instead of mandating a specific factor,
+        # require AT LEAST `n` points of quality across any factors.
+        #
+        # Threshold semantics:
+        #   0 = no gate (default)
+        #   1 = at least one +1 factor OR an OB (+2) — block pure score=0
+        #   2 = at least 2 points (HTF+SWC, or OB alone)
+        #   3+ = increasingly strict
+        #
+        # Today's hypothesis: today's score=0 trades (T1, T2) lost decisively.
+        # If Q1 2025 confirms score=0 is mostly noise we ship min=1 as default.
+        _min_live_conf = int(config.cfg("SB_MIN_LIVE_CONFLUENCE", 0))
+        if _min_live_conf > 0 and sb_score < _min_live_conf:
+            logger.info(
+                "EVAL silver_bullet [%s]: confluence=%d/%d (SB live), "
+                "signal=reject, reason=below_min_confluence "
+                "(score=%d < min=%d)",
+                _ts_hm(ts), sb_score, config.SB_LIVE_MAX, sb_score, _min_live_conf,
+            )
+            self._last_evaluated_bar_ts = ts
+            self.last_rejection = {
+                "reason": "below_min_confluence",
+                "is_near_miss": True,
+                "kz": active_zone,
+                "ts": ts,
+            }
+            return None
 
         signal = Signal(
             strategy="silver_bullet",

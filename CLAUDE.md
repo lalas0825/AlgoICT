@@ -97,7 +97,15 @@ SB uses a different entry model (FVG-only, no HTF bias required, no OTE entry) �
 
 **Not applicable to SB (always 0)**: OTE Fibonacci (SB enters on FVG proximal, not 61.8-78.6 retrace), HTF OB/FVG alignment (SB doesn't scope HTF overlay).
 
-SB does **NOT enforce a min_confluence gate** (Q1 2024 analysis confirmed scoring was noise for SB — higher scores had lower WR). Real filtering: structural gates + kill switch + MLL + VPIN. The score is still computed for paper trail; logs + Telegram show dual display: `confluence=11/19 (SB: 4/10)`.
+SB enforces a **min_conf >= 1 gate** as of 2026-05-18 (`config.SB_MIN_LIVE_CONFLUENCE = 1`). Pure score=0 trades (no quality factor at all) are rejected. Score=1+ trades pass through. This change overrides the prior Q1 2024 conclusion (which said scoring was noise for SB) — the 2026-05-18 Q1 2025 A/B re-test showed pareto-dominance:
+- Baseline (no gate): 183 trades, WR 64.5%, +$23,911, PF 2.96
+- min_conf >= 1: 185 trades, WR 67.6%, +$29,510, PF 3.70 (+23% P&L, +3.1pp WR, +0.74 PF)
+
+The Q1 2024 result likely reflected pre-Opportunity-Replace mechanics where the bot took fewer late-cycle entries. With Opportunity Replace shipping later, the bot now adapts to evolving setups but takes more questionable score=0 trades — `SB_MIN_LIVE_CONFLUENCE = 1` is the cheapest filter that removes that tail without touching structural gates.
+
+Other real filtering still applies: structural gates + kill switch + MLL + VPIN. The score is still computed for paper trail; logs + Telegram show dual display: `confluence=11/19 (SB: 4/10)`. Rejected setups log `reason=below_min_confluence`.
+
+**Rejected experiment (2026-05-18)**: `SB_REQUIRE_HTF_BIAS = True` (mandatory HTF alignment) cut 53% of trades and dropped P&L 63% in Q1 2025. Counter-trend SHORTS with conf>=1 are profitable in bullish regimes — they have other quality factors (sentiment, OB, target). Gate code remains in `silver_bullet.py` (default OFF) for future A/B testing but is NOT shipped.
 
 Full details in [`SILVER_BULLET_STRATEGY_GUIDE.md`](SILVER_BULLET_STRATEGY_GUIDE.md) §8.
 
@@ -320,7 +328,7 @@ Weekly → Daily → 4H entry. S&P 500 stocks. Hold 2-15 dias. Max 5 positions.
 | Kill switch | 3 consecutive losses per SESSION (not day) → halt that KZ only |
 | Profit cap | $1,500/dia |
 | Hard close | 3:00 PM CT |
-| Min confluence | NY AM: 7/19 (hard gate) · SB: 0 (no gate, structural gates handle) |
+| Min confluence | NY AM: 7/19 (hard gate) · SB: **1/5** (min live conf gate, 2026-05-18) |
 | Max MNQ trades/dia | 15 (global cap; kill_switch + MLL handle real filtering) |
 | Heartbeat | 5s o flatten |
 | VPIN shield | activar ≥0.70 · resume ≤0.55 (histéresis) |
@@ -613,7 +621,8 @@ Requiere migration `0003_bot_state_overlays.sql` aplicada.
 - **`RISK_LADDER_ENABLED` = False** (infrastructure in place, ready if needed)
 - **`KZ_LOSS_CAPS` = {}** (no per-KZ loss caps)
 - **`equal_levels_refresh` OFF**
-- **SB confluence gate** — removed (structural gates handle filtering)
+- **SB confluence gate** — `SB_MIN_LIVE_CONFLUENCE = 1` (2026-05-18, Q1 2025 A/B showed +23% P&L, +3.1pp WR, +0.74 PF vs no gate). Structural gates still handle the heavy lifting; this just blocks pure score=0 noise.
+- **SB HTF bias mandatory** — rejected (2026-05-18 A/B cut P&L 63% in Q1 2025 because counter-trend SHORTS with conf>=1 are profitable). Gate code stays in `strategies/silver_bullet.py` behind `SB_REQUIRE_HTF_BIAS` flag (default False).
 - **`TRADE_MANAGEMENT` = "trailing"** (matches live + backtest)
 - **Silver Bullet v4 RTH Mode** — wider KZ coverage (London 01-04 / NY AM 08:30-12 / NY PM 13:30-15 CT)
 
@@ -674,6 +683,43 @@ crosses swing level that caused last_struct).
 **`STRATEGIES_ENABLED = ("silver_bullet",)`** in config.py — NY AM
 Reversal held offline in live (still wired in main.py but evaluate()
 skipped). Re-enable: add `"ny_am_reversal"` to the tuple.
+
+### 2026-05-18 — SB live ops + min_conf gate
+
+**Live session audit (London 2026-05-18, 5 trades):**
+- 2W / 3L · WR 40% · −$122 net
+- Score distribution: 0/5 → 0W/2L (−$406.50) · 1/5 → 0W/1L (−$192.50) · 2/5 → 2W/0L (+$477.00)
+- Pattern matched 2026-05-14 NY PM trade (also score=0, also loss). 3/3 score=0 trades across 2 sessions = losses.
+
+**Q1 2025 A/B re-test (2026-05-18) — pareto-dominant winner**:
+
+| Config | Trades | WR | P&L | PF | Avg win | Avg loss |
+|--------|-------:|----:|----:|----:|--------:|---------:|
+| Baseline (no gate) | 183 | 64.5% | $23,911 | 2.96 | $306 | −$187 |
+| `SB_REQUIRE_HTF_BIAS = True` (rejected) | 86 | 62.8% | $8,797 | 2.38 | $281 | −$199 |
+| **`SB_MIN_LIVE_CONFLUENCE = 1` (shipped)** | **185** | **67.6%** | **$29,510** | **3.70** | **$324** | **−$182** |
+
+**Full 2025 walk-forward with min_conf=1**:
+- 570 trades · WR 63.7% · **+$76,248** · PF 3.06 · avg win $312 / avg loss −$179
+- vs v12 baseline ($80,134 on older code): 1,758 trades collapsed to 570 (−68%), WR 48.6% → 63.7% (+15pp), PF 1.95 → 3.06 (+57%). Comparable absolute P&L with massively higher selection quality.
+
+**Why min_conf=1 wins, HTF mandatory loses**: HTF gate eliminates ALL counter-trend trades. In 2025's bullish regime, 3 of the top 5 winners were counter-trend SHORTS with conf=1 (sentiment/OB/target factors, no HTF align) — gate kills those wins. Min_conf=1 only blocks the score=0 tail (no quality factor at all) so structural setups that scored on sentiment / OB / target / HTF still fire.
+
+**Shipped configs (config.py)**:
+- `SB_MIN_LIVE_CONFLUENCE = 1` (active in live + backtest)
+- `SB_REQUIRE_HTF_BIAS = False` (code stays for future A/B, default off)
+
+### 2026-05-18 — Reconciler log noise fix
+
+**Symptom**: 14 false `WARNING: Position reconcile: ORPHAN in local state` over a 50-min span during 2026-05-18 London KZ, while bot was actually waiting on a legitimate pending limit (29048.50 long, 55 bars old). Opportunity Replace Tier 2.5 eventually refreshed it correctly — the bot was operating fine, but the log gave the impression of bot being bricked.
+
+**Root cause**: Broker `/Position/searchOpen` returns ONLY filled positions, not resting limits. So an unfilled limit always appears "orphan" to the naive `local_symbols − broker_symbols` check. The pre-fix code logged WARNING unconditionally, then iterated and correctly skipped cleanup for unfilled-limit positions. Result: noisy WARNING with no cleanup action.
+
+**Fix** (`main.py` line 2783+): collect `orphan_keys` first (filtered for unfilled limits + grace period), then only WARN if `orphan_keys` is non-empty. Otherwise DEBUG. No-op functionally.
+
+### 2026-05-18 — Asyncio liveness watchdog import fix
+
+`main.py` watchdog block used `time.time()`/`time.sleep()` but `time` was never module-imported (only inside the local try/except). Watchdog silently failed at startup with `name 'time' is not defined`. Fix: added local `import time` at the top of the try block. Confirmed active in launch log: `Asyncio liveness watchdog started (threshold=90s, check_interval=30s)`.
 
 ---
 

@@ -2781,10 +2781,18 @@ async def _reconcile_positions(components: Components, state: EngineState) -> No
                     state._ghost_recovered_trade_ids.add(tid)
 
     if orphans:
-        logger.warning(
-            "Position reconcile: ORPHAN in local state (not at broker): %s",
-            sorted(orphans),
-        )
+        # 2026-05-18 fix — DO NOT WARN PREMATURELY. The "orphans" set is computed
+        # naively as (local_symbols − broker_symbols). But broker's
+        # /Position/searchOpen returns ONLY filled positions, not resting limit
+        # orders. So an unfilled limit ALWAYS appears "orphan" to this naive
+        # check, even though the poll-path will TTL-clean it correctly. Pre-fix,
+        # the reconciler logged WARNING every 5 min for every pending limit,
+        # bricking the impression of bot health (see 2026-05-18 London audit
+        # where a 55-bar pending limit logged 14 false-orphan warnings).
+        #
+        # Fix: collect real_orphans first (filtered for unfilled limits + grace
+        # period), only THEN warn. If everything filtered = noise, log at DEBUG.
+        #
         # Cancel all pending stop/target orders for each orphaned position
         # then remove from local state. We do NOT record a P&L event because
         # the position was never confirmed at the broker.
@@ -2873,6 +2881,26 @@ async def _reconcile_positions(components: Components, state: EngineState) -> No
                     )
                     continue
             orphan_keys.append(key)
+
+        # 2026-05-18 — Only WARN when there are real orphans to clean. If
+        # everything filtered out (pending limits or within grace period),
+        # log at DEBUG so we still have a paper trail for diagnostics
+        # without flooding the warning channel.
+        if orphan_keys:
+            real_orphan_symbols = sorted({
+                _root((state.open_positions[k].get("signal") and state.open_positions[k]["signal"].symbol) or "")
+                for k in orphan_keys
+            } - {""})
+            logger.warning(
+                "Position reconcile: ORPHAN in local state (not at broker): %s — cleaning %d position(s)",
+                real_orphan_symbols, len(orphan_keys),
+            )
+        else:
+            logger.debug(
+                "Position reconcile: orphans detected %s but all are pending limits or within grace — no cleanup",
+                sorted(orphans),
+            )
+
         for key in orphan_keys:
             pos = state.open_positions.pop(key, None)
             if pos is None:
@@ -5104,6 +5132,7 @@ async def run(
     try:
         import os as _os_for_watchdog
         import threading as _threading_for_watchdog
+        import time  # noqa: E501 — module-level `time` not imported; needed by watchdog closures below
         _ASYNCIO_HEARTBEAT_TS = [time.time()]
 
         async def _asyncio_heartbeat_writer():
