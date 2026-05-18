@@ -300,56 +300,39 @@ STRUCT_MSS_MIN_FOLLOWTHROUGH_PCT = 0.05    # v20g config: MSS filter at 0.05% (c
 # naturally; fixed target just removes good winners. Disabled.
 SB_FIXED_TARGET_R = 0      # disabled — v20g uses liquidity-based target
 
-# 2026-05-18 — A/B test flag: when True, Silver Bullet requires
-# `htf_bias_aligned` in the confluence breakdown before firing. Counter-
-# trend setups (e.g. SHORT in bullish Daily/Weekly HTF) get rejected.
+# 2026-05-18 — SB CONFLUENCE GATES: TESTED & REJECTED (code removed)
 #
-# Motivation: London 2026-05-18 had 3 counter-trend losses (T1, T2 shorts
-# in bullish HTF), 2026-05-14 NY PM also had a counter-trend loss. Across
-# 4 trading days the counter-trend SB tail is 3/3 losses. This gate is
-# the cheapest filter that removes that tail without touching structural
-# gates.
+# Two A/B experiments ran on 2026-05-18 (4 days of live + 3 years backtest):
 #
-# Default OFF until Q1 2025 backtest confirms positive expectancy delta.
-SB_REQUIRE_HTF_BIAS = False  # A/B test, default off — Q1 2025 backtest 2026-05-18 showed -63% P&L vs baseline
-
-# 2026-05-18 — A/B test flag: minimum SB-live confluence sub-score
-# threshold. When > 0, signals with sb_score < threshold are rejected.
-# Lighter-touch alternative to SB_REQUIRE_HTF_BIAS (which mandates a
-# specific factor): require any combination of factors summing to N pts.
+#  A) SB_REQUIRE_HTF_BIAS = True  — mandatory `htf_bias_aligned` factor
+#     Q1 2025 A/B: 86 trades (-53%), WR 62.8%, $8,797 (-63% vs baseline)
+#     Killed counter-trend shorts that had OTHER quality factors.
+#     Hard fail. Killed in Q1 alone — no need for cross-period.
 #
-# Threshold semantics:
-#   0 = no gate (default, canonical SB)
-#   1 = block pure score=0 trades (no quality factors at all)
-#   2 = require 2 pts (HTF+SWC, or OB alone, etc.)
-#   3+ = stricter
+#  B) SB_MIN_LIVE_CONFLUENCE = 1  — reject pure score=0 trades
+#     Q1 2025 A/B:  185 trades, WR 67.6%, $29,510 vs baseline $23,911 (+23%) — looked great
+#     Full 2025:    570 trades, $76,248 vs baseline $75,436 (+1.1%)         — Q1 fluke
+#     2024 A/B:     940 trades, $128,196 vs baseline $143,283 (-10.5%)      — hostile regime
+#     2023 A/B:    1110 trades, $152,366 vs baseline $153,981 (-1.0%)       — tie
+#     3-year net:  -$15,891 (-4.3%). Cross-period FAIL.
 #
-# Default OFF until Q1 2025 backtest confirms positive expectancy delta.
-# 2026-05-18 BACKTEST RESULT
-#   Q1 2025 baseline:    183 trades, WR 64.5%, $23,911, PF 2.96
-#   Q1 2025 treatment:   185 trades, WR 67.6%, $29,510, PF 3.70 (+23% P&L)
-#   Full 2025 treatment: 570 trades, WR 63.7%, $76,248, PF 3.06
-# Pareto-dominant on Q1. Shipping as default.
-# 2026-05-18 BACKTEST RESULT — 3-year cross-period A/B (full data):
-#   Year  | Baseline P&L  | Treatment P&L | Delta
-#   2023  | $153,981      | $152,366      | -$1,615 (-1.0%)
-#   2024  | $143,283      | $128,196      | -$15,087 (-10.5%)
-#   2025  | $75,436       | $76,248       | +$811 (+1.1%)
-#   3-yr  | $372,701      | $356,810      | -$15,891 (-4.3%)
+# Deeper investigation (analysis/score_investigation/) revealed:
+#   * Score=0 has HIGHEST WR (72-80%) AND highest avg P&L ($171-$182)
+#     ACROSS ALL 3 YEARS. These are counter-trend mean-reversion shorts.
+#   * Structural gates (sweep + FVG + MSS) already filter for quality.
+#   * Score is paper-trail only — does NOT discriminate outcome.
+#   * Stop-distance buckets: no threshold helps either. Mega-sweeps
+#     (stop > 1.5% of entry) generate 54-69% of yearly P&L by themselves.
 #
-# Q1 2025 alone showed +23% (treatment vs baseline) but cross-period
-# revealed regime-dependence: 2024 (Fed pivot + AI breakout regime)
-# strongly punished the gate because simple pullback trades won
-# regardless of confluence factors. Q1 2025 was a seasonal-Jan/Feb/Mar
-# overfit sample.
+# Decision: canonical SB v4 RTH Mode — NO confluence gate. Live with score=0.
+# Today's live losses on score=0 were variance, not pattern.
 #
-# Decision: REVERT — do NOT ship the gate as default. The score=0
-# subset is NOT pure noise — it depends on regime. Without a regime
-# detector to enable/disable the gate, the tail risk is unacceptable.
-#
-# Gate code remains in silver_bullet.py for future re-investigation
-# (e.g. as part of a regime-aware filter).
-SB_MIN_LIVE_CONFLUENCE = 0  # REVERTED — gate failed cross-period validation
+# Gate code REMOVED from strategies/silver_bullet.py (see follow-up commit
+# after revert 4fef290). To reopen for future regime-aware research, the
+# gate was placed right after `sb_breakdown`/`sb_reasons` are computed:
+#     _min = int(config.cfg("SB_MIN_LIVE_CONFLUENCE", 0))
+#     if _min > 0 and sb_score < _min: return None
+# Plus a sibling factor-specific gate (SB_REQUIRE_HTF_BIAS).
 
 # 2026-05-12 — R-STEP TRAIL (post NY AM audit experiment).
 # NY AM trade 2026-05-12 reached +4.58R peak but trail (swing-based)
