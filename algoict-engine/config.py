@@ -330,7 +330,26 @@ SB_REQUIRE_HTF_BIAS = False  # A/B test, default off — Q1 2025 backtest 2026-0
 #   Q1 2025 treatment:   185 trades, WR 67.6%, $29,510, PF 3.70 (+23% P&L)
 #   Full 2025 treatment: 570 trades, WR 63.7%, $76,248, PF 3.06
 # Pareto-dominant on Q1. Shipping as default.
-SB_MIN_LIVE_CONFLUENCE = 1  # ON — block pure score=0 noise trades
+# 2026-05-18 BACKTEST RESULT — 3-year cross-period A/B (full data):
+#   Year  | Baseline P&L  | Treatment P&L | Delta
+#   2023  | $153,981      | $152,366      | -$1,615 (-1.0%)
+#   2024  | $143,283      | $128,196      | -$15,087 (-10.5%)
+#   2025  | $75,436       | $76,248       | +$811 (+1.1%)
+#   3-yr  | $372,701      | $356,810      | -$15,891 (-4.3%)
+#
+# Q1 2025 alone showed +23% (treatment vs baseline) but cross-period
+# revealed regime-dependence: 2024 (Fed pivot + AI breakout regime)
+# strongly punished the gate because simple pullback trades won
+# regardless of confluence factors. Q1 2025 was a seasonal-Jan/Feb/Mar
+# overfit sample.
+#
+# Decision: REVERT — do NOT ship the gate as default. The score=0
+# subset is NOT pure noise — it depends on regime. Without a regime
+# detector to enable/disable the gate, the tail risk is unacceptable.
+#
+# Gate code remains in silver_bullet.py for future re-investigation
+# (e.g. as part of a regime-aware filter).
+SB_MIN_LIVE_CONFLUENCE = 0  # REVERTED — gate failed cross-period validation
 
 # 2026-05-12 — R-STEP TRAIL (post NY AM audit experiment).
 # NY AM trade 2026-05-12 reached +4.58R peak but trail (swing-based)
