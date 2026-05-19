@@ -689,6 +689,40 @@ Requiere migration `0003_bot_state_overlays.sql` aplicada.
   5-50 min, mostly closing within their own KZ). Revisit if live
   evidence shows the failure mode hurting us materially. Backtest path 2
   before shipping any of these.
+- **BE-shield-at-+1R** (2026-05-19, REJECTED on small sample): proposed
+  to move stop to entry when MFE reaches +1R, on top of existing +2R
+  ratchet. Tested counterfactually on 11 losers + 5 winners from
+  2026-05-18 + 2026-05-19. Result: net -$281 across the 16-trade
+  sample. Saves 2 losers (+$280) but scratches 1 big winner (-$630 on
+  T2_19 London). Pareto-negative because LOSERS rarely reach +1R MFE
+  (8/11 are "instant adverse" with MFE <1R), while WINNERS often reach
+  +1R only to retrace through BE before continuing. Code/analysis in
+  `analysis/be_shield_simulation.py`. Decision: not shipped. Sample is
+  small — re-investigate only if a 3-yr backtest shows clear edge,
+  which we won't run unless live evidence reopens the question.
+- **Regime detection / "give the bot eyes"** (2026-05-19, deferred):
+  User raised the core insight that today's losses (NY PM 5/5) weren't
+  preventable by structural filters — they were CONTEXTUAL. Same setup
+  (LONG, bias=bearish, struct=all-bull-recent) won in London (T1_19
+  +$210) and lost in NY PM (PM1_19 -$95). The differentiator was
+  session/KZ context, not bar-level features.
+  Investigation paths considered:
+  * **Camino A — Daily AI briefing** (Claude API at 6 AM CT each
+    morning): consumes calendar + news + HTF + prior session outcome,
+    returns regime classification + per-KZ modifiers. High leverage,
+    hard to backtest (no Claude calls for 3-yr historical bars).
+  * **Camino B — Session tracker** (deterministic, backteseable):
+    instant-adverse counter per KZ + cross-KZ cascade gate. If 2+
+    trades in current KZ went MFE <0.5R, halt KZ. If previous KZ
+    tripped kill_switch, current KZ requires extra confluence.
+  * **Camino C — Live AI overlay** (Claude per signal): NOT pursued.
+    Untestable at backtest scale, latency + cost prohibitive.
+  Decision: defer all 3. Today's loss pattern is one data point. Need
+  3-5 more "giveback days" or "chop days" before investing in this.
+  When triggered: Camino B first (backteseable), Camino A second
+  (frontier feature, harder to validate). Recorded in
+  `analysis/be_shield_simulation.py` and bar-state extraction
+  patterns in session log 2026-05-19.
 
 ### v12 backtest validation (2026-04-25)
 
@@ -760,6 +794,45 @@ skipped). Re-enable: add `"ny_am_reversal"` to the tuple.
 **Root cause**: Broker `/Position/searchOpen` returns ONLY filled positions, not resting limits. So an unfilled limit always appears "orphan" to the naive `local_symbols − broker_symbols` check. The pre-fix code logged WARNING unconditionally, then iterated and correctly skipped cleanup for unfilled-limit positions. Result: noisy WARNING with no cleanup action.
 
 **Fix** (`main.py` line 2783+): collect `orphan_keys` first (filtered for unfilled limits + grace period), then only WARN if `orphan_keys` is non-empty. Otherwise DEBUG. No-op functionally.
+
+### 2026-05-19 — Day audit + giveback lesson
+
+**Day outcome**: 8 trades · 3W / 5L (technically — there were more
+losing PM trades, see below) · Net realized +$339 · Peak drawdown
+-$1,190 (78% giveback of London profits).
+
+Breakdown:
+- **London** (3W/0L): +$1,529.50 — T1 (LONG score=0, +$210), T2
+  (SHORT score=1, +$1,127.50, 50-min trail captured 112pts), T3
+  (SHORT score=1, +$192). Profit cap (paper config raised to
+  $10,000 this morning, hence no auto-halt) would have stopped
+  trading at the canonical $1,500 cap — confirmed Combine value.
+- **NY AM** (0W/2L): -$405 — NA1 (SHORT score=2 -$192), NA2 (SHORT
+  score=2 -$213, 1-SECOND trade — fill 08:30:31, stop 08:30:32,
+  classic cash-open kill wick). Drove the NY_OPEN_BUFFER ship.
+- **NY PM** (0W/5L): -$785.50 — PM1-PM3 LONGs into bullish struct
+  that exhausted, then PM4-PM5 SHORTs after CHoCH bear at 13:55 CT
+  that didn't follow through. Chop/reversal regime. None preventable
+  by gates we've shipped.
+
+Key lessons:
+1. **Profit cap exists for a reason**. Disabling it for paper
+   research cost us $1,012.50 in giveback. Worth the data, but the
+   tuition fee is real. Re-enable for Combine.
+2. **All NY PM losers had score=1** — confluence score did not
+   discriminate. Confirms the 3-yr cross-period finding from earlier.
+3. **Same structural setup wins in some KZs and loses in others**
+   (T1_19 London +$210 LONG vs PM1_19 NY PM -$95 LONG, both with
+   identical bias + struct + last_disp at fire). The discriminator
+   is session context, not bar features. Roadmap: see "Regime
+   detection" entry under Pendientes watch-list.
+4. **Bot keeps placing limits far from current price** (e.g., 14:35
+   CT pending SHORT @ 29096.25 when price was 28944 = 152pt away).
+   This is canonical ICT SB (wait for retrace into FVG) but produces
+   stale limits that often die at hard close without filling. Not a
+   bug, but worth tracking if it persistently consumes risk-budget
+   slots. Tracked under Pendientes as "limits far from price" if
+   pattern repeats.
 
 ### 2026-05-19 — NY Open Buffer (SHIPPED with disclosure)
 
