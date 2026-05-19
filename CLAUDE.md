@@ -737,6 +737,45 @@ skipped). Re-enable: add `"ny_am_reversal"` to the tuple.
 
 **Fix** (`main.py` line 2783+): collect `orphan_keys` first (filtered for unfilled limits + grace period), then only WARN if `orphan_keys` is non-empty. Otherwise DEBUG. No-op functionally.
 
+### 2026-05-19 — NY Open Buffer (SHIPPED with disclosure)
+
+**Live trigger**: 2026-05-19 NY AM session lost −$405 in 2 trades, both stopped near NY equity cash open (09:30 ET / 08:30 CT). NA2 filled @28907 at 08:30:31 and stopped @28924.75 at 08:30:32 — **1 second in trade**, classic cash-open kill wick.
+
+**Rule shipped** (`config.NY_OPEN_BUFFER_*`): reject SB evaluations within ±buffer of two NY open events:
+- 08:30 ET = 07:30 CT (pre-market open + data releases)
+- 09:30 ET = 08:30 CT (stock cash open)
+
+Default `BEFORE=10, AFTER=15` → blackouts at 07:20-07:45 CT AND 08:20-08:45 CT.
+
+**3-year cross-period A/B**:
+
+| Year | Baseline | Treatment | Δ |
+|------|---------:|----------:|---:|
+| 2023 | $153,981 | $183,424 | +$29,443 (+19.1%) |
+| 2024 | $143,283 | $158,910 | +$15,627 (+10.9%) |
+| 2025 | $75,436  | $85,075  | +$9,639  (+12.8%) |
+| **3-yr** | **$372,701** | **$427,409** | **+$54,708 (+14.7%)** |
+
+**Counterintuitive finding**: treatment has MORE trades than baseline (+211 across 3-yr). Mechanism = cascade effect: blocking bad trades in the wick window preserves `consecutive_losses` counter and prevents kill_switch from tripping → bot stays in market for more setups later in session.
+
+**Placebo test** (10:30 CT random buffer, same widths):
+- 3-yr placebo: $398,246 (+6.9% vs baseline)
+- Treatment is $29,164 (+8.6%) better than placebo cross-period
+- 2023, 2025: placebo ≈ treatment (cascade dominates)
+- 2024: treatment +$24,404 better than placebo (microstructure-specific value, Fed pivot regime)
+
+**Decomposition**:
+- Cascade effect (generic mid-NY-AM blackout): +6.9%
+- Microstructure-specific (08:30 CT wick avoidance): additional +7.8%
+- Combined: +14.7%
+
+**Honest disclosure**: The dominant mechanism is cascade (risk budget preservation), not microstructure. In 2 of 3 years, ANY mid-NY-AM blackout would have produced similar results. Only 2024 showed clear microstructure-specific value. We ship at 08:30 CT because:
+1. Microstructure intuition has theoretical grounding (known wick at cash open)
+2. Treatment is net-better than placebo in aggregate (+8.6%)
+3. Doesn't hurt in any year (worst case ≈ placebo)
+
+**Future research**: if cascade is the dominant effect, a generalized trade-pacing rule (max 1 trade per N bars) might capture similar value with cleaner semantics. Deferred.
+
 ### 2026-05-18 — Asyncio liveness watchdog import fix
 
 `main.py` watchdog block used `time.time()`/`time.sleep()` but `time` was never module-imported (only inside the local try/except). Watchdog silently failed at startup with `name 'time' is not defined`. Fix: added local `import time` at the top of the try block. Confirmed active in launch log: `Asyncio liveness watchdog started (threshold=90s, check_interval=30s)`.

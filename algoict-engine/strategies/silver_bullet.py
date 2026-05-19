@@ -501,6 +501,43 @@ class SilverBulletStrategy:
             except Exception as exc:
                 logger.debug("News blackout check failed: %s", exc)
 
+        # ── 2026-05-19 NY OPEN BUFFER (kill-wick avoidance, multi-event) ──
+        # NY has TWO open events that produce liquidity wicks in equity
+        # index futures within their first ~15 min:
+        #   1. 08:30 ET (07:30 CT) — pre-market open + scheduled data
+        #      releases (NFP, CPI, GDP usually fire at this time)
+        #   2. 09:30 ET (08:30 CT) — stock cash open (NYSE/NASDAQ); algos
+        #      sweep stops, desk orders flood in, big wicks
+        #
+        # Today (2026-05-19) NA1+NA2 lost $405 to exactly this — NA2 filled
+        # @28907 at 08:30:31 CT, stopped @28924.75 at 08:30:32 (1 second,
+        # classic cash-open wick).
+        #
+        # ICT canonical AM SB is 09:00-10:00 CT precisely to wait through
+        # the second wick. Our wider 07:30-12:00 RTH window catches more
+        # setups but exposes us to BOTH wicks. This gate skips SB evals
+        # in a buffer window around EACH configured open event.
+        #
+        # Default OFF (BEFORE=AFTER=0). To enable: BEFORE=10, AFTER=15
+        # → blackouts at 07:20-07:45 CT AND 08:20-08:45 CT.
+        before_min = int(config.cfg("NY_OPEN_BUFFER_BEFORE_MIN", 0))
+        after_min = int(config.cfg("NY_OPEN_BUFFER_AFTER_MIN", 0))
+        if before_min > 0 or after_min > 0:
+            open_events = config.cfg("NY_OPEN_EVENTS_CT", [(8, 30)])
+            cur_total_min = ts.hour * 60 + ts.minute
+            for (ev_h, ev_m) in open_events:
+                ev_total = ev_h * 60 + ev_m
+                if (ev_total - before_min) <= cur_total_min < (ev_total + after_min):
+                    logger.info(
+                        "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, "
+                        "reason=ny_open_blackout (event %02d:%02d CT, buffer -%dm/+%dm)",
+                        _ts_hm(ts), ev_h, ev_m, before_min, after_min,
+                    )
+                    self._set_rejection(
+                        ts, "ny_open_blackout", active_zone, is_near_miss=False,
+                    )
+                    return None
+
         # Dynamic cancel check: last 10 minutes of the active window.
         kz_cfg = config.KILL_ZONES.get(active_zone, {})
         start_h, start_m = kz_cfg.get("start", (0, 0))

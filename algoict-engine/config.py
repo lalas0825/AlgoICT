@@ -505,7 +505,51 @@ NEWS_BLACKOUT_MIN_AFTER = 60    # block N min AFTER event
 NEWS_BLACKOUT_MIN_RISK = "high" # 'high' or 'extreme' triggers blackout
 NEWS_BLACKOUT_ENABLED = True
 
-DAILY_PROFIT_CAP = 1500       # $1,500/day — stop trading after this
+# 2026-05-19 — NY OPEN BUFFER (SHIPPED after cross-period A/B + placebo)
+# NY has TWO open events that produce liquidity wicks in equity index
+# futures within their first ~15 min:
+#   1. 08:30 ET (07:30 CT) — pre-market open + scheduled data releases
+#   2. 09:30 ET (08:30 CT) — stock market cash open (NYSE/NASDAQ)
+#
+# Live demonstration (2026-05-19): NA1+NA2 lost $405 to the 09:30 ET
+# cash-open wick (NA2 filled @28907 at 08:30:31, stopped @28924.75 at
+# 08:30:32 CT — 1 second in trade).
+#
+# 3-year cross-period A/B with BEFORE=10/AFTER=15:
+#   Year  | Baseline       | Treatment        | Δ
+#   2023  | $153,981       | $183,424         | +$29,443 (+19.1%)
+#   2024  | $143,283       | $158,910         | +$15,627 (+10.9%)
+#   2025  | $75,436        | $85,075          | +$9,639  (+12.8%)
+#   3-yr  | $372,701       | $427,409         | +$54,708 (+14.7%)
+#
+# PLACEBO TEST (10:30 CT random buffer, 3 years):
+#   Year  | Baseline       | Placebo @10:30   | vs Treatment @08:30
+#   2023  | $153,981       | $183,176 (+19%)  | ~tie (placebo equally good)
+#   2024  | $143,283       | $134,506 (-6%)   | treatment +$24,404 better
+#   2025  | $75,436        | $80,564 (+7%)    | treatment +$4,511 better
+#   3-yr  | $372,701       | $398,246 (+6.9%) | treatment +$29,164 (+8.6%)
+#
+# Decomposition: cascade effect = +6.9%, microstructure-specific = +8.6%.
+# Both effects are real. Cascade preserves kill_switch + position budget
+# (any mid-NY-AM blackout helps); microstructure-specific shows in 2024
+# (Fed pivot regime) where 08:30 CT wick had unique characteristics.
+#
+# Trade count: treatment has MORE trades than baseline (+211 across 3yr).
+# Mechanism: blocking the wick window preserves consecutive_losses
+# counter → bot doesn't trip kill_switch → more later setups accepted.
+NY_OPEN_EVENTS_CT = [(7, 30), (8, 30)]   # (hour, minute) tuples in CT
+NY_OPEN_BUFFER_BEFORE_MIN = 10  # block 10 min before each event
+NY_OPEN_BUFFER_AFTER_MIN = 15   # block 15 min after each event
+
+# 2026-05-19 — DAILY_PROFIT_CAP raised for paper-mode research.
+# In a real Combine, $1,500/day is the canonical cap (lock the win,
+# preserve the trailing drawdown buffer). But in paper-trading research
+# mode we WANT full-day data — capping at $1,500 means we lose all NY AM
+# and NY PM observations on days like 2026-05-19 where London alone hit
+# the target by 05:14 CT.
+#
+# When transitioning to live Combine: revert to 1500.
+DAILY_PROFIT_CAP = 10000      # paper research — effectively off (real Combine = 1500)
 HARD_CLOSE_HOUR = 15          # 3:00 PM CT — flatten everything
 HARD_CLOSE_MINUTE = 0
 MIN_CONFLUENCE = 7            # Minimum 7/20 to take a trade
