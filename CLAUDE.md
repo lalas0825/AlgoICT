@@ -665,6 +665,30 @@ Requiere migration `0003_bot_state_overlays.sql` aplicada.
 - C10 `OrderResult` frozen-refactor wrapper (defensive, not urgent)
 - H6 flatten exit price accuracy via broker fill-query (workaround: last 1-min close, ~1pt off)
 - Bug G ICT-canonical refinement (currently OFF — see v12 below)
+- **NY_OPEN_BUFFER carry-in position exposure** (2026-05-19, deferred): the
+  buffer rejects NEW signals during 07:20-07:45 and 08:20-08:45 CT but
+  does NOT touch positions that are already open going INTO the buffer.
+  Two failure modes:
+  * **Winner trade wicked out**: trail stop gets harvested by the cash-
+    open wick at adverse price → exits with less profit than potential.
+    Partial protection exists via 1-min swing trail + ratchet-to-+1R but
+    not buffer-aware. Money left on table.
+  * **Loser trade gets stopped during wick**: violent wick fills the
+    stop with slippage → bigger loss than expected. Also increments
+    `consecutive_losses` → can trip kill_switch, defeating the cascade
+    effect that the buffer is supposed to preserve.
+  Mitigation paths (in increasing order of intervention):
+  1. Hold stops static during buffer (no trail tightening) — minimal
+  2. Pre-buffer aggressive ratchet (5 min before): if unrealized >= 1R,
+     lock stop at +0.5R or +1R. Asymmetric: protects winners, no action
+     on losers. Risk: premature exit on what would have been a runner.
+  3. Force flatten 5 min before buffer — most radical. Combine-mode
+     play, not paper-research-mode play.
+  Decision 2026-05-19: do nothing (status quo). Frequency of carry-in
+  positions through the buffer is low (SB trades typically last
+  5-50 min, mostly closing within their own KZ). Revisit if live
+  evidence shows the failure mode hurting us materially. Backtest path 2
+  before shipping any of these.
 
 ### v12 backtest validation (2026-04-25)
 

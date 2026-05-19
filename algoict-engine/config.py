@@ -537,6 +537,21 @@ NEWS_BLACKOUT_ENABLED = True
 # Trade count: treatment has MORE trades than baseline (+211 across 3yr).
 # Mechanism: blocking the wick window preserves consecutive_losses
 # counter → bot doesn't trip kill_switch → more later setups accepted.
+# CAVEAT — carry-in position exposure (deferred, see CLAUDE.md
+# Pendientes watch-list). The gate rejects NEW signals during the buffer
+# but does NOT touch positions already open going into the buffer:
+#   * Winner with trail stop: wick can harvest trail at adverse price
+#     → exits with less profit. Existing 1-min trail + ratchet provide
+#     partial protection but not buffer-aware.
+#   * Loser open at buffer start: stop gets slipped by wick, AND
+#     increments consecutive_losses → can trip kill_switch, defeating
+#     the cascade effect the buffer is meant to preserve.
+# Frequency in practice is low (SB trades typically last 5-50 min
+# within their own KZ). Mitigation paths (in order of intervention):
+#   1. Hold stops static during buffer (minimal change)
+#   2. Pre-buffer aggressive ratchet at -5 min (lock +0.5R if winner)
+#   3. Force flatten at -5 min (Combine-mode, not paper-research)
+# Revisit if live evidence shows the failure mode hurting us.
 NY_OPEN_EVENTS_CT = [(7, 30), (8, 30)]   # (hour, minute) tuples in CT
 NY_OPEN_BUFFER_BEFORE_MIN = 10  # block 10 min before each event
 NY_OPEN_BUFFER_AFTER_MIN = 15   # block 15 min after each event
