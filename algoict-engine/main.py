@@ -280,6 +280,13 @@ class EngineState:
     instant_adverse_today: int = 0
     ai_overlay_decisions: Optional[list] = None
 
+    # 2026-05-20 — Dedup key for per-signal AI Overlay calls.
+    # SB strategy re-fires the SAME setup (same entry/stop/target) on
+    # every bar while limit is pending. Without dedup, that's 5+ calls
+    # to Claude per setup. Key = (direction, entry, stop, target);
+    # cleared when KZ changes (different KZ = fresh setup space).
+    last_validator_setup_key: Optional[tuple] = None
+
     # Queue of sweep alerts populated by the sync _update_detectors()
     # to be drained + sent by the async caller (_on_new_bar). Each item is
     # a dict with level_type, price, candle_high/low/close, ts — plus the
@@ -4286,6 +4293,12 @@ async def _on_new_bar(
             state.active_kz = current_kz
             state.kz_opened_at = ts
 
+            # 2026-05-20 — Clear per-signal AI Overlay dedup key on KZ
+            # boundary. Different KZ = fresh setup space, so even if a
+            # later setup happens to share entry/stop/target with a
+            # prior KZ's setup, vote it again.
+            state.last_validator_setup_key = None
+
             # 2026-05-20 — Update peak_daily_pnl for AI Overlay context
             # (drawdown-from-peak calculation in validator prompts).
             try:
@@ -4459,18 +4472,34 @@ async def _on_new_bar(
                 # with full setup + session context, logs decision.
                 # In SHADOW mode, bot fires anyway; the vote is purely
                 # observational for counterfactual analysis after 3 weeks.
+                #
+                # DEDUP (2026-05-20 follow-up): SB re-fires the SAME
+                # setup on every bar while the limit is pending. Key on
+                # (direction, entry, stop, target) so we vote once per
+                # unique setup, not per bar.
                 if (
                     components.kz_validator is not None
                     and config.cfg("KZ_VALIDATOR_ENABLED", False)
                 ):
                     try:
-                        sb_kz = getattr(signal, "kill_zone", None) or "unknown"
-                        asyncio.create_task(
-                            _run_kz_validator_shadow(
-                                components, state, ts, bars, sb_kz,
-                                signal=signal,
-                            )
+                        setup_key = (
+                            str(getattr(signal, "direction", "?")),
+                            float(getattr(signal, "entry_price", 0) or 0),
+                            float(getattr(signal, "stop_price", 0) or 0),
+                            float(getattr(signal, "target_price", 0) or 0),
                         )
+                        if setup_key == state.last_validator_setup_key:
+                            # Same setup re-firing — skip duplicate vote
+                            pass
+                        else:
+                            state.last_validator_setup_key = setup_key
+                            sb_kz = getattr(signal, "kill_zone", None) or "unknown"
+                            asyncio.create_task(
+                                _run_kz_validator_shadow(
+                                    components, state, ts, bars, sb_kz,
+                                    signal=signal,
+                                )
+                            )
                     except Exception as exc:
                         logger.debug(
                             "AI Overlay signal validator launch failed: %s",
