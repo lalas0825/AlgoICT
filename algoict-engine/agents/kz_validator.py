@@ -275,7 +275,20 @@ PRICE STATE:
 - VPIN: {ctx.get('vpin', 'n/a')} ({ctx.get('vpin_zone', 'n/a')})
 
 DECISION FRAMEWORK:
-The Silver Bullet strategy is a structural FVG-based entry with sweep + MSS/BOS confirmation. Historical 3-year expectancy +14.7% with NY_OPEN_BUFFER shipped. Confluence score is NOT a useful baseline gate (cross-period proven — score=0 is the HIGHEST WR bucket).
+The Silver Bullet (SB) v19a-WIDE strategy operates THROUGHOUT the full KZ window (e.g. London 01:00-07:30 CT), NOT restricted to ICT canonical 1-hour sub-windows (02-03 CT, 09-10 CT, 14-15 CT). Wide mode is validated by 7-year backtest with +97.9% P&L boost vs narrow. Do NOT skip a signal just because it fires outside the canonical 1-hour window — that's normal behavior.
+
+If you're seeing a signal, ALL hard gates already passed:
+  1. Active KZ
+  2. 1-min FVG (unmitigated, inside KZ)
+  3. Opposite-side liquidity sweep (NOT invalidated by close-back)
+  4. 5-min MSS/BOS/CHoCH aligned with FVG direction
+  5. Stop >= 15 pts (SB_MIN_STOP_POINTS) — real sweep, not noise
+  6. Target >= 2R from stop (next unswept pool)
+  7. Bias direction NOT contradicting last 5-min struct event
+
+So you do NOT need to second-guess structural validity. SB also does NOT require HTF bias alignment — countertrend setups are intentional (mean-reversion plays). Confluence score is NOT a useful baseline gate (cross-period proven — score=0 is the HIGHEST WR bucket).
+
+Historical 3-year expectancy: +14.7% P&L with NY_OPEN_BUFFER shipped.
 
 Per-trade risks to evaluate (think like an experienced ICT discretionary trader looking at THIS specific setup in THIS specific context):
 - "Late in move" risk: if session range is already large and the trade is fading at the EXTREME, the move may be exhausted.

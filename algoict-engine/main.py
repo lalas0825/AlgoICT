@@ -3649,10 +3649,15 @@ def _build_kz_validator_context(
     missing context degrades quality but not correctness.
     """
     # KZ window strings — sync with config.KILL_ZONES
+    # IMPORTANT: bot uses v19a-WIDE Silver Bullet — SB fires THROUGHOUT
+    # the full KZ, NOT restricted to ICT canonical 1-hour windows
+    # (02-03 CT London, 09-10 CT AM, 14-15 CT PM). Wide mode validated
+    # by 7-year backtest +97.9% P&L vs narrow. Do not let Claude assume
+    # narrow windows.
     kz_windows = {
-        "london": "01:00-07:30 CT (full London session, SB inside 02:00-03:00)",
-        "ny_am": "07:30-12:00 CT (NY AM, includes 08:30 CT cash open)",
-        "ny_pm": "12:00-15:00 CT (NY PM through hard close at 15:00)",
+        "london": "01:00-07:30 CT (v19a-WIDE — SB fires throughout entire window, NOT restricted to 02:00-03:00 ICT canonical)",
+        "ny_am":  "07:30-12:00 CT (v19a-WIDE — SB fires throughout, NOT restricted to 09:00-10:00; includes 08:30 CT cash open)",
+        "ny_pm":  "12:00-15:00 CT (v19a-WIDE — SB fires throughout, NOT restricted to 14:00-15:00; ends at hard close)",
     }
 
     # Risk state
