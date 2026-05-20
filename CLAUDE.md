@@ -715,14 +715,78 @@ Requiere migration `0003_bot_state_overlays.sql` aplicada.
     instant-adverse counter per KZ + cross-KZ cascade gate. If 2+
     trades in current KZ went MFE <0.5R, halt KZ. If previous KZ
     tripped kill_switch, current KZ requires extra confluence.
-  * **Camino C — Live AI overlay** (Claude per signal): NOT pursued.
-    Untestable at backtest scale, latency + cost prohibitive.
-  Decision: defer all 3. Today's loss pattern is one data point. Need
-  3-5 more "giveback days" or "chop days" before investing in this.
-  When triggered: Camino B first (backteseable), Camino A second
-  (frontier feature, harder to validate). Recorded in
-  `analysis/be_shield_simulation.py` and bar-state extraction
-  patterns in session log 2026-05-19.
+  * **Camino C — Live AI overlay** (Claude per decision): NOT for
+    per-signal (untestable at scale, latency/cost prohibitive). BUT
+    a **per-KZ tiered version is viable** — see C2 shadow plan below.
+  Decision: defer A and B for now. Today's loss pattern is one data
+  point. Need 3-5 more "giveback days" or "chop days" before
+  investing. When triggered: Camino B first (backteseable), Camino A
+  second. Recorded in `analysis/be_shield_simulation.py` and bar-state
+  extraction patterns in session log 2026-05-19.
+
+- **Camino C2 — Per-KZ AI overlay in SHADOW mode** (2026-05-19,
+  planned for 2026-05-20 build): the user's "give the bot eyes" idea
+  framed as a tier-2 AI overlay. Build now, observe for 3 weeks, only
+  activate if shadow data shows edge.
+
+  **Design**:
+  * Trigger: at each KZ entry (3× per day — London, NY AM, NY PM)
+  * Input to Claude: bar/setup context, session state (P&L_today,
+    prior KZ outcome, drawdown from peak), macro (SWC mood, calendar
+    events today), HTF bias, recent trade history (last 5 W/L
+    pattern, instant-adverse count today)
+  * Claude output (JSON): `{decision: "fire"|"skip"|"half", confidence,
+    size_multiplier, rationale}`
+  * Bot behavior in SHADOW: log decision to Telegram + new Supabase
+    table `ai_overlay_decisions` BUT do NOT modify trade execution.
+    Continues with current canonical strategy.
+
+  **Why shadow first**: backtest is impossible at per-KZ-call scale
+  (3-yr would need ~2,300 Claude calls, doable but expensive AND
+  Claude wasn't trained for trading judgment so historical calls
+  would be educated guesses, not real edge). Shadow gives us REAL
+  live evidence without risking production.
+
+  **Evaluation after 3 weeks (~45-60 KZ entries)**:
+  * Counterfactual P&L: what P&L would we have realized if bot had
+    obeyed Claude's decisions?
+  * Agreement rate: how often did Claude match what the bot did?
+  * Asymmetry: when Claude said "skip", did the KZ lose? When
+    Claude said "fire", did the KZ win?
+  * Decision criteria: ship to ACTIVE if counterfactual P&L > actual
+    P&L by some margin (e.g., +10% over the 3-week period). Kill if
+    Claude's calls would have hurt or been neutral.
+
+  **Cost**: ~$0.05/call × 3 calls/day × 21 days = ~$3 for full
+  shadow period. Trivial.
+
+  **Infrastructure exists**: `AI_MODEL_*` slots already in config
+  (post_mortem, mood_synthesis, hypothesis_gen). Adding
+  `AI_MODEL_KZ_VALIDATOR` is just one new constant + prompt template
+  + integration in main.py at KZ transition.
+
+  **Build steps (estimated ~1 day)**:
+  1. Prompt template design (`sentiment/kz_validator.py` or similar)
+  2. `validate_kz_entry(context) → KZValidatorDecision` function
+  3. Call site in main.py at each KZ enter (already alerted via
+     `KZ enter alert sent`)
+  4. Supabase table `ai_overlay_decisions` migration
+  5. Telegram alert with Claude's decision (shadow tag in subject)
+  6. Counterfactual P&L tracker (Python script that processes the
+     shadow table + actual trades to compute hypothetical outcome)
+
+  **Failure modes to watch for**:
+  * Claude too cautious → skips too much → undertrade
+  * Claude rationalizes anything (decisions look thoughtful but
+    aren't predictive)
+  * Sample size insufficient in 3 weeks (only ~45-60 KZ entries —
+    might extend to 6 weeks for stronger signal)
+
+  **Active mode (Phase 2, only if shadow proves edge)**: bot OBEYS
+  Claude's decisions. Pre-launch checklist would include: kill
+  switch on cumulative Claude-driven losses, manual override toggle,
+  fallback behavior if API unreachable (default = fire = current
+  behavior).
 
 ### v12 backtest validation (2026-04-25)
 
