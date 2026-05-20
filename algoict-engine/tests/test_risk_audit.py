@@ -261,30 +261,39 @@ class TestKillSwitch:
 # ---------------------------------------------------------------------------
 
 class TestProfitCap:
-    def test_trade_after_1500_pnl_flagged(self):
+    # 2026-05-20 — DAILY_PROFIT_CAP was raised from 1500 → 10000 for paper
+    # research. These tests verify canonical Combine behavior (cap=$1500)
+    # and now monkeypatch the cap so they test the audit logic itself,
+    # not whatever value config.py currently holds.
+
+    def test_trade_after_1500_pnl_flagged(self, monkeypatch):
         """Daily P&L already at $1500 — next trade on same day = violation."""
+        monkeypatch.setattr("config.DAILY_PROFIT_CAP", 1500)
         big_win = _good_trade(pnl=1500.0, entry_time=_ts(9, 0), exit_time=_ts(9, 5))
         extra = _good_trade(pnl=250.0, entry_time=_ts(9, 30), exit_time=_ts(9, 35))
         result = audit_trades([big_win, extra])
         assert not result.is_clean
         assert any("profit_cap" in v for v in result.violations)
 
-    def test_pnl_exactly_1499_ok(self):
+    def test_pnl_exactly_1499_ok(self, monkeypatch):
         """$1,499 cumulative — still allowed to trade."""
+        monkeypatch.setattr("config.DAILY_PROFIT_CAP", 1500)
         trade1 = _good_trade(pnl=1499.0, entry_time=_ts(9, 0), exit_time=_ts(9, 5))
         trade2 = _good_trade(pnl=100.0, entry_time=_ts(9, 30), exit_time=_ts(9, 35))
         result = audit_trades([trade1, trade2])
         assert result.is_clean
 
-    def test_profit_cap_resets_next_day(self):
+    def test_profit_cap_resets_next_day(self, monkeypatch):
         """Profit cap is per-day — next day starts fresh."""
+        monkeypatch.setattr("config.DAILY_PROFIT_CAP", 1500)
         day1 = _good_trade(pnl=2000.0, day=1)
         day2 = _good_trade(pnl=250.0, day=2)
         result = audit_trades([day1, day2])
         assert result.is_clean
 
-    def test_multiple_violations_counted(self):
+    def test_multiple_violations_counted(self, monkeypatch):
         """Two trades after cap = 2 violations."""
+        monkeypatch.setattr("config.DAILY_PROFIT_CAP", 1500)
         big_win = _good_trade(pnl=1500.0, entry_time=_ts(9, 0), exit_time=_ts(9, 5))
         extra1 = _good_trade(pnl=100.0, entry_time=_ts(9, 30), exit_time=_ts(9, 35))
         extra2 = _good_trade(pnl=100.0, entry_time=_ts(10, 0), exit_time=_ts(10, 5))

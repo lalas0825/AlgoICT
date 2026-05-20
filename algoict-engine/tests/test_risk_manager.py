@@ -80,17 +80,24 @@ class TestRecordTrade:
         rm.record_trade(-250)
         assert not rm.kill_switch_active
 
-    def test_daily_pnl_1500_activates_profit_cap(self):
+    # 2026-05-20 — DAILY_PROFIT_CAP raised 1500 → 10000 for paper research.
+    # These tests verify canonical Combine cap=$1500 behavior so monkeypatch
+    # back to 1500 for testing the cap logic itself.
+
+    def test_daily_pnl_1500_activates_profit_cap(self, monkeypatch):
+        monkeypatch.setattr("config.DAILY_PROFIT_CAP", 1500)
         rm = RiskManager()
         rm.record_trade(1500)
         assert rm.profit_cap_active
 
-    def test_daily_pnl_below_1500_no_cap(self):
+    def test_daily_pnl_below_1500_no_cap(self, monkeypatch):
+        monkeypatch.setattr("config.DAILY_PROFIT_CAP", 1500)
         rm = RiskManager()
         rm.record_trade(1499)
         assert not rm.profit_cap_active
 
-    def test_accumulated_wins_trigger_profit_cap(self):
+    def test_accumulated_wins_trigger_profit_cap(self, monkeypatch):
+        monkeypatch.setattr("config.DAILY_PROFIT_CAP", 1500)
         rm = RiskManager()
         rm.record_trade(800)
         rm.record_trade(700)   # 1500 total

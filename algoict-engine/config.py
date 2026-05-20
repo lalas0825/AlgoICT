@@ -101,6 +101,17 @@ MENTHORQ_API_KEY = os.getenv("MENTHORQ_API_KEY", "")
 AI_MODEL_POST_MORTEM = "claude-sonnet-4-6"    # Loss analysis
 AI_MODEL_MOOD_SYNTHESIS = "claude-sonnet-4-6"  # SWC daily mood
 AI_MODEL_HYPOTHESIS_GEN = "claude-sonnet-4-6"  # Strategy Lab (when wired)
+AI_MODEL_KZ_VALIDATOR = "claude-sonnet-4-6"    # Camino C2 — per-KZ AI overlay
+
+# 2026-05-20 — Camino C2: AI Overlay at KZ entry (SHADOW MODE)
+# At each KZ open (London/NY AM/NY PM), call Claude API with session
+# context. Claude votes: fire / skip / half size. In shadow mode, the
+# bot LOGS the decision but does NOT obey — continues with canonical
+# strategy. After 3 weeks of shadow data, compare counterfactual P&L
+# (if obeyed) vs actual P&L. Ship to active mode only if positive edge.
+# See CLAUDE.md §"Camino C2 — Per-KZ AI overlay in SHADOW mode".
+KZ_VALIDATOR_ENABLED = False        # master switch (default OFF until ready)
+KZ_VALIDATOR_SHADOW_MODE = True     # True = log only, don't act on decisions
 
 # Haiku reserved for simple tasks (enable when SDK lists it)
 # AI_MODEL_SIMPLE = "claude-haiku-4-5-20251001"

@@ -153,6 +153,7 @@ _GEX_SCORE = _try_import("gamma.gex_confluence", "score_gex_alignment")
 VPINEngine = _try_import("toxicity.vpin_engine", "VPINEngine")
 _VPIN_SCORE = _try_import("toxicity.vpin_confluence", "score")
 PostMortemAgent = _try_import("agents.post_mortem", "PostMortemAgent")
+KZValidatorAgent = _try_import("agents.kz_validator", "KZValidatorAgent")
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +264,21 @@ class EngineState:
     active_kz: Optional[str] = None
     kz_stats: Optional[dict] = None
     kz_opened_at: Optional[Any] = None
+
+    # 2026-05-20 — Camino C2 AI Overlay state tracking
+    # peak_daily_pnl: max daily_pnl seen during the current day (for
+    #   drawdown-from-peak calculation in the validator context).
+    # kz_history: list of finalized KZ outcomes today, each as a dict
+    #   {kz, trades, pnl}. Used as "prior KZ outcomes" in validator
+    #   prompts.
+    # instant_adverse_today: count of trades closed with MFE < 0.5R.
+    #   Used as a "hostile market" signal in validator prompts.
+    # ai_overlay_decisions: log of {kz, decision, mult, confidence, ts}
+    #   for in-memory introspection during shadow runs.
+    peak_daily_pnl: float = 0.0
+    kz_history: Optional[list] = None
+    instant_adverse_today: int = 0
+    ai_overlay_decisions: Optional[list] = None
 
     # Queue of sweep alerts populated by the sync _update_detectors()
     # to be drained + sent by the async caller (_on_new_bar). Each item is
@@ -502,6 +518,7 @@ class Components:
     vpin: Optional[Any] = None            # VPINEngine
     gex_engine: Optional[Any] = None      # GEXEngine
     post_mortem: Optional[Any] = None     # PostMortemAgent
+    kz_validator: Optional[Any] = None    # KZValidatorAgent (Camino C2)
 
 
 # ---------------------------------------------------------------------------
@@ -690,6 +707,22 @@ def _init_components(
         except Exception as exc:
             logger.warning("PostMortemAgent unavailable: %s", exc)
 
+    # ── Optional: KZ Validator (Camino C2 AI Overlay, shadow mode) ────
+    kz_validator = None
+    if KZValidatorAgent is not None and config.cfg("KZ_VALIDATOR_ENABLED", False):
+        try:
+            kz_validator = KZValidatorAgent(
+                supabase_client=supabase,
+                telegram_bot=telegram,
+                shadow_mode=config.cfg("KZ_VALIDATOR_SHADOW_MODE", True),
+            )
+            logger.info(
+                "KZValidatorAgent ready (shadow=%s)",
+                config.cfg("KZ_VALIDATOR_SHADOW_MODE", True),
+            )
+        except Exception as exc:
+            logger.warning("KZValidatorAgent unavailable: %s", exc)
+
     components = Components(
         broker=broker,
         risk=risk,
@@ -704,6 +737,7 @@ def _init_components(
         vpin=vpin,
         gex_engine=gex_engine,
         post_mortem=post_mortem,
+        kz_validator=kz_validator,
     )
 
     # Stash the state_ref on components so run() can wire it up
@@ -3585,6 +3619,231 @@ async def _try_opportunity_replace(
     return True
 
 
+def _build_kz_validator_context(
+    components: Components,
+    state: EngineState,
+    ts,
+    bars: pd.DataFrame,
+    kz: str,
+) -> dict:
+    """Build the context dict that Camino C2 AI Overlay sends to Claude.
+
+    Pulls together: KZ + time, day state (P&L + peak + DD + trades),
+    HTF bias + recent struct, SWC mood + macro events, price/range/VPIN.
+
+    Some fields are best-effort — if a snapshot is missing, default to
+    'n/a' so Claude can still reason with partial info. The validator
+    is designed to be informational not gating in shadow mode, so
+    missing context degrades quality but not correctness.
+    """
+    # KZ window strings — sync with config.KILL_ZONES
+    kz_windows = {
+        "london": "01:00-07:30 CT (full London session, SB inside 02:00-03:00)",
+        "ny_am": "07:30-12:00 CT (NY AM, includes 08:30 CT cash open)",
+        "ny_pm": "12:00-15:00 CT (NY PM through hard close at 15:00)",
+    }
+
+    # Risk state
+    risk = components.risk
+    daily_pnl = float(getattr(risk, "daily_pnl", 0.0))
+    trades_today = int(getattr(risk, "trades_today", 0))
+    wins_today = int(getattr(risk, "wins_today", 0))
+    losses_today = int(getattr(risk, "losses_today", 0))
+    consecutive_losses = int(getattr(risk, "consecutive_losses", 0))
+    kill_switch_active = bool(getattr(risk, "kill_switch_active", False))
+    mll_zone = str(getattr(risk, "mll_zone", "normal"))
+
+    # Peak P&L tracking — updated by main loop
+    peak_pnl = float(getattr(state, "peak_daily_pnl", 0.0))
+    if daily_pnl > peak_pnl:
+        peak_pnl = daily_pnl
+    drawdown_from_peak = peak_pnl - daily_pnl
+
+    # HTF bias
+    bias_d = "n/a"
+    bias_w = "n/a"
+    bias_zone = "n/a"
+    try:
+        last_close = float(bars.iloc[-1]["close"])
+        bias = components.ny_am_strategy.htf_bias_fn(last_close)
+        bias_d = getattr(bias, "daily_bias", "n/a") or "n/a"
+        bias_w = getattr(bias, "weekly_bias", "n/a") or "n/a"
+        bias_zone = getattr(bias, "bias_zone", "n/a") or "n/a"
+    except Exception:
+        pass
+
+    # Struct events + last displacement (from state or detectors)
+    struct_last3 = "n/a"
+    last_disp = "n/a"
+    try:
+        struct_events = getattr(state, "struct_events", None) or []
+        if struct_events:
+            recent = struct_events[-3:]
+            struct_last3 = " | ".join(
+                f"{e.get('type', '?')} {e.get('direction', '?')} {e.get('ts_str', '?')}"
+                for e in recent
+            )
+        last_disp_obj = getattr(state, "last_displacement", None)
+        if last_disp_obj:
+            last_disp = (
+                f"{getattr(last_disp_obj, 'direction', '?')} "
+                f"mag={getattr(last_disp_obj, 'magnitude', '?')}pts "
+                f"@ {getattr(last_disp_obj, 'ts_str', '?')}"
+            )
+    except Exception:
+        pass
+
+    # SWC snapshot
+    swc_mood = "n/a"
+    swc_conf = "n/a"
+    events_today = "none"
+    news_sent = "n/a"
+    try:
+        swc = state.swc_snapshot
+        if swc is not None:
+            swc_mood = getattr(swc, "mood", "n/a") or "n/a"
+            swc_conf = getattr(swc, "confidence", "n/a") or "n/a"
+            events = getattr(swc, "events", None) or []
+            if events:
+                top = [str(getattr(e, "name", "?")) for e in events[:5]]
+                events_today = ", ".join(top) + (
+                    f" (+{len(events)-5} more)" if len(events) > 5 else ""
+                )
+            news_sent = str(getattr(swc, "news_sentiment", "n/a") or "n/a")
+    except Exception:
+        pass
+
+    # VPIN
+    vpin_val = "n/a"
+    vpin_zone = "n/a"
+    try:
+        vpin_snap = state.vpin_status
+        if vpin_snap is not None:
+            v = getattr(vpin_snap, "vpin", None)
+            if v is not None:
+                vpin_val = f"{float(v):.3f}"
+            vpin_zone = getattr(vpin_snap, "toxicity_level", "n/a") or "n/a"
+    except Exception:
+        pass
+
+    # Current price + session range
+    cur_price = "n/a"
+    session_range = "n/a"
+    try:
+        cur_price = f"{float(bars.iloc[-1]['close']):.2f}"
+        # Session range = high-low of today's bars
+        if hasattr(bars.index, "date"):
+            today_mask = bars.index.date == ts.date()
+            today_bars = bars[today_mask]
+            if not today_bars.empty:
+                session_range = f"{float(today_bars['high'].max() - today_bars['low'].min()):.1f}"
+    except Exception:
+        pass
+
+    # Prior KZ outcomes today (best-effort from state.kz_history)
+    prior_kz_str = "No prior KZs today"
+    try:
+        history = getattr(state, "kz_history", None) or []
+        if history:
+            lines = []
+            for h in history:
+                lines.append(
+                    f"  - {h.get('kz', '?').upper()}: "
+                    f"{h.get('trades', 0)} trades, "
+                    f"P&L ${h.get('pnl', 0):+,.2f}"
+                )
+            prior_kz_str = "\n".join(lines)
+    except Exception:
+        pass
+
+    instant_adverse = int(getattr(state, "instant_adverse_today", 0))
+
+    return {
+        "kz": kz,
+        "kz_window_ct": kz_windows.get(kz, "unknown"),
+        "current_time_ct": ts.strftime("%H:%M") if hasattr(ts, "strftime") else str(ts),
+        "today_date": ts.strftime("%Y-%m-%d") if hasattr(ts, "strftime") else "unknown",
+        "trades_today": trades_today,
+        "wins_today": wins_today,
+        "losses_today": losses_today,
+        "daily_pnl": daily_pnl,
+        "peak_pnl": peak_pnl,
+        "drawdown_from_peak": drawdown_from_peak,
+        "consecutive_losses": consecutive_losses,
+        "kill_switch_active": kill_switch_active,
+        "mll_zone": mll_zone,
+        "instant_adverse_today": instant_adverse,
+        "prior_kz_outcomes_str": prior_kz_str,
+        "daily_bias": bias_d,
+        "weekly_bias": bias_w,
+        "current_bias": bias_zone,
+        "struct_last3": struct_last3,
+        "last_disp": last_disp,
+        "swc_mood": swc_mood,
+        "swc_confidence": swc_conf,
+        "high_impact_events": events_today,
+        "news_sentiment": news_sent,
+        "current_price": cur_price,
+        "session_range_pts": session_range,
+        "vpin": vpin_val,
+        "vpin_zone": vpin_zone,
+    }
+
+
+async def _run_kz_validator_shadow(
+    components: Components,
+    state: EngineState,
+    ts,
+    bars: pd.DataFrame,
+    kz: str,
+) -> None:
+    """Background task — call AI Overlay validator and log decision.
+
+    SHADOW mode: log to Supabase + Telegram but do NOT modify trade
+    execution. Runs as asyncio task so trading loop is not blocked by
+    the 1-3 second Claude API call.
+    """
+    try:
+        ctx = _build_kz_validator_context(components, state, ts, bars, kz)
+        # Sync Claude call → run in thread to keep loop responsive
+        decision = await asyncio.to_thread(
+            components.kz_validator.validate_kz_entry, ctx,
+        )
+        shadow = bool(config.cfg("KZ_VALIDATOR_SHADOW_MODE", True))
+        logger.info(
+            "AI Overlay [%s%s] kz=%s decision=%s mult=%.2f conf=%.2f ms=%d",
+            "SHADOW " if shadow else "ACTIVE ",
+            "", kz, decision.decision, decision.size_multiplier,
+            decision.confidence, decision.response_ms,
+        )
+        # Telegram alert
+        if components.telegram is not None:
+            try:
+                await components.telegram.send_ai_overlay(decision, shadow_mode=shadow)
+            except Exception as exc:
+                logger.debug("AI overlay Telegram failed: %s", exc)
+        # Supabase insert (silent fail if table missing during shadow ramp-up)
+        if components.supabase is not None:
+            try:
+                client = getattr(components.supabase, "client", None)
+                if client is not None:
+                    client.table("ai_overlay_decisions").insert(
+                        decision.as_db_record()
+                    ).execute()
+            except Exception as exc:
+                logger.debug("AI overlay supabase insert failed: %s", exc)
+        # Track latest decision in state for downstream consumers (Phase 2)
+        if not hasattr(state, "ai_overlay_decisions") or state.ai_overlay_decisions is None:
+            state.ai_overlay_decisions = []
+        state.ai_overlay_decisions.append({
+            "kz": decision.kz, "decision": decision.decision,
+            "mult": decision.size_multiplier, "confidence": decision.confidence,
+            "ts": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
+        })
+    except Exception as exc:
+        logger.warning("AI Overlay shadow task failed for kz=%s: %s", kz, exc)
+
+
 async def _check_autocancel_pending(
     components: Components,
     state: EngineState,
@@ -3948,10 +4207,34 @@ async def _on_new_bar(
                     )
                 except Exception as exc:
                     logger.debug("KZ summary Telegram failed: %s", exc)
+            # 2026-05-20 — Append closed KZ to kz_history for Camino C2
+            # context. Light-touch: record trades + P&L from kz_stats.
+            if state.active_kz is not None:
+                try:
+                    if state.kz_history is None:
+                        state.kz_history = []
+                    stats = state.kz_stats or {}
+                    state.kz_history.append({
+                        "kz": state.active_kz,
+                        "trades": int(stats.get("trades_taken", 0)),
+                        "pnl": float(stats.get("pnl", 0.0)),
+                        "signals_fired": int(stats.get("signals_fired", 0)),
+                    })
+                except Exception as exc:
+                    logger.debug("kz_history append failed: %s", exc)
             # Open the new KZ (if we're entering one, not just leaving)
             state.kz_stats = _fresh_kz_stats()
             state.active_kz = current_kz
             state.kz_opened_at = ts
+
+            # 2026-05-20 — Update peak_daily_pnl for AI Overlay context
+            # (drawdown-from-peak calculation in validator prompts).
+            try:
+                cur_pnl = float(getattr(components.risk, "daily_pnl", 0.0))
+                if cur_pnl > state.peak_daily_pnl:
+                    state.peak_daily_pnl = cur_pnl
+            except Exception:
+                pass
 
             # 2026-05-14 — KZ-BOUNDARY KILL SWITCH RESET (London audit fix).
             # CLAUDE.md spec: "kill switch: 3 consecutive losses per SESSION
@@ -4003,6 +4286,25 @@ async def _on_new_bar(
                     )
                 except Exception as exc:
                     logger.debug("KZ enter Telegram failed: %s", exc)
+
+            # ── 2026-05-20 — Camino C2: AI Overlay validator (SHADOW) ─
+            # At each KZ entry, call Claude API with session context.
+            # In SHADOW mode, log decision but do NOT modify trade
+            # execution. Background task so the trading loop isn't blocked
+            # by the 1-3 sec API call. Default OFF until user enables.
+            if (
+                current_kz is not None
+                and components.kz_validator is not None
+                and config.cfg("KZ_VALIDATOR_ENABLED", False)
+            ):
+                try:
+                    asyncio.create_task(
+                        _run_kz_validator_shadow(
+                            components, state, ts, bars, current_kz,
+                        )
+                    )
+                except Exception as exc:
+                    logger.debug("KZ validator task launch failed: %s", exc)
 
         # ── 5a. Opportunity autocancel (Tier 1.5) ─────────────────────────
         # Cancel pending limits whose structural thesis has been invalidated
@@ -4510,6 +4812,12 @@ def _reset_for_new_day(components: Components, state: EngineState) -> None:
     components.risk.reset_daily()
     components.ny_am_strategy.reset_daily()
     components.silver_bullet_strategy.reset_daily()
+
+    # 2026-05-20 — Camino C2: reset AI Overlay state for new day.
+    state.peak_daily_pnl = 0.0
+    state.kz_history = []
+    state.instant_adverse_today = 0
+    state.ai_overlay_decisions = []
 
     # 2026-05-01 bug fix — the original "preserve session levels" patch
     # (014fd92, 2026-04-28) was DEAD CODE because it read `tracked_levels`

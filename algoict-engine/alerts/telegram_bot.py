@@ -461,6 +461,33 @@ class TelegramBot:
             logger.debug("Failed to send KZ enter alert: %s", exc)
             return False
 
+    async def send_ai_overlay(
+        self,
+        decision,  # KZValidatorDecision
+        shadow_mode: bool = True,
+    ) -> bool:
+        """
+        Send AI Overlay decision (Camino C2).
+
+        Called at each KZ entry to log Claude's vote on whether to trade
+        the upcoming KZ at full / half / skip. In shadow mode, this is
+        purely informational — the bot continues canonical strategy.
+
+        Always sends regardless of verbosity since this is a low-volume
+        alert (3× per day max). Errors fall through silently.
+        """
+        try:
+            msg = decision.as_telegram_message(shadow_mode=shadow_mode)
+            await self._send_message(msg)
+            logger.info(
+                "AI overlay alert sent: kz=%s decision=%s shadow=%s",
+                decision.kz, decision.decision, shadow_mode,
+            )
+            return True
+        except Exception as exc:
+            logger.debug("AI overlay alert failed: %s", exc)
+            return False
+
     async def send_kz_summary(
         self,
         kz: str,
