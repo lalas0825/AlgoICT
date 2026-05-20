@@ -102,6 +102,7 @@ AI_MODEL_POST_MORTEM = "claude-sonnet-4-6"    # Loss analysis
 AI_MODEL_MOOD_SYNTHESIS = "claude-sonnet-4-6"  # SWC daily mood
 AI_MODEL_HYPOTHESIS_GEN = "claude-sonnet-4-6"  # Strategy Lab (when wired)
 AI_MODEL_KZ_VALIDATOR = "claude-sonnet-4-6"    # Camino C2 — per-KZ AI overlay
+AI_MODEL_VISION_VALIDATOR = "claude-sonnet-4-6"  # Camino C4 — vision-overlay validator
 
 # 2026-05-20 — Camino C2: AI Overlay at KZ entry (SHADOW MODE)
 # At each KZ open (London/NY AM/NY PM), call Claude API with session
@@ -110,8 +111,23 @@ AI_MODEL_KZ_VALIDATOR = "claude-sonnet-4-6"    # Camino C2 — per-KZ AI overlay
 # strategy. After 3 weeks of shadow data, compare counterfactual P&L
 # (if obeyed) vs actual P&L. Ship to active mode only if positive edge.
 # See CLAUDE.md §"Camino C2 — Per-KZ AI overlay in SHADOW mode".
-KZ_VALIDATOR_ENABLED = True         # 2026-05-20 — ON for first shadow run
-KZ_VALIDATOR_SHADOW_MODE = True     # True = log only, don't act on decisions
+KZ_VALIDATOR_ENABLED = False        # 2026-05-20 — DISABLED in favor of vision-overlay (Camino C4)
+KZ_VALIDATOR_SHADOW_MODE = True     # legacy, ignored when ENABLED=False
+
+# 2026-05-20 — Camino C4: Vision-overlay validator (replaces C2 text-only)
+# Sends chart images (1-min + 5-min) to Claude vision API along with text
+# context. Claude can VALIDATE the bot's annotations against the raw
+# candles — solves the "bot data feeding Claude" circular trust problem.
+#
+# In shadow mode: decision logs to JSONL but bot continues canonical.
+# Phase 2 active mode would gate trades based on decision.
+#
+# Cost ~$0.017/call (Sonnet with 2 images) at ~5 unique signals/day after
+# dedup = ~$0.10/day = $3/month. Latency 3-6 sec.
+VISION_VALIDATOR_ENABLED = True
+VISION_VALIDATOR_SHADOW_MODE = True
+VISION_VALIDATOR_BARS_1MIN = 90      # bars in 1-min signal chart
+VISION_VALIDATOR_BARS_5MIN = 60      # bars in 5-min HTF context chart
 
 # 2026-05-20 — CONDITIONAL min_conf gate (post-mortem driven)
 # 4 consecutive post-mortems (5/15, 5/17, 5/19, 5/20) converge on:
@@ -127,9 +143,9 @@ KZ_VALIDATOR_SHADOW_MODE = True     # True = log only, don't act on decisions
 # Gate fires when (htf_weak AND sb_score < SB_HTF_WEAK_MIN_CONF):
 #   - Shadow mode: log to JSONL + log line, bot continues canonical
 #   - Active mode: signal rejected, return None
-SB_HTF_WEAK_MIN_CONF = 2            # 0 = disabled. 2 = post-mortem consensus
-SB_HTF_WEAK_REQUIRES = "either"     # "either" | "both"
-SB_HTF_WEAK_GATE_SHADOW_MODE = True # True = log only, don't act
+SB_HTF_WEAK_MIN_CONF = 0            # DISABLED 2026-05-20 — replaced by vision-overlay
+SB_HTF_WEAK_REQUIRES = "either"     # "either" | "both" (only used if MIN_CONF > 0)
+SB_HTF_WEAK_GATE_SHADOW_MODE = True # legacy
 
 # Haiku reserved for simple tasks (enable when SDK lists it)
 # AI_MODEL_SIMPLE = "claude-haiku-4-5-20251001"

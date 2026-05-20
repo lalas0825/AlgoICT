@@ -154,6 +154,9 @@ VPINEngine = _try_import("toxicity.vpin_engine", "VPINEngine")
 _VPIN_SCORE = _try_import("toxicity.vpin_confluence", "score")
 PostMortemAgent = _try_import("agents.post_mortem", "PostMortemAgent")
 KZValidatorAgent = _try_import("agents.kz_validator", "KZValidatorAgent")
+VisionValidatorAgent = _try_import("agents.vision_validator", "VisionValidatorAgent")
+_render_1min_signal_chart = _try_import("agents.chart_renderer", "render_1min_signal_chart")
+_render_5min_htf_chart = _try_import("agents.chart_renderer", "render_5min_htf_chart")
 
 
 # ---------------------------------------------------------------------------
@@ -526,6 +529,7 @@ class Components:
     gex_engine: Optional[Any] = None      # GEXEngine
     post_mortem: Optional[Any] = None     # PostMortemAgent
     kz_validator: Optional[Any] = None    # KZValidatorAgent (Camino C2)
+    vision_validator: Optional[Any] = None  # VisionValidatorAgent (Camino C4)
 
 
 # ---------------------------------------------------------------------------
@@ -730,6 +734,22 @@ def _init_components(
         except Exception as exc:
             logger.warning("KZValidatorAgent unavailable: %s", exc)
 
+    # ── Optional: Vision Validator (Camino C4 vision-overlay, shadow) ──
+    vision_validator = None
+    if VisionValidatorAgent is not None and config.cfg("VISION_VALIDATOR_ENABLED", False):
+        try:
+            vision_validator = VisionValidatorAgent(
+                supabase_client=supabase,
+                telegram_bot=telegram,
+                shadow_mode=config.cfg("VISION_VALIDATOR_SHADOW_MODE", True),
+            )
+            logger.info(
+                "VisionValidatorAgent ready (shadow=%s)",
+                config.cfg("VISION_VALIDATOR_SHADOW_MODE", True),
+            )
+        except Exception as exc:
+            logger.warning("VisionValidatorAgent unavailable: %s", exc)
+
     components = Components(
         broker=broker,
         risk=risk,
@@ -745,6 +765,7 @@ def _init_components(
         gex_engine=gex_engine,
         post_mortem=post_mortem,
         kz_validator=kz_validator,
+        vision_validator=vision_validator,
     )
 
     # Stash the state_ref on components so run() can wire it up
@@ -3839,6 +3860,96 @@ def _build_kz_validator_context(
     }
 
 
+async def _run_vision_validator_shadow(
+    components: Components,
+    state: EngineState,
+    ts,
+    bars: pd.DataFrame,
+    kz: str,
+    signal: Any,
+) -> None:
+    """Background task — render charts + call Claude vision API + log decision.
+
+    SHADOW mode: log to JSONL + Telegram, bot continues canonical.
+    """
+    try:
+        # Build text context (same shape as C2 — already includes signal block)
+        ctx = _build_kz_validator_context(components, state, ts, bars, kz, signal=signal)
+
+        # Generate charts (sync, ~1-2 sec each; run in thread to avoid
+        # blocking the event loop while matplotlib does its thing)
+        chart_1min_b64 = None
+        chart_5min_b64 = None
+        bars_1min_count = int(config.cfg("VISION_VALIDATOR_BARS_1MIN", 90))
+        bars_5min_count = int(config.cfg("VISION_VALIDATOR_BARS_5MIN", 60))
+
+        if _render_1min_signal_chart is not None:
+            try:
+                chart_1min_b64 = await asyncio.to_thread(
+                    _render_1min_signal_chart,
+                    state.bars_1min, components, state, signal, bars_1min_count,
+                )
+            except Exception as exc:
+                logger.debug("1min chart render failed: %s", exc)
+
+        if _render_5min_htf_chart is not None:
+            try:
+                chart_5min_b64 = await asyncio.to_thread(
+                    _render_5min_htf_chart,
+                    components, state, signal, bars_5min_count,
+                )
+            except Exception as exc:
+                logger.debug("5min chart render failed: %s", exc)
+
+        # Sync Claude vision call in thread (1-3 sec)
+        decision = await asyncio.to_thread(
+            components.vision_validator.validate_signal_with_charts,
+            ctx, chart_1min_b64, chart_5min_b64,
+        )
+
+        shadow = bool(config.cfg("VISION_VALIDATOR_SHADOW_MODE", True))
+        logger.info(
+            "Vision Overlay [%s] kz=%s decision=%s mult=%.2f conf=%.2f "
+            "images=%d ms=%d",
+            "SHADOW" if shadow else "ACTIVE",
+            kz, decision.decision, decision.size_multiplier,
+            decision.confidence, decision.images_used, decision.response_ms,
+        )
+
+        # Telegram alert
+        if components.telegram is not None:
+            try:
+                msg = decision.as_telegram_message(shadow_mode=shadow)
+                await components.telegram._send_message(msg)
+            except Exception as exc:
+                logger.debug("Vision overlay Telegram failed: %s", exc)
+
+        # JSONL persistence (restart-safe)
+        try:
+            import json as _json
+            jsonl_path = Path(__file__).resolve().parent / "analysis" / "vision_overlay_shadow.jsonl"
+            jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(jsonl_path, "a", encoding="utf-8") as f:
+                _json.dump(decision.as_db_record(), f, default=str)
+                f.write("\n")
+        except Exception as exc:
+            logger.debug("Vision overlay JSONL append failed: %s", exc)
+
+        # Supabase (best-effort; migration may not exist yet)
+        if components.supabase is not None:
+            try:
+                client = getattr(components.supabase, "client", None)
+                if client is not None:
+                    client.table("vision_overlay_decisions").insert(
+                        decision.as_db_record()
+                    ).execute()
+            except Exception as exc:
+                logger.debug("Vision overlay supabase insert failed: %s", exc)
+
+    except Exception as exc:
+        logger.warning("Vision overlay shadow task failed for kz=%s: %s", kz, exc)
+
+
 async def _run_kz_validator_shadow(
     components: Components,
     state: EngineState,
@@ -4472,44 +4583,49 @@ async def _on_new_bar(
                 except Exception:
                     pass
 
-                # ── 2026-05-20 Camino C2 PER-SIGNAL AI Overlay (SHADOW) ─
-                # Background task — Claude evaluates this specific signal
-                # with full setup + session context, logs decision.
-                # In SHADOW mode, bot fires anyway; the vote is purely
-                # observational for counterfactual analysis after 3 weeks.
+                # ── 2026-05-20 AI Overlay validators (shadow mode) ──────
+                # Per-signal validation. DEDUP key on (direction, entry,
+                # stop, target) so same setup re-firing on each bar
+                # doesn't trigger duplicate Claude calls.
                 #
-                # DEDUP (2026-05-20 follow-up): SB re-fires the SAME
-                # setup on every bar while the limit is pending. Key on
-                # (direction, entry, stop, target) so we vote once per
-                # unique setup, not per bar.
-                if (
-                    components.kz_validator is not None
-                    and config.cfg("KZ_VALIDATOR_ENABLED", False)
-                ):
-                    try:
-                        setup_key = (
-                            str(getattr(signal, "direction", "?")),
-                            float(getattr(signal, "entry_price", 0) or 0),
-                            float(getattr(signal, "stop_price", 0) or 0),
-                            float(getattr(signal, "target_price", 0) or 0),
-                        )
-                        if setup_key == state.last_validator_setup_key:
-                            # Same setup re-firing — skip duplicate vote
-                            pass
-                        else:
-                            state.last_validator_setup_key = setup_key
-                            sb_kz = getattr(signal, "kill_zone", None) or "unknown"
+                # Priority: vision-overlay (C4) > text-only (C2). If both
+                # enabled, vision wins. C2 left enableable for fallback.
+                try:
+                    setup_key = (
+                        str(getattr(signal, "direction", "?")),
+                        float(getattr(signal, "entry_price", 0) or 0),
+                        float(getattr(signal, "stop_price", 0) or 0),
+                        float(getattr(signal, "target_price", 0) or 0),
+                    )
+                    if setup_key != state.last_validator_setup_key:
+                        state.last_validator_setup_key = setup_key
+                        sb_kz = getattr(signal, "kill_zone", None) or "unknown"
+                        # Camino C4: vision-overlay (preferred)
+                        if (
+                            components.vision_validator is not None
+                            and config.cfg("VISION_VALIDATOR_ENABLED", False)
+                        ):
+                            asyncio.create_task(
+                                _run_vision_validator_shadow(
+                                    components, state, ts, bars, sb_kz, signal,
+                                )
+                            )
+                        # Camino C2: text-only (fallback, only when vision disabled)
+                        elif (
+                            components.kz_validator is not None
+                            and config.cfg("KZ_VALIDATOR_ENABLED", False)
+                        ):
                             asyncio.create_task(
                                 _run_kz_validator_shadow(
                                     components, state, ts, bars, sb_kz,
                                     signal=signal,
                                 )
                             )
-                    except Exception as exc:
-                        logger.debug(
-                            "AI Overlay signal validator launch failed: %s",
-                            exc,
-                        )
+                except Exception as exc:
+                    logger.debug(
+                        "AI Overlay signal validator launch failed: %s",
+                        exc,
+                    )
 
                 # SINGLE-POSITION GUARD (2026-04-23 fix): see NY AM branch.
                 # 2026-05-13 Day 8 audit: extended with opportunity-replace
