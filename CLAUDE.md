@@ -782,11 +782,71 @@ Requiere migration `0003_bot_state_overlays.sql` aplicada.
   * Sample size insufficient in 3 weeks (only ~45-60 KZ entries —
     might extend to 6 weeks for stronger signal)
 
-  **Active mode (Phase 2, only if shadow proves edge)**: bot OBEYS
-  Claude's decisions. Pre-launch checklist would include: kill
-  switch on cumulative Claude-driven losses, manual override toggle,
-  fallback behavior if API unreachable (default = fire = current
-  behavior).
+  **Active mode (Phase 2, design finalized 2026-05-20)**:
+
+  **Decision: BLOCK + GATE** (synchronous wait for Claude before
+  limit placement). Alternative ("place + cancel-if-skip") rejected
+  because: if limit fills in the 1-3 sec window while waiting for
+  Claude, bot has a position Claude wanted to veto. BLOCK is clean
+  and the 1-3 sec latency is irrelevant for SB (limits often pend
+  10-60 min anyway, the 7 hard gates don't expire in 3 sec).
+
+  **Flow per signal**:
+    1. SB.evaluate() returns Signal
+    2. Bot builds context (setup + day state + macro)
+    3. Bot AWAITS Claude (asyncio.wait_for, timeout=5s)
+    4. Decision branching:
+       - "fire" (1.0x): place limit normal (canonical execution)
+       - "half" (0.5x): signal.contracts //= 2 (keep stop_pts, halve
+                       $risk), then place limit
+       - "skip" (0.0x): signal = None, skip _execute_signal entirely
+    5. Telegram alert with 🟢 APPROVED / 🟡 HALF-SIZED / 🛑 VETOED
+    6. Supabase + JSONL log with `obeyed=true`
+
+  **Fallback on API failure / timeout**:
+    - Default: FIRE (canonical) — never block trades on infrastructure
+    - Log WARNING + Telegram "AI Overlay unreachable, falling back"
+
+  **Safety mechanisms**:
+    - Kill switch: if cumulative AI-attributable loss > $500 over
+      recent N days, auto-flip back to shadow mode and alert user
+    - Manual override: Telegram `/ai off` (shadow) / `/ai force`
+      (bypass vetos) for emergencies
+    - Permanent bypass: config flag `KZ_VALIDATOR_BYPASS = True`
+
+  **New telemetry fields needed in ai_overlay_decisions**:
+    - `obeyed: bool` — did the bot follow the decision
+    - `bot_pnl_outcome: real` — actual P&L if fired
+    - `would_have_pnl: real` — counterfactual if NOT obeyed
+    - `daily_ai_savings` — rolling impact aggregate
+
+  **Daily Telegram summary** (post-hard-close):
+    ```
+    🤖 AI Overlay Daily (DATE)
+    Decisions: N (fire/half/skip counts)
+    Skips that would have lost: X/Y (saved $Z) ✓
+    Skips that would have won: A/B (cost $C) ✗
+    Halves vs full: D ($E saved/cost)
+    Net AI attribution: ±$F vs canonical
+    ```
+
+  **Code changes (Phase 2 implementation, ~1 day)**:
+    1. Convert `_run_kz_validator_shadow` to `_run_kz_validator` with
+       a mode param (shadow vs active)
+    2. In main.py SB branch, if `KZ_VALIDATOR_SHADOW_MODE=False`:
+       - `decision = await _run_kz_validator_active(...)`
+       - Apply decision: signal=None / signal.contracts//=2 / no-op
+    3. New Supabase columns (migration 0005)
+    4. Telegram commands handler for /ai off, /ai force
+    5. Counterfactual tracker auto-runs nightly
+
+  **Phased rollout to active**:
+    - Phase 1.0 (now): shadow per-signal
+    - Phase 1.5 (~3 weeks): analyze counterfactual; if positive →
+      proceed; if neutral/negative → kill feature
+    - Phase 2.0: active SKIP veto ONLY (no HALF yet); daily summary
+    - Phase 2.5: enable HALF after SKIP proves stable
+    - Phase 3.0: auto-disable kill switch + Telegram commands
 
 ### v12 backtest validation (2026-04-25)
 
