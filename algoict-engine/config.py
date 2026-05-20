@@ -113,6 +113,24 @@ AI_MODEL_KZ_VALIDATOR = "claude-sonnet-4-6"    # Camino C2 — per-KZ AI overlay
 KZ_VALIDATOR_ENABLED = True         # 2026-05-20 — ON for first shadow run
 KZ_VALIDATOR_SHADOW_MODE = True     # True = log only, don't act on decisions
 
+# 2026-05-20 — CONDITIONAL min_conf gate (post-mortem driven)
+# 4 consecutive post-mortems (5/15, 5/17, 5/19, 5/20) converge on:
+# "when HTF context is weak/undefined, require higher confluence."
+# Blanket min_conf failed cross-period (-4.3% 3-yr), but CONDITIONAL
+# (only when HTF weak) was never tested. Shadow first, observe, decide.
+#
+# Definition of "HTF weak":
+#   - daily_bias or weekly_bias is None / "neutral" / ""
+#   - SB_HTF_WEAK_REQUIRES = "either" → weak if EITHER D1 or W1 weak
+#   - SB_HTF_WEAK_REQUIRES = "both"   → weak only if BOTH weak
+#
+# Gate fires when (htf_weak AND sb_score < SB_HTF_WEAK_MIN_CONF):
+#   - Shadow mode: log to JSONL + log line, bot continues canonical
+#   - Active mode: signal rejected, return None
+SB_HTF_WEAK_MIN_CONF = 2            # 0 = disabled. 2 = post-mortem consensus
+SB_HTF_WEAK_REQUIRES = "either"     # "either" | "both"
+SB_HTF_WEAK_GATE_SHADOW_MODE = True # True = log only, don't act
+
 # Haiku reserved for simple tasks (enable when SDK lists it)
 # AI_MODEL_SIMPLE = "claude-haiku-4-5-20251001"
 

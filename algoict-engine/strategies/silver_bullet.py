@@ -1504,6 +1504,99 @@ class SilverBulletStrategy:
         # `if sb_score < threshold: return None` here, plus flag in
         # config.py. Reverted 2026-05-18 commit 4fef290 → follow-up.
 
+        # 2026-05-20 — CONDITIONAL min_conf gate (post-mortem driven)
+        # 4 consecutive post-mortems (5/15, 5/17, 5/19, 5/20) all
+        # converge on the same recommendation: when HTF context is
+        # weak/undefined, the bot is firing structurally-valid-but-low-
+        # quality setups that lose disproportionately. The blanket
+        # min_conf gate failed cross-period (-4.3% 3-yr), but a
+        # CONDITIONAL version (only when HTF weak) was never tested.
+        #
+        # Live evidence supporting test:
+        #   * 10 losers in row since last winner (2026-05-19 London T3)
+        #   * Most have score 1/5
+        #   * Most have D1 defined but W1 neutral (today) or D1+W1 mixed
+        #
+        # Default OFF (SB_HTF_WEAK_MIN_CONF=0). Shadow mode logs would-
+        # skip without acting. Active mode returns None (skip).
+        htf_weak_min = int(config.cfg("SB_HTF_WEAK_MIN_CONF", 0))
+        if htf_weak_min > 0:
+            weak_requires = str(
+                config.cfg("SB_HTF_WEAK_REQUIRES", "either")
+            ).lower().strip()
+            d_bias_raw = (
+                getattr(bias, "daily_bias", None) if bias else None
+            )
+            w_bias_raw = (
+                getattr(bias, "weekly_bias", None) if bias else None
+            )
+            d_bias = str(d_bias_raw or "none").lower().strip()
+            w_bias = str(w_bias_raw or "none").lower().strip()
+            weak_set = {"neutral", "none", ""}
+            weak_d = d_bias in weak_set
+            weak_w = w_bias in weak_set
+            if weak_requires == "both":
+                htf_weak = weak_d and weak_w
+            else:  # "either" (more aggressive — default)
+                htf_weak = weak_d or weak_w
+
+            if htf_weak and sb_score < htf_weak_min:
+                shadow = bool(
+                    config.cfg("SB_HTF_WEAK_GATE_SHADOW_MODE", True)
+                )
+                # JSONL persistence — restart-safe, doesn't depend on
+                # Supabase being set up.
+                try:
+                    import json as _json
+                    jsonl_path = (
+                        Path(__file__).resolve().parent.parent
+                        / "analysis"
+                        / "htf_weak_gate_shadow.jsonl"
+                    )
+                    jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+                    rec = {
+                        "ts": str(ts),
+                        "kz": active_zone,
+                        "direction": direction,
+                        "entry": float(entry_price),
+                        "stop": float(stop_price),
+                        "target": float(target_price),
+                        "score": int(sb_score),
+                        "score_max": int(config.SB_LIVE_MAX),
+                        "d_bias": d_bias,
+                        "w_bias": w_bias,
+                        "weak_requires": weak_requires,
+                        "min_conf_required": htf_weak_min,
+                        "would_skip": True,
+                        "mode": "shadow" if shadow else "active",
+                    }
+                    with open(jsonl_path, "a", encoding="utf-8") as f:
+                        _json.dump(rec, f, default=str)
+                        f.write("\n")
+                except Exception as exc:
+                    logger.debug("htf_weak_gate JSONL append failed: %s", exc)
+
+                logger.info(
+                    "EVAL silver_bullet [%s]: htf_weak_gate %s "
+                    "(d=%s w=%s score=%d<min=%d, req=%s) %s",
+                    _ts_hm(ts),
+                    "SKIP-ACTIVE" if not shadow else "SKIP-SHADOW",
+                    d_bias, w_bias, sb_score, htf_weak_min, weak_requires,
+                    "(rejecting signal)" if not shadow
+                    else "(bot continues canonical)",
+                )
+
+                if not shadow:
+                    # ACTIVE mode: actually reject the signal
+                    self._last_evaluated_bar_ts = ts
+                    self.last_rejection = {
+                        "reason": "htf_weak_low_conf",
+                        "is_near_miss": True,
+                        "kz": active_zone,
+                        "ts": ts,
+                    }
+                    return None
+
         signal = Signal(
             strategy="silver_bullet",
             symbol=self.SYMBOL,
