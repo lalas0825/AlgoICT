@@ -3625,11 +3625,16 @@ def _build_kz_validator_context(
     ts,
     bars: pd.DataFrame,
     kz: str,
+    signal: Optional[Any] = None,
 ) -> dict:
     """Build the context dict that Camino C2 AI Overlay sends to Claude.
 
     Pulls together: KZ + time, day state (P&L + peak + DD + trades),
     HTF bias + recent struct, SWC mood + macro events, price/range/VPIN.
+    When `signal` is provided (per-trade mode, 2026-05-20), also
+    embeds the proposed trade's setup details (entry/stop/target/RR/
+    score/sweep/FVG) so Claude can evaluate the specific setup vs
+    just the session-level context.
 
     Some fields are best-effort — if a snapshot is missing, default to
     'n/a' so Claude can still reason with partial info. The validator
@@ -3758,6 +3763,36 @@ def _build_kz_validator_context(
 
     instant_adverse = int(getattr(state, "instant_adverse_today", 0))
 
+    # Signal block — per-trade mode (2026-05-20). Extract setup details
+    # from the Signal object if provided. Backward-compatible: empty dict
+    # if signal is None (per-KZ legacy mode kept for tests).
+    signal_block = {}
+    if signal is not None:
+        try:
+            entry = float(getattr(signal, "entry_price", 0) or 0)
+            stop = float(getattr(signal, "stop_price", 0) or 0)
+            target = float(getattr(signal, "target_price", 0) or 0)
+            stop_pts = abs(entry - stop) if (entry and stop) else 0.0
+            target_pts = abs(target - entry) if (entry and target) else 0.0
+            rr = (target_pts / stop_pts) if stop_pts > 0 else 0.0
+            signal_block = {
+                "direction": str(getattr(signal, "direction", "?")),
+                "entry_price": entry,
+                "stop_price": stop,
+                "target_price": target,
+                "stop_pts": round(stop_pts, 2),
+                "framework_pts": round(target_pts, 2),
+                "actual_rr": round(rr, 2),
+                "contracts": int(getattr(signal, "contracts", 0) or 0),
+                "confluence_score": int(getattr(signal, "confluence_score", 0) or 0),
+                "kill_zone": str(getattr(signal, "kill_zone", kz)),
+                "target_type": str(getattr(signal, "target_type", "n/a")),
+                "sweep_type": str(getattr(signal, "sweep_type", "n/a")),
+                "fvg_zone": str(getattr(signal, "fvg_zone", "n/a")),
+            }
+        except Exception:
+            signal_block = {}
+
     return {
         "kz": kz,
         "kz_window_ct": kz_windows.get(kz, "unknown"),
@@ -3787,6 +3822,8 @@ def _build_kz_validator_context(
         "session_range_pts": session_range,
         "vpin": vpin_val,
         "vpin_zone": vpin_zone,
+        # Per-trade additions (empty dict if no signal provided)
+        "signal": signal_block,
     }
 
 
@@ -3796,15 +3833,22 @@ async def _run_kz_validator_shadow(
     ts,
     bars: pd.DataFrame,
     kz: str,
+    signal: Optional[Any] = None,
 ) -> None:
     """Background task — call AI Overlay validator and log decision.
 
-    SHADOW mode: log to Supabase + Telegram but do NOT modify trade
-    execution. Runs as asyncio task so trading loop is not blocked by
-    the 1-3 second Claude API call.
+    Modes:
+      - PER-SIGNAL (2026-05-20, default): called with `signal` after the
+        bot fires a Signal. Claude sees full setup + session context.
+      - PER-KZ (legacy): called with signal=None at KZ transition. Kept
+        for completeness; not currently wired.
+
+    SHADOW mode: log to Supabase + Telegram + JSONL but do NOT modify
+    trade execution. Runs as asyncio task so trading loop is not
+    blocked by the 1-3 second Claude API call.
     """
     try:
-        ctx = _build_kz_validator_context(components, state, ts, bars, kz)
+        ctx = _build_kz_validator_context(components, state, ts, bars, kz, signal=signal)
         # Sync Claude call → run in thread to keep loop responsive
         decision = await asyncio.to_thread(
             components.kz_validator.validate_kz_entry, ctx,
@@ -4302,24 +4346,12 @@ async def _on_new_bar(
                 except Exception as exc:
                     logger.debug("KZ enter Telegram failed: %s", exc)
 
-            # ── 2026-05-20 — Camino C2: AI Overlay validator (SHADOW) ─
-            # At each KZ entry, call Claude API with session context.
-            # In SHADOW mode, log decision but do NOT modify trade
-            # execution. Background task so the trading loop isn't blocked
-            # by the 1-3 sec API call. Default OFF until user enables.
-            if (
-                current_kz is not None
-                and components.kz_validator is not None
-                and config.cfg("KZ_VALIDATOR_ENABLED", False)
-            ):
-                try:
-                    asyncio.create_task(
-                        _run_kz_validator_shadow(
-                            components, state, ts, bars, current_kz,
-                        )
-                    )
-                except Exception as exc:
-                    logger.debug("KZ validator task launch failed: %s", exc)
+            # 2026-05-20 — Camino C2 refactor: AI Overlay is now PER-SIGNAL
+            # (called at signal fire, not at KZ transition). See the
+            # `_run_signal_validator_shadow` call inside the silver_bullet
+            # branch below for the new integration point. KZ-transition
+            # call removed because it was mechanically uninformative
+            # (e.g. "no prior trades, fire" at every London open).
 
         # ── 5a. Opportunity autocancel (Tier 1.5) ─────────────────────────
         # Cancel pending limits whose structural thesis has been invalidated
@@ -4421,6 +4453,30 @@ async def _on_new_bar(
                     state.kz_stats["signals_fired"] += 1
                 except Exception:
                     pass
+
+                # ── 2026-05-20 Camino C2 PER-SIGNAL AI Overlay (SHADOW) ─
+                # Background task — Claude evaluates this specific signal
+                # with full setup + session context, logs decision.
+                # In SHADOW mode, bot fires anyway; the vote is purely
+                # observational for counterfactual analysis after 3 weeks.
+                if (
+                    components.kz_validator is not None
+                    and config.cfg("KZ_VALIDATOR_ENABLED", False)
+                ):
+                    try:
+                        sb_kz = getattr(signal, "kill_zone", None) or "unknown"
+                        asyncio.create_task(
+                            _run_kz_validator_shadow(
+                                components, state, ts, bars, sb_kz,
+                                signal=signal,
+                            )
+                        )
+                    except Exception as exc:
+                        logger.debug(
+                            "AI Overlay signal validator launch failed: %s",
+                            exc,
+                        )
+
                 # SINGLE-POSITION GUARD (2026-04-23 fix): see NY AM branch.
                 # 2026-05-13 Day 8 audit: extended with opportunity-replace
                 # so we don't sit blocked for hours on a limit that won't

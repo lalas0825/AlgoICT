@@ -1,11 +1,17 @@
 """
 agents/kz_validator.py
 =======================
-AI Overlay — per-KZ entry validator (Camino C2, SHADOW mode).
+AI Overlay — per-SIGNAL trade validator (Camino C2, SHADOW mode).
 
-Called at each KZ transition (London/NY AM/NY PM open). Sends current
-session context to Claude API and receives a decision: should the bot
-trade this KZ at normal size, half size, or skip entirely?
+2026-05-20 refactor: switched from per-KZ to per-signal validation.
+Per-KZ was mechanical (at London open with no prior trades, Claude
+always says "fire — clean slate" — no real information). Per-signal
+gives Claude the actual setup details (FVG zone, sweep, structure,
+RR, score) + session state, so the vote is contextually meaningful.
+
+Called RIGHT AFTER the bot generates a signal (in shadow mode, before
+limit is placed; bot does not wait — vote logs async). Sends full
+setup context to Claude and receives: fire / skip / half + rationale.
 
 Modes:
   - SHADOW (default, `KZ_VALIDATOR_SHADOW_MODE=True`): decision is logged
@@ -205,15 +211,33 @@ class KZValidatorAgent:
     # ------------------------------------------------------------------ #
 
     def _build_prompt(self, ctx: dict) -> str:
-        """Build the validation prompt for Claude."""
+        """Build the per-signal validation prompt for Claude."""
         prior_str = ctx.get("prior_kz_outcomes_str", "No prior KZs today")
         events_str = ctx.get("high_impact_events", "none")
-        return f"""You are an expert ICT (Inner Circle Trader) session validator for a Silver Bullet (SB) MNQ futures bot.
-Your job: given the current trading day's state, decide whether the bot should trade the upcoming Kill Zone (KZ) at full size, half size, or skip entirely.
+        # Signal block — per-trade is the primary use case (2026-05-20)
+        sig = ctx.get("signal", {})
+        signal_block = ""
+        if sig:
+            signal_block = f"""
+
+PROPOSED TRADE (just fired by the SB strategy, awaiting your vote):
+- Direction: {sig.get('direction', 'unknown').upper()}
+- Entry: {sig.get('entry_price', 'n/a')} (limit, +/- 1 tick from FVG proximal)
+- Stop: {sig.get('stop_price', 'n/a')}  ({sig.get('stop_pts', 'n/a')} pts risk)
+- Target: {sig.get('target_price', 'n/a')} ({sig.get('target_type', 'n/a')}, {sig.get('framework_pts', 'n/a')} pts reward)
+- R:R: {sig.get('actual_rr', 'n/a')}
+- Contracts: {sig.get('contracts', 'n/a')}
+- Confluence score: {sig.get('confluence_score', 'n/a')}/5 (SB-live; 0=structural-only, 5=A+)
+- KZ: {sig.get('kill_zone', ctx.get('kz', 'unknown'))}
+- Sweep type: {sig.get('sweep_type', 'n/a')}
+- FVG zone: {sig.get('fvg_zone', 'n/a')}
+"""
+        return f"""You are an expert ICT (Inner Circle Trader) trade validator for a Silver Bullet (SB) MNQ futures bot.
+Your job: given the proposed trade + current market/session context, decide whether the bot should fire this trade at full size, half size, or skip entirely.
 
 Respond ONLY with valid JSON, no other text, no code fences.
-
-KZ ABOUT TO OPEN:
+{signal_block}
+KZ ABOUT TO OPEN / CURRENTLY ACTIVE:
 - KZ name: {ctx.get('kz', 'unknown')}
 - KZ window CT: {ctx.get('kz_window_ct', 'unknown')}
 - Current time CT: {ctx.get('current_time_ct', 'unknown')}
@@ -251,27 +275,30 @@ PRICE STATE:
 - VPIN: {ctx.get('vpin', 'n/a')} ({ctx.get('vpin_zone', 'n/a')})
 
 DECISION FRAMEWORK:
-The Silver Bullet strategy is a structural FVG-based entry with sweep + MSS/BOS confirmation. Historical 3-year expectancy +14.7% with NY_OPEN_BUFFER shipped. Confluence score is NOT a useful gate (cross-period proven). Real risks for THIS specific KZ:
+The Silver Bullet strategy is a structural FVG-based entry with sweep + MSS/BOS confirmation. Historical 3-year expectancy +14.7% with NY_OPEN_BUFFER shipped. Confluence score is NOT a useful baseline gate (cross-period proven — score=0 is the HIGHEST WR bucket).
 
-- "Giveback day" risk: if today already had a strong winning KZ, current KZ has elevated chop probability (mean reversion typical). Example pattern: London +$1,500 → NY AM/PM often chop.
-- "Hostile market" risk: if instant-adverse losses are accumulating (MFE < 0.5R), market is rejecting the bot's edge today; further trades likely also instant-adverse.
-- "Macro headwind" risk: high-impact events scheduled during or right after the KZ → expect wicks and false breaks.
-- "Range exhaustion" risk: if session range is already large vs typical (~150-250pt for MNQ), the move may largely be done; chop is more likely than continuation.
-- "Counter-momentum" risk: if local bias and HTF disagree sharply, fades both directions are likely.
+Per-trade risks to evaluate (think like an experienced ICT discretionary trader looking at THIS specific setup in THIS specific context):
+- "Late in move" risk: if session range is already large and the trade is fading at the EXTREME, the move may be exhausted.
+- "Counter-bias clarity" risk: trade direction vs HTF + last_disp + struct alignment. Counter-trend setups CAN work (mean reversion) but need stronger structural confirmation.
+- "Recent failure pattern" risk: if N instant-adverse losses today and trade is in same KZ → market is rejecting this edge today.
+- "Macro headwind": high-impact event window nearby.
+- "FVG quality": tiny FVG vs noisy candle, or FVG already partially mitigated.
+- "Sweep conviction": clean liquidity sweep vs marginal pivot break.
+- "Giveback exposure": if day is already +$X and current KZ is post-peak, elevated chop risk.
 
 DECISIONS:
-- "fire" → trade normally (size_multiplier = 1.0). Use when context is neutral or supportive.
-- "half" → take trades but half size (size_multiplier = 0.5). Use when context is mildly risky but edge likely still positive.
-- "skip" → reject all SB signals this KZ (size_multiplier = 0.0). Use only when there's a SPECIFIC reason this KZ is meaningfully worse than baseline.
+- "fire" → execute trade at full size (size_multiplier = 1.0). Default when context is neutral/supportive.
+- "half" → execute at half size (size_multiplier = 0.5). When edge probably still positive but context is mildly risky.
+- "skip" → reject the trade (size_multiplier = 0.0). Only when SPECIFIC reason this trade is meaningfully worse than baseline expectancy.
 
-IMPORTANT — be JUDGMENT-driven, not just risk-averse. The strategy has positive expectancy at baseline; don't over-skip. Default to "fire" unless you have a real reason. Skip is for clear hostile-context days, not generic caution. The bot has already lost most of its day's edge if you skip a normal-context KZ.
+IMPORTANT — be JUDGMENT-driven. SB has positive baseline expectancy; do NOT over-skip. Default to "fire" unless there's a concrete reason to reduce or reject. Skip is for setups where you can articulate WHY this trade is worse than the SB historical average, not generic caution.
 
 RESPONSE FORMAT (strict JSON, max ~300 char rationale):
 {{
   "decision": "fire" | "skip" | "half",
   "size_multiplier": 1.0 | 0.5 | 0.0,
   "confidence": 0.0 to 1.0,
-  "rationale": "concise reason ~200-300 chars"
+  "rationale": "concise reason ~200-300 chars — reference specific signal/context facts"
 }}"""
 
     def _parse_response(

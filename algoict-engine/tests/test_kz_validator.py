@@ -252,3 +252,41 @@ class TestPromptConstruction:
         assert "drawdown" in prompt.lower()
         assert "fire" in prompt.lower() and "skip" in prompt.lower()
         assert "json" in prompt.lower()
+
+    def test_prompt_includes_signal_block_when_signal_provided(self, mock_agent):
+        """Per-trade mode (2026-05-20): signal block is embedded."""
+        ctx = {
+            "kz": "london",
+            "kz_window_ct": "01:00-07:30 CT",
+            "current_time_ct": "01:42",
+            "today_date": "2026-05-20",
+            "trades_today": 0,
+            "signal": {
+                "direction": "long",
+                "entry_price": 28985.75,
+                "stop_price": 28962.0,
+                "target_price": 29783.75,
+                "stop_pts": 23.75,
+                "framework_pts": 798.0,
+                "actual_rr": 33.6,
+                "contracts": 2,
+                "confluence_score": 1,
+                "kill_zone": "london",
+                "target_type": "PWH",
+                "sweep_type": "n/a",
+                "fvg_zone": "n/a",
+            },
+        }
+        prompt = mock_agent._build_prompt(ctx)
+        assert "PROPOSED TRADE" in prompt
+        assert "LONG" in prompt
+        assert "28985.75" in prompt
+        assert "23.75" in prompt  # stop_pts
+        assert "33.6" in prompt  # R:R
+        assert "PWH" in prompt  # target_type
+
+    def test_prompt_omits_signal_block_when_no_signal(self, mock_agent):
+        """Legacy per-KZ mode: signal block is absent."""
+        ctx = {"kz": "london", "current_time_ct": "01:00", "signal": {}}
+        prompt = mock_agent._build_prompt(ctx)
+        assert "PROPOSED TRADE" not in prompt
