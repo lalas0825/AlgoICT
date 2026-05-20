@@ -3832,6 +3832,21 @@ async def _run_kz_validator_shadow(
                     ).execute()
             except Exception as exc:
                 logger.debug("AI overlay supabase insert failed: %s", exc)
+
+        # 2026-05-20 — JSONL fallback for shadow persistence. Supabase
+        # migration 0004 may not be applied yet; this ensures decisions
+        # survive bot restarts regardless. Backfill via
+        # scripts/ai_overlay_counterfactual.py once migration lands.
+        try:
+            import json as _json
+            jsonl_path = Path(__file__).resolve().parent / "analysis" / "ai_overlay_shadow.jsonl"
+            jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(jsonl_path, "a", encoding="utf-8") as f:
+                _json.dump(decision.as_db_record(), f, default=str)
+                f.write("\n")
+        except Exception as exc:
+            logger.debug("AI overlay JSONL append failed: %s", exc)
+
         # Track latest decision in state for downstream consumers (Phase 2)
         if not hasattr(state, "ai_overlay_decisions") or state.ai_overlay_decisions is None:
             state.ai_overlay_decisions = []

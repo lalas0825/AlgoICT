@@ -110,7 +110,7 @@ AI_MODEL_KZ_VALIDATOR = "claude-sonnet-4-6"    # Camino C2 — per-KZ AI overlay
 # strategy. After 3 weeks of shadow data, compare counterfactual P&L
 # (if obeyed) vs actual P&L. Ship to active mode only if positive edge.
 # See CLAUDE.md §"Camino C2 — Per-KZ AI overlay in SHADOW mode".
-KZ_VALIDATOR_ENABLED = False        # master switch (default OFF until ready)
+KZ_VALIDATOR_ENABLED = True         # 2026-05-20 — ON for first shadow run
 KZ_VALIDATOR_SHADOW_MODE = True     # True = log only, don't act on decisions
 
 # Haiku reserved for simple tasks (enable when SDK lists it)
