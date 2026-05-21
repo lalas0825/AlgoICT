@@ -65,6 +65,12 @@ class VisionValidatorDecision:
     response_ms: int
     images_used: int = 0
     context: dict = field(default_factory=dict)
+    # 2026-05-21 — separate assessment of whether the BOT is reading the
+    # chart correctly. Independent of the trade decision. Lets us
+    # accumulate data on which detector calls Claude considers accurate
+    # vs questionable vs wrong — critical for identifying systematic
+    # detector errors (the original motivation for vision overlay).
+    bot_assessment: dict = field(default_factory=dict)
     error: Optional[str] = None
 
     @property
@@ -95,6 +101,7 @@ class VisionValidatorDecision:
             "response_ms": int(self.response_ms),
             "images_used": int(self.images_used),
             "context": ctx_lite,
+            "bot_assessment": self.bot_assessment,
             "error": self.error,
         }
 
@@ -103,16 +110,27 @@ class VisionValidatorDecision:
             self.decision, "[?]"
         )
         tag = "[VISION-SHADOW] " if shadow_mode else "[VISION] "
-        head = (
+        msg = (
             f"{tag}AI Vision - KZ {self.kz.upper()}\n"
             f"{emoji} {self.decision.upper()} "
             f"(size {self.size_multiplier:.1f}x, conf {self.confidence:.2f}, "
             f"images {self.images_used})\n"
             f"Rationale: {self.rationale}"
         )
+        # Bot assessment summary if available
+        if self.bot_assessment:
+            ba = self.bot_assessment
+            overall = ba.get("overall", "")
+            fvg_a = ba.get("fvg_assessment", "")
+            sweep_a = ba.get("sweep_assessment", "")
+            mss_a = ba.get("mss_assessment", "")
+            if any([overall, fvg_a, sweep_a, mss_a]):
+                msg += f"\n\nBot accuracy: FVG={fvg_a} | sweep={sweep_a} | MSS={mss_a}"
+                if overall:
+                    msg += f"\n  {overall}"
         if shadow_mode:
-            head += "\n(SHADOW: bot continues canonical)"
-        return head
+            msg += "\n(SHADOW: bot continues canonical)"
+        return msg
 
 
 class VisionValidatorAgent:
@@ -261,21 +279,299 @@ PROPOSED TRADE (just fired by SB):
 - KZ: {sig.get('kill_zone', ctx.get('kz', '?'))}
 """
 
-        return f"""You are an expert ICT validator with VISUAL access to the bot's chart. The bot has fired a Silver Bullet (SB) signal and you must vote: fire / skip / half.
+        return f"""You are an ICT (Inner Circle Trader) trade validator with VISUAL access to a Silver Bullet (SB) chart. The bot has fired a setup and you must do TWO jobs:
+
+  JOB 1: Vote on the trade — fire / skip / half
+  JOB 2: Assess whether the bot is reading the chart CORRECTLY (independent of the trade vote)
 
 {image_intro}
 
-CRITICAL: your job is to **VALIDATE THE BOT'S CLAIMS AGAINST THE RAW CHART**. The bot's annotations are its INTERPRETATION. The candles are the truth.
+═══════════════════════════════════════════════════════════════════
+ICT CANONICAL RULES (from ICT 2024 Mentorship — these are the LAW)
+═══════════════════════════════════════════════════════════════════
 
-What to check VISUALLY:
-1. **FVG validity**: does the shaded zone look like a real 3-candle imbalance (clean displacement gap), or a noise gap from a small candle?
-2. **Sweep quality**: did price actually take out a significant pivot/level, or was it a weak nick?
-3. **5-min MSS/BOS validity** (if visible in chart 2): does the structural shift the bot claims actually appear on the chart, or is it a weak fluctuation?
-4. **Setup location**: is the proposed entry at the FVG proximal, or has price moved away?
-5. **Regime**: is this a clean trend / clean range / messy chop? (chop = high probability of failure)
-6. **Counter-trend exposure**: is the trade direction vs the broader visible trend reasonable?
+A) SILVER BULLET ENTRY MODEL
+   - **FVG-only** entry (NEVER OB-based). First FVG in the SB window is the trigger.
+   - **NO bias alignment required.** SB can go LONG or SHORT regardless of D1/W1 bias.
+   - Driver is "draw on liquidity" — where price hunts stops next, NOT what bias says.
+   - **COUNTER-TREND IS INTENTIONAL** — do NOT vote skip just because trade direction
+     disagrees with HTF. ICT quote: "no es necesariamente el bias, predominantemente solo
+     tienes que considerar dónde está el próximo nivel de atracción de liquidez."
+   - Setup must form INSIDE the kill zone; trade can extend beyond to reach target.
 
-Respond ONLY with valid JSON, no code fences.
+B) FVG VALIDITY (canonical)
+   - Must BREAK a balanced price range — not just consolidation noise.
+   - Must be tethered to sweep + displacement (post-MSS shift).
+   - Must sit BELOW 50% of dealing range (for buys), ABOVE 50% (for sells).
+   - **NO minimum size rule** — even "real small tiny" FVGs are valid per ICT.
+   - **NOT invalidated** at 50-75% retracement; only invalid when BODY closes through distal.
+   - Entry: candle 3 proximal edge ± 1 tick. No rejection wait.
+
+C) SWEEP + MSS REQUIREMENTS
+   - Sweep of previous highs/lows MUST happen BEFORE the FVG (not after).
+   - MSS = market structure shift with displacement (2-3× normal candle body).
+   - Sweep + MSS + FVG = all three boxes checked = valid setup.
+
+D) TARGET = LIQUIDITY POOL (never fixed RR)
+   - Targets are PDH/PDL/PWH/PWL/equal highs-lows/old swings/imbalance gaps.
+   - MNQ minimum framework: 10 pts / 40 ticks to next pool.
+
+E) JUDAS SWING WARNING (post-open trap)
+   - First FVG in first 30 min after NY equity open (08:30 CT / 09:30 ET) often becomes
+     IFVG 90% of time. Algorithm INTENTIONALLY crosses to create liquidity.
+   - Implication: be cautious of fresh FVGs in 08:30-09:00 CT window.
+
+F) BE WARNING — "Don't move stop to BE too quickly. Let the move develop."
+
+═══════════════════════════════════════════════════════════════════
+VISUAL PATTERN REFERENCE — how to recognize each pattern (explained
+slowly, as if teaching a 3-year-old). The bot annotates the chart;
+your job is to verify those annotations are correct.
+═══════════════════════════════════════════════════════════════════
+
+YOU ARE LOOKING AT A CANDLESTICK CHART. Each candle has:
+  • A BODY (rectangle) — GREEN if close > open (bullish), RED if close < open (bearish)
+  • WICKS (thin lines extending up/down) — show intra-bar high and low
+  • X-axis = time (left = older, right = newer/now)
+  • Y-axis = price (higher up = higher price)
+
+The bot has DRAWN annotations on top of the candles:
+  • Yellow ▼ marker = bot's claimed SWING HIGH pivot
+  • Blue ▲ marker = bot's claimed SWING LOW pivot
+  • Green semi-transparent rectangle = bot's claimed BULLISH FVG zone
+  • Red semi-transparent rectangle = bot's claimed BEARISH FVG zone
+  • Purple/yellow dashed horizontal lines = ACTIVE liquidity levels
+    (labeled e.g. "PDH 29420", "PDL 28814", "PWH 29784", "NAH 29395", "NAL 28663")
+  • Dotted gray horizontal lines with "(SWEPT)" tag = levels ALREADY taken out
+  • Solid yellow horizontal line + "ENTRY" label = proposed trade entry price
+  • Dashed red horizontal line + "STOP" label = proposed stop
+  • Dashed green horizontal line + "TARGET" label = proposed target
+
+────────────────────────────────────────────────────────────────────
+📊 FAIR VALUE GAP (FVG) — how to tell REAL from FAKE
+────────────────────────────────────────────────────────────────────
+
+A FVG is a 3-candle pattern with a GAP (empty vertical space) between candle 1
+and candle 3. Middle candle (candle 2) does the "displacement" — moves fast.
+
+BULLISH FVG (the bot draws a GREEN rectangle here):
+  - Look at 3 consecutive candles on the chart.
+  - Candle 1 (oldest of the three) has some HIGH (top of its upper wick).
+  - Candle 2 (middle) is supposed to be a LARGE green candle pushing UP hard.
+    Its body should be visibly BIGGER than candles before/after.
+  - Candle 3 (newest) has some LOW (bottom of its lower wick).
+  - The FVG is the VERTICAL EMPTY SPACE between candle 1's HIGH and candle 3's LOW.
+
+  Mental picture (ASCII):
+
+      candle 1       candle 2         candle 3
+      ___                              ___
+     |   |       ┃━━━━━━━━━━━━┃       |   |
+     | █ |       ┃    BIG     ┃       | █ |
+     |___|       ┃    GREEN   ┃       |___|
+                 ┃    BODY    ┃
+                 ┃            ┃     ← candle 3 LOW
+                 ┃            ┃
+                 ┃            ┃     ← FVG empty space (the gap)
+                 ┃            ┃
+                 ┃            ┃     ← candle 1 HIGH
+                 ┗━━━━━━━━━━━━┛
+
+  ✅ REAL bullish FVG looks like:
+     - The middle candle is CLEARLY larger than candles before AND after
+     - There is a VISIBLE empty vertical space between c1 and c3
+     - The gap is shaded GREEN by the bot
+     - Comes AFTER a sweep of lows
+
+  ❌ FAKE bullish FVG looks like:
+     - All 3 candles are roughly the same size (no displacement on c2)
+     - No clear empty space — candles overlap each other
+     - The "gap" is tiny and inside choppy candles
+     - No prior sweep — just appeared in the middle of a range
+
+BEARISH FVG is the MIRROR (bot draws RED rectangle):
+  - Candle 2 should be a BIG RED candle pushing DOWN
+  - Gap is between candle 1's LOW and candle 3's HIGH
+  - Comes after a sweep of highs
+
+────────────────────────────────────────────────────────────────────
+🎯 LIQUIDITY SWEEP — how to tell REAL from FAKE
+────────────────────────────────────────────────────────────────────
+
+A sweep happens when price PIERCES a horizontal level (a swing high/low,
+or labeled level like PDH/PDL) with a wick, and then REJECTS BACK.
+
+The dashed horizontal lines on the chart ARE these levels. Look for one
+of them being pierced by a candle wick.
+
+REAL bullish sweep (sweep of lows, before a long entry):
+                                                ▼
+                              _________        | C |  ← rejection candle:
+                             |    C    |       |   |    long wick BELOW level,
+                             |    1    |       |___|    body CLOSES above
+       ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─|     ← dashed line (a low level)
+                             |         |        |
+                             |_________|        |       ← long wick PIERCES below
+                                  |             |
+                                  ↓             ↓
+                                wick extends below the level
+                                then candle closes back above
+
+  ✅ REAL: wick CLEARLY pierces below the dashed line. Body closes ABOVE the level.
+     The candle "looks like a tail" with the body up and a long wick below.
+  ❌ FAKE: wick barely touches the line (no clear pierce). OR the candle body
+     closes BELOW the level (that's a break, not a sweep). OR no clear level
+     was even pierced — wick just dips into open space.
+
+BEARISH sweep (sweep of highs) is the mirror: long UPPER wick above a high level,
+body closes BELOW.
+
+────────────────────────────────────────────────────────────────────
+📈 MSS / BOS / CHoCH — structural shifts
+────────────────────────────────────────────────────────────────────
+
+The chart has yellow ▼ (swing highs) and blue ▲ (swing lows). These are
+your reference pivots for structure.
+
+BOS BULLISH (Break of Structure, continuation up):
+  - Price was making LOWER HIGHS or in a RANGE.
+  - A candle CLOSES (body, not just wick) ABOVE the last yellow ▼.
+  - Visually: you see the candle body fully above the previous swing high marker.
+
+BOS BEARISH (continuation down):
+  - Mirror: candle body closes BELOW the last blue ▲ (recent swing low).
+
+CHoCH (Change of Character):
+  - The FIRST opposite-direction break of structure after a trend.
+  - Example: price was making higher highs/lows (uptrend). Then a candle body
+    closes BELOW the last blue ▲. That's CHoCH bearish — first sign of reversal.
+
+MSS (Market Structure Shift):
+  - A CHoCH or BOS that happens WITH a large displacement candle.
+  - More reliable than a weak structure break.
+
+  ✅ REAL MSS/BOS: break candle has a LARGE body, clearly closes through the level.
+  ❌ FAKE: just a wick crosses (no body close). Or the break candle is tiny/weak.
+
+────────────────────────────────────────────────────────────────────
+💥 DISPLACEMENT — the "kick" that makes things valid
+────────────────────────────────────────────────────────────────────
+
+Displacement = a candle whose BODY is MUCH LARGER than the surrounding candles.
+
+  Normal candles (no displacement):
+     [ ] [ ] [ ] [ ] [ ]    ← all roughly the same size
+
+  WITH displacement:
+     [ ] [ ] ╔══════════╗ [ ] [ ]
+            ║   BIG    ║          ← clearly stands out, 2-3× normal size
+            ║   BODY   ║
+            ╚══════════╝
+
+  - REAL FVG requires displacement on candle 2.
+  - REAL MSS requires displacement on the break candle.
+  - Without displacement = no institutional momentum = setup is weak.
+
+────────────────────────────────────────────────────────────────────
+🎚️ DEALING RANGE — Premium vs Discount
+────────────────────────────────────────────────────────────────────
+
+Mentally divide the VISIBLE chart range into 2 halves:
+
+  ─────────────────  ← Highest point on chart
+       │
+       │  PREMIUM (upper 50%) — shorts preferred here
+       │
+  ─────┼─────────── ← equilibrium midline (50%)
+       │
+       │  DISCOUNT (lower 50%) — longs preferred here
+       │
+  ─────────────────  ← Lowest point on chart
+
+  ✅ LONG entry should be in DISCOUNT (lower half) — buying low.
+  ✅ SHORT entry should be in PREMIUM (upper half) — selling high.
+  ⚠️ LONG entry that's in PREMIUM (top of range) is suspicious — chasing the move.
+  ⚠️ SHORT entry that's in DISCOUNT (bottom of range) is suspicious — fading the lows.
+
+────────────────────────────────────────────────────────────────────
+⏰ JUDAS SWING — the 8:30 CT trap (NY AM only)
+────────────────────────────────────────────────────────────────────
+
+After NY equity open at 8:30 CT (9:30 ET), the FIRST FVG that forms in the
+first 30 minutes is OFTEN a TRAP. ICT says 90% of the time, this initial FVG
+gets INVERTED (becomes an IFVG = polarity flip from FVG to its opposite).
+
+  Mechanism: the algorithm creates the FVG INTENTIONALLY to trap traders
+  into the wrong direction, then reverses to grab the liquidity those traders
+  just placed.
+
+  Visual sign: a clean-looking FVG that forms within ~30 min of 8:30 CT,
+  often after a fake breakout move. Looks "too obvious."
+
+  ⚠️ If this is NY AM and the proposed trade is based on a fresh post-open
+  FVG (signal time within ~30 min of 08:30 CT), bias toward SKIP or HALF.
+
+────────────────────────────────────────────────────────────────────
+🌊 REGIME — Trend vs Range vs Chop
+────────────────────────────────────────────────────────────────────
+
+Look at the OVERALL shape of the 5-min chart (image 2):
+
+  TREND (clean directional):
+    - Candles consistently making higher highs + higher lows (bull)
+    - OR lower highs + lower lows (bear)
+    - Clear staircase pattern
+    - SB winners common in trends (continuation after sweep)
+
+  RANGE (clean horizontal):
+    - Candles oscillating between two clear horizontal levels
+    - Sweeps at the edges of the range (both highs and lows)
+    - SB winners VERY common (this is the IDEAL SB regime — mean reversion plays)
+
+  CHOP (messy, no structure):
+    - Candles overlapping, no clear direction
+    - No clean horizontal levels — random spikes both ways
+    - Multiple structure events (BOS/CHoCH) flipping back and forth rapidly
+    - Like trying to read tea leaves
+    - SB struggles HARD in chop
+
+  ✅ Trend or Range → OK to fire
+  ❌ Pure chop → lean toward SKIP
+
+═══════════════════════════════════════════════════════════════════
+WHAT JUSTIFIES SKIP (be SPECIFIC — cite visual observations)
+═══════════════════════════════════════════════════════════════════
+  ✓ FVG zone shaded by bot is NOT a real imbalance (no displacement c2,
+    no visible empty space, just chop candles)
+  ✓ NO visible sweep precedes the FVG (no candle wick clearly pierces a level)
+  ✓ Target line has no real liquidity pool visible nearby (no labeled level
+    or swing pivot within target distance)
+  ✓ Pure chop regime visible on 5-min (overlapping candles, no structure)
+  ✓ Judas swing situation (NY AM, fresh FVG <30min after 08:30 CT)
+  ✓ MSS that bot claims is NOT visible on the chart, or contradicted by
+    subsequent candles
+  ✓ FVG zone is in PREMIUM half for a LONG trade (or DISCOUNT for SHORT) —
+    counter-positional
+
+═══════════════════════════════════════════════════════════════════
+WHAT DOES NOT JUSTIFY SKIP (do NOT vote skip for these)
+═══════════════════════════════════════════════════════════════════
+  ✗ "Counter-trend vs daily/weekly bias" — SB doesn't require HTF align
+  ✗ "Confluence score is low (0 or 1)" — score=0 is the highest-WR bucket
+    in 3-yr cross-period validation
+  ✗ "Stop tight" or "Stop wide" — SB uses structural stops, not R-multiples
+  ✗ "Outside canonical 1-hr ICT window" — bot uses v19a-WIDE
+  ✗ "Day already negative" or "consec losses" — that's risk mgmt, not setup
+    quality
+
+═══════════════════════════════════════════════════════════════════
+WHAT JUSTIFIES HALF (mild concerns, not full skip)
+═══════════════════════════════════════════════════════════════════
+  ⚠️ FVG quality marginal (small displacement on c2 but visible)
+  ⚠️ Sweep marginal but present (small pierce, weak rejection)
+  ⚠️ Mid-regime ambiguity (turning from trend to range, etc.)
+  ⚠️ Day already in significant drawdown but setup is structurally OK
+
 {signal_block}
 DAY STATE:
 - Trades today: {ctx.get('trades_today', 0)} (W:{ctx.get('wins_today', 0)} L:{ctx.get('losses_today', 0)})
@@ -286,12 +582,12 @@ DAY STATE:
 - Instant-adverse losses today (MFE<0.5R): {ctx.get('instant_adverse_today', 0)}
 - Kill switch: {ctx.get('kill_switch_active', False)}, MLL: {ctx.get('mll_zone', 'normal')}
 
-PRIOR KZ:
+PRIOR KZ TODAY:
 {prior_str}
 
 HTF & MACRO:
-- Daily bias: {ctx.get('daily_bias', 'n/a')}
-- Weekly bias: {ctx.get('weekly_bias', 'n/a')}
+- Daily bias (informational only — SB doesn't require align): {ctx.get('daily_bias', 'n/a')}
+- Weekly bias (informational only): {ctx.get('weekly_bias', 'n/a')}
 - Last 5min struct events: {ctx.get('struct_last3', 'n/a')}
 - Last displacement: {ctx.get('last_disp', 'n/a')}
 - SWC mood: {ctx.get('swc_mood', 'n/a')} (confidence {ctx.get('swc_confidence', 'n/a')})
@@ -303,17 +599,38 @@ PRICE STATE:
 - Session range so far: {ctx.get('session_range_pts', 'n/a')} pts
 - VPIN: {ctx.get('vpin', 'n/a')} ({ctx.get('vpin_zone', 'n/a')})
 
-STRATEGY NOTE: SB v19a-WIDE — operates throughout full KZ (London 01:00-07:30 CT, NY AM 07:30-12:00 CT, NY PM 12:00-15:00 CT), NOT restricted to ICT canonical 1-hr sub-windows. If the signal fired, all 7 hard gates already passed (sweep + 1-min FVG + 5-min MSS/BOS + KZ + framework + stop floor + 2R target). SB does NOT require HTF bias alignment (countertrend is intentional). Confluence score is NOT a reliable gate (cross-period proven score=0 is the highest-WR bucket).
+═══════════════════════════════════════════════════════════════════
+YOUR OUTPUT
+═══════════════════════════════════════════════════════════════════
 
-YOUR JOB: vote based on **chart validation + context**. Default to "fire" unless you see a SPECIFIC issue. Skip is for when the chart shows the bot's interpretation is wrong, the regime is hostile, or this trade is meaningfully worse than baseline SB expectancy.
+DEFAULT TO "fire" unless you see a SPECIFIC ICT-canonical issue from the
+"WHAT JUSTIFIES SKIP" list above. SB has positive cross-period expectancy.
 
-RESPONSE FORMAT (strict JSON):
+Respond ONLY with valid JSON, no code fences:
+
 {{
   "decision": "fire" | "skip" | "half",
   "size_multiplier": 1.0 | 0.5 | 0.0,
   "confidence": 0.0 to 1.0,
-  "rationale": "concise reason ~200-300 chars — REFERENCE specific visual observations when possible (e.g. 'FVG looks clean, sweep took out PDL, MSS confirmed' or 'FVG is noise gap, sweep barely nicked the level, chop pattern')"
-}}"""
+  "rationale": "concise reason ~200-300 chars — CITE specific visual observations from the chart (e.g. 'FVG c1-c3 gap clean with big c2 green displacement, sweep of PDL visible at 28814, target PWH 29784 in clear sight, range regime') AND ICT canonical rule when applicable",
+  "bot_assessment": {{
+    "fvg_assessment": "accurate" | "questionable" | "wrong" | "missing",
+    "sweep_assessment": "accurate" | "questionable" | "wrong" | "missing",
+    "mss_assessment": "accurate" | "questionable" | "wrong" | "missing",
+    "overall": "short sentence on whether the bot's interpretation of the chart matches what you see (e.g. 'Bot annotations match the chart well — FVG is real, sweep is clean' or 'Bot called an FVG but I see no displacement on c2, looks like noise')"
+  }}
+}}
+
+NOTES on bot_assessment:
+- "accurate" = bot's annotation matches what you see visually
+- "questionable" = there's something there but quality is marginal
+- "wrong" = bot's claim is NOT supported by the visible candles
+- "missing" = annotation not visible / not applicable / chart unclear
+
+bot_assessment is INDEPENDENT of the trade decision. You can vote FIRE even
+if bot_assessment flags issues (the trade may still work for other reasons).
+You can vote SKIP even if bot_assessment is accurate (other factors dominant).
+The two outputs are tracked separately for counterfactual analysis."""
 
     def _parse_response(
         self,
@@ -347,6 +664,27 @@ RESPONSE FORMAT (strict JSON):
             confidence = max(0.0, min(1.0, confidence))
             rationale = str(data.get("rationale", ""))[:500]
 
+            # 2026-05-21 — bot_assessment: independent evaluation of whether
+            # the bot is reading the chart correctly. Always parse defensively;
+            # use empty dict if missing or malformed.
+            bot_assessment = {}
+            ba_raw = data.get("bot_assessment", {})
+            if isinstance(ba_raw, dict):
+                valid_assessments = {"accurate", "questionable", "wrong", "missing"}
+                for k in ("fvg_assessment", "sweep_assessment", "mss_assessment"):
+                    v = str(ba_raw.get(k, "")).lower().strip()
+                    if v in valid_assessments:
+                        bot_assessment[k] = v
+                    elif v:
+                        # Unknown value — log but don't crash
+                        logger.debug(
+                            "bot_assessment %s invalid value: %s", k, v,
+                        )
+                        bot_assessment[k] = v[:30]  # store truncated for analysis
+                overall = ba_raw.get("overall")
+                if overall:
+                    bot_assessment["overall"] = str(overall)[:300]
+
             return VisionValidatorDecision(
                 kz=kz,
                 decision=decision,
@@ -357,6 +695,7 @@ RESPONSE FORMAT (strict JSON):
                 response_ms=elapsed_ms,
                 images_used=images_used,
                 context=context,
+                bot_assessment=bot_assessment,
             )
         except Exception as exc:
             logger.error(

@@ -23,6 +23,9 @@ CREATE TABLE IF NOT EXISTS vision_overlay_decisions (
     actual_signal_pnl REAL,                    -- P&L of the signal-driven trade
     obeyed BOOLEAN,                             -- did bot follow Claude's vote
     counterfactual_pnl REAL,                   -- what P&L if obeyed
+    bot_assessment JSONB,                       -- 2026-05-21: independent assessment
+                                                -- of whether bot read chart correctly
+                                                -- {fvg/sweep/mss}_assessment + overall
     notes TEXT
 );
 

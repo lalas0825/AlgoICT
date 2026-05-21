@@ -186,7 +186,116 @@ class TestVisionPrompt:
     def test_prompt_includes_validation_instructions(self, mock_agent):
         prompt = mock_agent._build_prompt({"kz": "london", "signal": {}}, 2)
         # Spot-check the visual validation instructions
-        assert "VALIDATE THE BOT" in prompt
         assert "FVG" in prompt
         assert "sweep" in prompt.lower()
         assert "json" in prompt.lower()
+
+    def test_prompt_includes_ict_canonical_rules(self, mock_agent):
+        """New 2026-05-21 prompt should embed ICT canonical rules."""
+        prompt = mock_agent._build_prompt({"kz": "london", "signal": {}}, 2)
+        assert "ICT CANONICAL RULES" in prompt
+        assert "SILVER BULLET ENTRY MODEL" in prompt
+        assert "NO bias alignment required" in prompt
+        assert "COUNTER-TREND IS INTENTIONAL" in prompt
+        assert "Judas" in prompt or "JUDAS" in prompt
+
+    def test_prompt_includes_visual_reference(self, mock_agent):
+        """Visual pattern reference section should be present (detailed teach mode)."""
+        prompt = mock_agent._build_prompt({"kz": "london", "signal": {}}, 2)
+        assert "VISUAL PATTERN REFERENCE" in prompt
+        assert "REAL bullish FVG" in prompt
+        assert "REAL bullish sweep" in prompt or "REAL" in prompt
+        assert "displacement" in prompt.lower()
+        assert "premium" in prompt.lower() and "discount" in prompt.lower()
+        assert "trend" in prompt.lower() and "range" in prompt.lower() and "chop" in prompt.lower()
+
+    def test_prompt_anti_skip_guidance(self, mock_agent):
+        """Prompt should explicitly tell Claude NOT to skip for HTF/score reasons."""
+        prompt = mock_agent._build_prompt({"kz": "london", "signal": {}}, 2)
+        assert "WHAT DOES NOT JUSTIFY SKIP" in prompt
+        assert "Counter-trend vs daily" in prompt
+        assert "Confluence score" in prompt
+
+    def test_prompt_requests_bot_assessment(self, mock_agent):
+        """Prompt should request the bot_assessment JSON field."""
+        prompt = mock_agent._build_prompt({"kz": "london", "signal": {}}, 2)
+        assert "bot_assessment" in prompt
+        assert "fvg_assessment" in prompt
+        assert "sweep_assessment" in prompt
+        assert "mss_assessment" in prompt
+
+
+# ─────────────────────────────────────────────────────────────────────
+# bot_assessment parsing
+# ─────────────────────────────────────────────────────────────────────
+
+class TestBotAssessmentParsing:
+
+    def test_full_bot_assessment_parsed(self, mock_agent):
+        mock_agent._client.messages.create.return_value = _mock_anthropic_response(
+            '{"decision": "fire", "size_multiplier": 1.0, "confidence": 0.7, '
+            '"rationale": "ok", '
+            '"bot_assessment": {'
+            '"fvg_assessment": "accurate", '
+            '"sweep_assessment": "questionable", '
+            '"mss_assessment": "wrong", '
+            '"overall": "Bot read FVG well but MSS claim is not visible"'
+            '}}'
+        )
+        d = mock_agent.validate_signal_with_charts(
+            {"kz": "london"}, chart_1min_b64="b64",
+        )
+        assert d.decision == "fire"
+        assert d.bot_assessment.get("fvg_assessment") == "accurate"
+        assert d.bot_assessment.get("sweep_assessment") == "questionable"
+        assert d.bot_assessment.get("mss_assessment") == "wrong"
+        assert "MSS" in d.bot_assessment.get("overall", "")
+
+    def test_missing_bot_assessment_is_empty_dict(self, mock_agent):
+        mock_agent._client.messages.create.return_value = _mock_anthropic_response(
+            '{"decision": "fire", "size_multiplier": 1.0, "confidence": 0.7, '
+            '"rationale": "ok"}'
+        )
+        d = mock_agent.validate_signal_with_charts(
+            {"kz": "london"}, chart_1min_b64="b64",
+        )
+        assert d.bot_assessment == {}
+
+    def test_telegram_message_includes_bot_assessment(self):
+        from agents.vision_validator import VisionValidatorDecision
+        d = VisionValidatorDecision(
+            kz="london", decision="fire", size_multiplier=1.0,
+            confidence=0.7, rationale="ok", model="t", response_ms=100,
+            images_used=2,
+            bot_assessment={
+                "fvg_assessment": "accurate",
+                "sweep_assessment": "wrong",
+                "mss_assessment": "accurate",
+                "overall": "Sweep level not visible on chart",
+            },
+        )
+        msg = d.as_telegram_message(shadow_mode=True)
+        assert "FVG=accurate" in msg
+        assert "sweep=wrong" in msg
+        assert "Sweep level not visible" in msg
+
+    def test_telegram_message_omits_assessment_when_empty(self):
+        from agents.vision_validator import VisionValidatorDecision
+        d = VisionValidatorDecision(
+            kz="london", decision="fire", size_multiplier=1.0,
+            confidence=0.7, rationale="ok", model="t", response_ms=100,
+            images_used=2, bot_assessment={},
+        )
+        msg = d.as_telegram_message(shadow_mode=True)
+        assert "Bot accuracy" not in msg
+
+    def test_db_record_includes_bot_assessment(self):
+        from agents.vision_validator import VisionValidatorDecision
+        d = VisionValidatorDecision(
+            kz="london", decision="skip", size_multiplier=0.0,
+            confidence=0.8, rationale="r", model="t", response_ms=100,
+            images_used=2,
+            bot_assessment={"fvg_assessment": "wrong"},
+        )
+        rec = d.as_db_record()
+        assert rec["bot_assessment"] == {"fvg_assessment": "wrong"}
