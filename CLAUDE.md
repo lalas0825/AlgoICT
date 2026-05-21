@@ -635,6 +635,19 @@ Requiere migration `0003_bot_state_overlays.sql` aplicada.
 - **SB HTF bias mandatory** — rejected (2026-05-18 A/B cut P&L 63% in Q1 2025 because counter-trend SHORTS with conf>=1 are profitable). Gate code stays behind `SB_REQUIRE_HTF_BIAS` flag (default False).
 - **`TRADE_MANAGEMENT` = "trailing"** (matches live + backtest)
 - **Silver Bullet v4 RTH Mode** — wider KZ coverage (London 01-04 / NY AM 08:30-12 / NY PM 13:30-15 CT)
+- **NY Open Buffer SHIPPED** (2026-05-19) — `NY_OPEN_BUFFER_BEFORE_MIN=10`,
+  `NY_OPEN_BUFFER_AFTER_MIN=15`, events at 07:30 + 08:30 CT. +14.7% 3-yr P&L
+  with disclosure that ~7% is generic cascade effect (placebo also helped).
+- **Camino C4 Vision-overlay AI validator** SHIPPED in SHADOW mode
+  (2026-05-20). Sends chart images to Claude vision API at each SB signal
+  fire. Captures `bot_assessment` (fvg/sweep/mss accuracy) + decision
+  (fire/skip/half). Prompt v2 (2026-05-21) embeds ICT canonical rules +
+  detailed visual pattern reference. Phase 2 active mode pending 3-5 days
+  shadow validation.
+- **Camino C2 text-only AI overlay** DISABLED (`KZ_VALIDATOR_ENABLED=False`)
+  in favor of vision. Code retained for fallback.
+- **HTF-weak conditional gate** DISABLED (`SB_HTF_WEAK_MIN_CONF=0`) in favor
+  of vision. Code retained.
 
 ### Defensive systems now live
 - **Telegram alerts on state transitions**: fire, trade_opened (fill-gated), trade_closed, trail (broker-accept-gated), kill_switch, MLL zone change, phantom/orphan cleanup, NAKED stop, hard close, VPIN extreme/normalized
@@ -996,6 +1009,112 @@ Default `BEFORE=10, AFTER=15` → blackouts at 07:20-07:45 CT AND 08:20-08:45 CT
 3. Doesn't hurt in any year (worst case ≈ placebo)
 
 **Future research**: if cascade is the dominant effect, a generalized trade-pacing rule (max 1 trade per N bars) might capture similar value with cleaner semantics. Deferred.
+
+### 2026-05-20 — Camino C4: Vision-overlay AI validator (SHIPPED in shadow mode)
+
+**Motivation**: 12 losing trades in a row (cross-day 5/19 + 5/20) raised
+the question "is the bot's strategy broken OR is the bot reading the
+chart wrong?". Text-only validators (C2, HTF-weak gate) only consume
+bot-generated context — circular trust problem: if bot detectors are
+biased, validators inherit the error.
+
+**Solution**: send actual chart images (1-min + 5-min PNG) to Claude
+vision API along with text context. Claude validates bot's annotations
+(FVG/sweep/struct) against raw candles.
+
+**Architecture**:
+- `agents/chart_renderer.py` — matplotlib chart generator
+  * `render_1min_signal_chart` — last 90 bars w/ swings, FVGs, levels,
+    proposed entry/stop/target as horizontal lines
+  * `render_5min_htf_chart` — last 60 bars 5-min for HTF context
+  * Returns base64 PNG strings
+- `agents/vision_validator.py` — Claude multimodal API integration
+  * `VisionValidatorAgent` + `VisionValidatorDecision` dataclass
+  * Sends text + 0/1/2 images via base64 to Claude vision API
+  * Same fire/skip/half decision shape as C2 + new `bot_assessment` field
+- `main.py` — signal-fire hook in SB branch
+  * `_run_vision_validator_shadow` background task (asyncio.to_thread for
+    chart render + API call, non-blocking)
+  * Mutually exclusive with C2 (vision wins when both enabled)
+- `supabase/migrations/0005_vision_overlay_decisions.sql` — table
+- JSONL fallback: `analysis/vision_overlay_shadow.jsonl` (restart-safe)
+
+**Cost**: ~$0.017/call × ~5 unique signals/day ≈ $0.10/day = $3/month
+**Latency**: 3-6 sec (chart matplotlib ~1-2s + vision API 2-4s)
+**Acceptable for SB**: limit orders pend 10-60 min anyway, bot doesn't
+wait (background task).
+
+**First-day results (2026-05-21)**:
+- 50 decisions logged: 1 FIRE, 49 SKIP
+- Problem: Claude was using "counter-trend vs HTF" as #1 skip reason
+- Effectively recreating `SB_REQUIRE_HTF_BIAS = True` gate (already
+  rejected cross-period -63% Q1 2025)
+- Root cause: prompt mentioned "Counter-trend exposure" as a check —
+  Claude latched onto direction over structure
+
+**Prompt v2 (2026-05-21, commit f81f493) — major rewrite**:
+- Embedded full ICT canonical rules from 2024 Mentorship (Silver Bullet
+  bias-agnostic doctrine, FVG validity, sweep/MSS requirements, target =
+  liquidity pool, Judas swing warning, BE warning, Premium/Discount)
+- Added detailed VISUAL PATTERN REFERENCE section with ASCII diagrams
+  showing how a REAL FVG/sweep/MSS/displacement looks vs how FAKES look
+  (taught at "3-year-old level" per user request)
+- Explicit "WHAT JUSTIFIES SKIP" vs "WHAT DOES NOT JUSTIFY SKIP" lists
+  to break Claude's HTF-bias reflex
+- New JSON output field `bot_assessment`:
+  ```
+  {
+    "fvg_assessment": "accurate" | "questionable" | "wrong" | "missing",
+    "sweep_assessment": same,
+    "mss_assessment": same,
+    "overall": "short sentence on bot's chart reading"
+  }
+  ```
+  Independent of trade decision. Lets us accumulate data on systematic
+  detector errors — original motivation for vision overlay.
+
+**Decision criteria for Phase 2 (active mode)**:
+- 3-5 days of shadow data with new prompt
+- If vision counterfactual P&L > actual P&L by margin → ship active
+- If `bot_assessment` consistently flags wrong/questionable → bot
+  detectors need fixing (separate work)
+
+**Telegram alert format** (Phase 1 shadow):
+```
+[VISION-SHADOW] AI Vision - KZ LONDON
+[FIRE] FIRE (size 1.0x, conf 0.78, images 2)
+Rationale: FVG c1-c3 gap clean with big c2 green displacement,
+sweep of PDL 28814 visible with long wick reject, target PWH
+29784 in clear sight, range regime.
+Bot accuracy: FVG=accurate | sweep=accurate | MSS=questionable
+  Bot's FVG annotation matches, minor doubt on 5-min MSS.
+(SHADOW: bot continues canonical)
+```
+
+**Config (active 2026-05-21)**:
+- `VISION_VALIDATOR_ENABLED = True`
+- `VISION_VALIDATOR_SHADOW_MODE = True`
+- `KZ_VALIDATOR_ENABLED = False` (C2 disabled — vision supersedes)
+- `SB_HTF_WEAK_MIN_CONF = 0` (HTF-weak gate disabled — vision supersedes)
+- `AI_MODEL_VISION_VALIDATOR = "claude-sonnet-4-6"`
+
+**Tests**: 23 new in test_vision_validator.py (decision dataclass, prompt
+structure, bot_assessment parsing, Telegram message). Full suite 1581/1581.
+
+### 2026-05-21 — Day audit (with vision overlay running)
+
+**Day outcome**: 12 trades, -$239 to -$389 net (P&L accounting variance
+between my sum vs health.json daily_pnl — investigated later). Vision
+shadow: 49/50 SKIP votes with old prompt. Prompt rewritten same evening
+(commit f81f493) for next-day test.
+
+Pattern observations:
+- 4 winners (T2 +$232, T4 +$171, T5 +$134, T10 +$217)
+- 8 losers (range -$61 to -$177)
+- Recovery attempts in NY PM mostly failed (T11/T12 lost despite NY AM
+  partial recovery)
+- WR cross-day (5/19 + 5/20 + 5/21) still well below 60% baseline
+- Strategy edge concern remains — fix prompted vision overlay rewrite
 
 ### 2026-05-18 — Asyncio liveness watchdog import fix
 
