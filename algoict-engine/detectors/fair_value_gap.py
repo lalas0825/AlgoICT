@@ -69,6 +69,16 @@ class FVG:
     quadrant_position: float = 0.5    # FVG midpoint position in recent dealing range
                                       # 0.0 = at range low, 1.0 = at range high, 0.5 = mid
                                       # Bull FVG should be < 0.5 (discount), bear > 0.5 (premium)
+    # 2026-05-23 — c3 close confirms displacement (NOT just wick).
+    # Bullish FVG: c3.close > c2.high (body close above c2 high — commits to upside)
+    # Bearish FVG: c3.close < c2.low  (body close below c2 low — commits to downside)
+    # ICT canonical "strict" interpretation: a wick of c3 through c2 extremum
+    # without body close is just a TEST, not confirmation. 2026-05-23 forensic
+    # audit of 3 live trades (Thu 5/21) showed 3/3 had c3 wick-only without
+    # body close = systemic permissive FVG detection. See SB_FVG_REQUIRE_C3_CONFIRMATION.
+    c3_close_beyond_c2: bool = True   # default True so legacy FVG construction
+                                       # in tests doesn't break — explicit value
+                                       # populated by detect().
 
     @property
     def midpoint(self) -> float:
@@ -178,6 +188,9 @@ class FairValueGapDetector:
             if highs[i - 1] < lows[i + 1]:
                 top = float(lows[i + 1])
                 bottom = float(highs[i - 1])
+                # c3 confirmation: c3.close must close ABOVE c2.high
+                # (body commits to upside, not just wick test). 2026-05-23.
+                c3_confirms = bool(closes[i + 1] > highs[i])
                 fvg = FVG(
                     top=top,
                     bottom=bottom,
@@ -190,6 +203,7 @@ class FairValueGapDetector:
                     stop_reference=float(lows[i - 1]),
                     displacement_ratio=_displacement_ratio(i),
                     quadrant_position=_quadrant_position(top, bottom, i),
+                    c3_close_beyond_c2=c3_confirms,
                 )
                 new_fvgs.append(fvg)
                 existing_keys.add((ts, timeframe))
@@ -198,6 +212,9 @@ class FairValueGapDetector:
             elif lows[i - 1] > highs[i + 1]:
                 top = float(lows[i - 1])
                 bottom = float(highs[i + 1])
+                # c3 confirmation: c3.close must close BELOW c2.low
+                # (body commits to downside, not just wick test). 2026-05-23.
+                c3_confirms = bool(closes[i + 1] < lows[i])
                 fvg = FVG(
                     top=top,
                     bottom=bottom,
@@ -209,6 +226,7 @@ class FairValueGapDetector:
                     stop_reference=float(highs[i - 1]),
                     displacement_ratio=_displacement_ratio(i),
                     quadrant_position=_quadrant_position(top, bottom, i),
+                    c3_close_beyond_c2=c3_confirms,
                 )
                 new_fvgs.append(fvg)
                 existing_keys.add((ts, timeframe))

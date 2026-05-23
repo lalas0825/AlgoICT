@@ -1606,7 +1606,8 @@ class SilverBulletStrategy:
         require_disp = bool(config.cfg("SB_FVG_REQUIRE_DISPLACEMENT", False))
         require_link = bool(config.cfg("SB_FVG_REQUIRE_LINKED_SWEEP", False))
         require_quad = bool(config.cfg("SB_FVG_REQUIRE_QUADRANT", False))
-        if require_disp or require_link or require_quad:
+        require_c3 = bool(config.cfg("SB_FVG_REQUIRE_C3_CONFIRMATION", False))
+        if require_disp or require_link or require_quad or require_c3:
             quality_issues = []
             # Filter 1: displacement
             min_disp = float(config.cfg("SB_FVG_MIN_DISPLACEMENT", 2.0))
@@ -1639,6 +1640,12 @@ class SilverBulletStrategy:
                     quality_issues.append(
                         f"bear_fvg_in_discount_{quad_pos:.2f}"
                     )
+            # Filter 4: c3 close confirms displacement beyond c2 extremum
+            # (NOT just wick test). 2026-05-23 — forensic audit 3/3 live
+            # trades had FVG c3.close inside c2 range = wick test only.
+            c3_confirms = bool(getattr(fvg, "c3_close_beyond_c2", True))
+            if require_c3 and not c3_confirms:
+                quality_issues.append("c3_wick_no_close_confirm")
 
             if quality_issues:
                 shadow = bool(config.cfg("SB_FVG_QUALITY_SHADOW_MODE", True))
@@ -1664,6 +1671,7 @@ class SilverBulletStrategy:
                         "fvg_displacement_ratio": disp_ratio,
                         "fvg_quadrant_position": quad_pos,
                         "sweep_linked": sweep_linked,
+                        "c3_close_beyond_c2": c3_confirms,
                         "mode": "shadow" if shadow else "active",
                     }
                     with open(jsonl_path, "a", encoding="utf-8") as f:
@@ -1674,10 +1682,10 @@ class SilverBulletStrategy:
 
                 logger.info(
                     "EVAL silver_bullet [%s]: fvg_quality_gate %s "
-                    "(issues=%s, disp=%.2f, quad=%.2f, sweep_linked=%s) %s",
+                    "(issues=%s, disp=%.2f, quad=%.2f, sweep_linked=%s, c3_conf=%s) %s",
                     _ts_hm(ts),
                     "SKIP-ACTIVE" if not shadow else "SKIP-SHADOW",
-                    ",".join(quality_issues), disp_ratio, quad_pos, sweep_linked,
+                    ",".join(quality_issues), disp_ratio, quad_pos, sweep_linked, c3_confirms,
                     "(rejecting signal)" if not shadow
                     else "(bot continues canonical)",
                 )

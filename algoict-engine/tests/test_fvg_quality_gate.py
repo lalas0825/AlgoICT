@@ -54,8 +54,10 @@ def _evaluate_fvg_quality_gate(
     require_link: bool = False,
     link_bars: int = 10,
     require_quad: bool = False,
+    require_c3: bool = False,
     fvg_disp_ratio: float = 1.0,
     fvg_quad_pos: float = 0.5,
+    fvg_c3_confirms: bool = True,
     fvg_ts: pd.Timestamp = None,
     sweep_ts: pd.Timestamp = None,
     direction: str = "long",
@@ -63,7 +65,7 @@ def _evaluate_fvg_quality_gate(
     """Mirror of the FVG quality gate decision logic (silver_bullet.py
     ~1600-1694). Returns dict with `issues` and `gate_fires` (would the
     gate produce any issues at all)."""
-    if not (require_disp or require_link or require_quad):
+    if not (require_disp or require_link or require_quad or require_c3):
         return {"issues": [], "gate_fires": False, "sweep_linked": True}
 
     quality_issues = []
@@ -96,6 +98,10 @@ def _evaluate_fvg_quality_gate(
             quality_issues.append(
                 f"bear_fvg_in_discount_{fvg_quad_pos:.2f}"
             )
+
+    # Filter 4: c3 close confirms displacement beyond c2 extremum
+    if require_c3 and not fvg_c3_confirms:
+        quality_issues.append("c3_wick_no_close_confirm")
 
     return {
         "issues": quality_issues,
@@ -549,6 +555,7 @@ class TestShadowVsActiveMode:
         assert config.cfg("SB_FVG_REQUIRE_DISPLACEMENT", False) is False
         assert config.cfg("SB_FVG_REQUIRE_LINKED_SWEEP", False) is False
         assert config.cfg("SB_FVG_REQUIRE_QUADRANT", False) is False
+        assert config.cfg("SB_FVG_REQUIRE_C3_CONFIRMATION", False) is False
 
     def test_min_displacement_default(self):
         import config
@@ -557,3 +564,179 @@ class TestShadowVsActiveMode:
     def test_sweep_lookback_default(self):
         import config
         assert int(config.cfg("SB_FVG_SWEEP_LOOKBACK_BARS", 10)) == 10
+
+
+# ───────────────────────────────────────────────────────────────────────
+# Detector-side: c3_close_beyond_c2 computation (Fix #1 - 2026-05-23)
+# ───────────────────────────────────────────────────────────────────────
+
+class TestFVGC3CloseConfirmation:
+    """Forensic-driven (Thu 5/21 audit of 3 live trades): 3/3 had c3.close
+    inside c2 range = wick test only, not body confirmation. This is the
+    most-promising filter discovered."""
+
+    def test_field_default_is_true(self):
+        """FVG dataclass default for c3_close_beyond_c2 is True
+        (backwards-compat: legacy FVGs constructed in old tests assume
+        confirmation by default)."""
+        fvg = FVG(
+            top=15.0, bottom=10.0, direction="bullish",
+            timeframe="5min", candle_index=1,
+            timestamp=pd.Timestamp("2025-03-03 09:01", tz="US/Central"),
+        )
+        assert fvg.c3_close_beyond_c2 is True
+
+    def test_bullish_c3_close_above_c2_high_is_true(self):
+        """c3 closes above c2.high → confirmed displacement (True)."""
+        # 3 bars: c1 small, c2 big bull, c3 closes above c2.high
+        highs = [10.0, 25.0, 28.0]   # c2.high=25, c3.high=28
+        lows = [8.0, 12.0, 22.0]      # c1.high=10, c3.low=22 → bullish FVG (10 < 22)
+        opens = [9.0, 12.0, 24.0]
+        closes = [9.0, 24.0, 26.0]    # c3.close=26 > c2.high=25 ✓
+        df = _make_df(highs, lows, opens=opens, closes=closes)
+        det = FairValueGapDetector()
+        fvgs = det.detect(df, "1min")
+        assert len(fvgs) == 1
+        assert fvgs[0].direction == "bullish"
+        assert fvgs[0].c3_close_beyond_c2 is True
+
+    def test_bullish_c3_wick_only_is_false(self):
+        """c3 wicks above c2.high but closes inside (Thu 5/21 trade #1
+        pattern: c2.high=29357.25, c3.close=29354.25 → 3pts inside)."""
+        # c1.high=10, c2 displacement to 25 high, c3 wicks to 28 but
+        # closes at 24 (BELOW c2.high=25). Bullish FVG geometry: c1.high
+        # (10) < c3.low (22) ✓ but c3 doesn't confirm.
+        highs = [10.0, 25.0, 28.0]
+        lows = [8.0, 12.0, 22.0]
+        opens = [9.0, 12.0, 24.0]
+        closes = [9.0, 24.0, 24.0]    # c3.close=24 < c2.high=25 ✗
+        df = _make_df(highs, lows, opens=opens, closes=closes)
+        det = FairValueGapDetector()
+        fvgs = det.detect(df, "1min")
+        assert len(fvgs) == 1
+        assert fvgs[0].direction == "bullish"
+        assert fvgs[0].c3_close_beyond_c2 is False
+
+    def test_bullish_c3_close_at_c2_high_is_false(self):
+        """Boundary: c3.close == c2.high → strict > test fails (False).
+        Body must close STRICTLY above c2.high."""
+        highs = [10.0, 25.0, 28.0]
+        lows = [8.0, 12.0, 22.0]
+        opens = [9.0, 12.0, 24.0]
+        closes = [9.0, 24.0, 25.0]    # c3.close == c2.high = 25 (no strict >)
+        df = _make_df(highs, lows, opens=opens, closes=closes)
+        det = FairValueGapDetector()
+        fvgs = det.detect(df, "1min")
+        assert len(fvgs) == 1
+        assert fvgs[0].c3_close_beyond_c2 is False
+
+    def test_bearish_c3_close_below_c2_low_is_true(self):
+        """c3 closes below c2.low → confirmed bearish displacement."""
+        # Bearish FVG: c1.low > c3.high
+        highs = [25.0, 20.0, 15.0]    # c2.high=20, c3.high=15
+        lows = [22.0, 10.0, 12.0]      # c1.low=22, c2.low=10, c3.low=12
+        opens = [24.0, 22.0, 14.0]
+        closes = [23.0, 12.0, 8.0]     # c3.close=8 < c2.low=10 ✓
+        df = _make_df(highs, lows, opens=opens, closes=closes)
+        det = FairValueGapDetector()
+        fvgs = det.detect(df, "1min")
+        assert len(fvgs) == 1
+        assert fvgs[0].direction == "bearish"
+        assert fvgs[0].c3_close_beyond_c2 is True
+
+    def test_bearish_c3_wick_only_is_false(self):
+        """c3 wicks below c2.low but closes inside (Thu 5/21 trade #3
+        pattern: c2.low=29340.25, c3.close=29347.50 → 7.25pts inside)."""
+        highs = [25.0, 20.0, 15.0]
+        lows = [22.0, 10.0, 8.0]       # c3 wicks down to 8
+        opens = [24.0, 22.0, 14.0]
+        closes = [23.0, 12.0, 12.0]    # c3.close=12 > c2.low=10 ✗
+        df = _make_df(highs, lows, opens=opens, closes=closes)
+        det = FairValueGapDetector()
+        fvgs = det.detect(df, "1min")
+        assert len(fvgs) == 1
+        assert fvgs[0].direction == "bearish"
+        assert fvgs[0].c3_close_beyond_c2 is False
+
+    def test_thu_521_trade_1_real_numbers(self):
+        """Reproduce Thu 5/21 12:11 CT trade #1 (winning LONG +$217).
+        Real OHLC: c1=29292.25/29283.25/29283.50, c2 big body open=29283.5
+        high=29357.25 low=29283.25 close=29352.25, c3 open=29352.25 high=
+        29382 low=29351.25 close=29354.25. c3.close (29354.25) < c2.high
+        (29357.25) = no confirmation."""
+        # Use exact OHLC from the audit
+        highs = [29292.25, 29357.25, 29382.00]
+        lows = [29283.25, 29283.25, 29351.25]
+        opens = [29288.50, 29283.50, 29352.25]
+        closes = [29283.50, 29352.25, 29354.25]
+        df = _make_df(highs, lows, opens=opens, closes=closes)
+        det = FairValueGapDetector()
+        fvgs = det.detect(df, "1min")
+        assert len(fvgs) == 1
+        fvg = fvgs[0]
+        assert fvg.direction == "bullish"
+        # Forensic confirmation: this real-world FVG has c3 wick only
+        assert fvg.c3_close_beyond_c2 is False
+
+    def test_thu_521_trade_3_real_numbers(self):
+        """Reproduce Thu 5/21 13:53 CT trade #3 (losing SHORT -$92).
+        Real OHLC: c1=29418.75/29412.25/29430.25, c2 huge red 29429.75/
+        29429.75/29340.25/29356.75, c3 29356.50/29385.75/29347.50/29347.50.
+        c3.close (29347.50) > c2.low (29340.25) = no bearish confirmation."""
+        highs = [29431.25, 29429.75, 29385.75]
+        lows = [29412.25, 29340.25, 29347.50]
+        opens = [29418.75, 29429.75, 29356.50]
+        closes = [29430.25, 29356.75, 29347.50]
+        df = _make_df(highs, lows, opens=opens, closes=closes)
+        det = FairValueGapDetector()
+        fvgs = det.detect(df, "1min")
+        assert len(fvgs) == 1
+        fvg = fvgs[0]
+        assert fvg.direction == "bearish"
+        # Forensic confirmation: this real-world FVG has c3 wick only
+        assert fvg.c3_close_beyond_c2 is False
+
+
+# ───────────────────────────────────────────────────────────────────────
+# Gate logic: Filter 4 — c3 close confirmation
+# ───────────────────────────────────────────────────────────────────────
+
+class TestC3ConfirmationFilter:
+
+    def test_disabled_does_not_fire(self):
+        out = _evaluate_fvg_quality_gate(
+            require_c3=False, fvg_c3_confirms=False,
+        )
+        assert not out["gate_fires"]
+
+    def test_confirmed_fvg_passes(self):
+        out = _evaluate_fvg_quality_gate(
+            require_c3=True, fvg_c3_confirms=True,
+        )
+        assert not out["gate_fires"]
+
+    def test_unconfirmed_fvg_fires(self):
+        out = _evaluate_fvg_quality_gate(
+            require_c3=True, fvg_c3_confirms=False,
+        )
+        assert out["gate_fires"]
+        assert "c3_wick_no_close_confirm" in out["issues"]
+
+    def test_combined_with_other_filters(self):
+        """All 4 filters at once — should fire all 4 issues."""
+        base = pd.Timestamp("2025-03-03 09:00", tz="US/Central")
+        out = _evaluate_fvg_quality_gate(
+            require_disp=True, min_disp=2.0,
+            require_link=True, link_bars=10,
+            require_quad=True,
+            require_c3=True,
+            fvg_disp_ratio=0.5,
+            fvg_ts=base + pd.Timedelta(minutes=60),
+            sweep_ts=base,
+            fvg_quad_pos=0.9,
+            fvg_c3_confirms=False,
+            direction="long",
+        )
+        assert out["gate_fires"]
+        assert len(out["issues"]) == 4
+        assert "c3_wick_no_close_confirm" in out["issues"]

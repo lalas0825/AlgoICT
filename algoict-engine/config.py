@@ -167,6 +167,12 @@ SB_FVG_MIN_DISPLACEMENT = 2.0           # c2_body / avg_prior_K_bodies. ICT cano
 SB_FVG_REQUIRE_LINKED_SWEEP = False     # require sweep within N bars BEFORE FVG ts
 SB_FVG_SWEEP_LOOKBACK_BARS = 10         # bars to look back for linked sweep
 SB_FVG_REQUIRE_QUADRANT = False         # bull FVG must be in lower half of dealing range
+# 2026-05-23 — C3 CLOSE CONFIRMATION. Most promising filter — forensic audit of
+# 3 live trades (Thu 5/21) showed 3/3 had FVG c3 wick-only without body close
+# beyond c2 extremum. Bullish FVG requires c3.close > c2.high; bearish requires
+# c3.close < c2.low. Default OFF for now (ship-safe); validate via dedicated
+# backtest before flipping to active.
+SB_FVG_REQUIRE_C3_CONFIRMATION = False  # if True, reject FVG where c3 didn't close beyond c2
 SB_FVG_QUALITY_SHADOW_MODE = True       # True = log would-skip but don't act
 
 # Haiku reserved for simple tasks (enable when SDK lists it)
