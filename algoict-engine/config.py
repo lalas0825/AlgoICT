@@ -147,6 +147,28 @@ SB_HTF_WEAK_MIN_CONF = 0            # DISABLED 2026-05-20 — replaced by vision
 SB_HTF_WEAK_REQUIRES = "either"     # "either" | "both" (only used if MIN_CONF > 0)
 SB_HTF_WEAK_GATE_SHADOW_MODE = True # legacy
 
+# 2026-05-22 — FVG QUALITY FILTERS (post-week-audit, vision-flagged issue)
+# Vision overlay flagged FVG=questionable in 6/6 decisions on 2026-05-22.
+# Week WR dropped to 29.3% vs backtest 62-65%. Hypothesis: FVG detector
+# is permissive — emits FVG on any 3-candle gap without validating ICT
+# canonical requirements (displacement on c2, sweep linkage, quadrant
+# placement). Bot fires on noise gaps in chop regimes.
+#
+# Three orthogonal filters, each behind a flag (default OFF = shadow log
+# only, do not act on signal). When MIN_DISPLACEMENT > 0 or LINKED_SWEEP
+# is True or REQUIRE_QUADRANT is True, the gate runs.
+#
+# In SHADOW mode (SB_FVG_QUALITY_SHADOW_MODE=True), filter logs would-
+# skip to analysis/fvg_quality_shadow.jsonl. Bot continues canonical.
+# In ACTIVE mode (False), filter rejects the signal (return None).
+
+SB_FVG_REQUIRE_DISPLACEMENT = False     # if True, gate fires on displacement < threshold
+SB_FVG_MIN_DISPLACEMENT = 2.0           # c2_body / avg_prior_K_bodies. ICT canonical: 2-3
+SB_FVG_REQUIRE_LINKED_SWEEP = False     # require sweep within N bars BEFORE FVG ts
+SB_FVG_SWEEP_LOOKBACK_BARS = 10         # bars to look back for linked sweep
+SB_FVG_REQUIRE_QUADRANT = False         # bull FVG must be in lower half of dealing range
+SB_FVG_QUALITY_SHADOW_MODE = True       # True = log would-skip but don't act
+
 # Haiku reserved for simple tasks (enable when SDK lists it)
 # AI_MODEL_SIMPLE = "claude-haiku-4-5-20251001"
 

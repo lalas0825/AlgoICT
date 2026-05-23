@@ -1597,6 +1597,102 @@ class SilverBulletStrategy:
                     }
                     return None
 
+        # 2026-05-22 — FVG QUALITY GATE (3 filters, default shadow mode)
+        # Post week-audit + vision overlay flagging FVG=questionable on 6/6.
+        # Detector emits FVGs on any 3-candle gap; ICT canonical requires
+        # displacement + sweep linkage + quadrant placement. Gate runs ONLY
+        # when at least one filter flag is enabled. Active mode rejects
+        # signal; shadow mode logs JSONL + continues canonical.
+        require_disp = bool(config.cfg("SB_FVG_REQUIRE_DISPLACEMENT", False))
+        require_link = bool(config.cfg("SB_FVG_REQUIRE_LINKED_SWEEP", False))
+        require_quad = bool(config.cfg("SB_FVG_REQUIRE_QUADRANT", False))
+        if require_disp or require_link or require_quad:
+            quality_issues = []
+            # Filter 1: displacement
+            min_disp = float(config.cfg("SB_FVG_MIN_DISPLACEMENT", 2.0))
+            disp_ratio = float(getattr(fvg, "displacement_ratio", 1.0))
+            if require_disp and disp_ratio < min_disp:
+                quality_issues.append(
+                    f"low_displacement_{disp_ratio:.2f}<{min_disp:.1f}"
+                )
+            # Filter 2: sweep linkage (sweep within N bars BEFORE FVG ts)
+            link_bars = int(config.cfg("SB_FVG_SWEEP_LOOKBACK_BARS", 10))
+            sweep_linked = False
+            try:
+                sweep_ts = getattr(sweep, "swept_at", None) or getattr(sweep, "timestamp", None)
+                if sweep_ts is not None and fvg.timestamp is not None:
+                    delta_min = (fvg.timestamp - sweep_ts).total_seconds() / 60.0
+                    if 0 <= delta_min <= link_bars:
+                        sweep_linked = True
+            except Exception:
+                sweep_linked = True  # defensive: treat as linked if ts unavailable
+            if require_link and not sweep_linked:
+                quality_issues.append("no_sweep_linkage")
+            # Filter 3: quadrant placement
+            quad_pos = float(getattr(fvg, "quadrant_position", 0.5))
+            if require_quad:
+                if direction == "long" and quad_pos > 0.5:
+                    quality_issues.append(
+                        f"bull_fvg_in_premium_{quad_pos:.2f}"
+                    )
+                elif direction == "short" and quad_pos < 0.5:
+                    quality_issues.append(
+                        f"bear_fvg_in_discount_{quad_pos:.2f}"
+                    )
+
+            if quality_issues:
+                shadow = bool(config.cfg("SB_FVG_QUALITY_SHADOW_MODE", True))
+                # Build record
+                try:
+                    import json as _json
+                    from pathlib import Path as _Path
+                    jsonl_path = (
+                        _Path(__file__).resolve().parent.parent
+                        / "analysis"
+                        / "fvg_quality_shadow.jsonl"
+                    )
+                    jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+                    rec = {
+                        "ts": str(ts),
+                        "kz": active_zone,
+                        "direction": direction,
+                        "entry": float(entry_price),
+                        "stop": float(stop_price),
+                        "target": float(target_price),
+                        "score": int(sb_score),
+                        "issues": quality_issues,
+                        "fvg_displacement_ratio": disp_ratio,
+                        "fvg_quadrant_position": quad_pos,
+                        "sweep_linked": sweep_linked,
+                        "mode": "shadow" if shadow else "active",
+                    }
+                    with open(jsonl_path, "a", encoding="utf-8") as f:
+                        _json.dump(rec, f, default=str)
+                        f.write("\n")
+                except Exception as exc:
+                    logger.debug("fvg_quality JSONL append failed: %s", exc)
+
+                logger.info(
+                    "EVAL silver_bullet [%s]: fvg_quality_gate %s "
+                    "(issues=%s, disp=%.2f, quad=%.2f, sweep_linked=%s) %s",
+                    _ts_hm(ts),
+                    "SKIP-ACTIVE" if not shadow else "SKIP-SHADOW",
+                    ",".join(quality_issues), disp_ratio, quad_pos, sweep_linked,
+                    "(rejecting signal)" if not shadow
+                    else "(bot continues canonical)",
+                )
+
+                if not shadow:
+                    self._last_evaluated_bar_ts = ts
+                    self.last_rejection = {
+                        "reason": "fvg_quality_gate",
+                        "is_near_miss": True,
+                        "kz": active_zone,
+                        "ts": ts,
+                        "issues": quality_issues,
+                    }
+                    return None
+
         signal = Signal(
             strategy="silver_bullet",
             symbol=self.SYMBOL,

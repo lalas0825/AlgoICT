@@ -61,6 +61,14 @@ class FVG:
     stop_reference: float = float("nan")
     mitigated: bool = False
     is_ifvg: bool = False  # True when this is an Inversed FVG
+    # 2026-05-22 — ICT canonical quality metrics for filtering.
+    # Detector always computes these; silver_bullet.py optionally filters
+    # on them via SB_FVG_REQUIRE_* config flags (default OFF).
+    displacement_ratio: float = 1.0  # c2_body / avg_body_of_prior_K_candles
+                                      # ICT canonical: should be >= 2-3 for valid FVG
+    quadrant_position: float = 0.5    # FVG midpoint position in recent dealing range
+                                      # 0.0 = at range low, 1.0 = at range high, 0.5 = mid
+                                      # Bull FVG should be < 0.5 (discount), bear > 0.5 (premium)
 
     @property
     def midpoint(self) -> float:
@@ -128,7 +136,38 @@ class FairValueGapDetector:
 
         highs = candles["high"].values
         lows = candles["low"].values
+        opens = candles["open"].values
+        closes = candles["close"].values
         timestamps = candles.index
+        n = len(candles)
+
+        # Lookback windows for quality metrics (constants for now)
+        DISPLACEMENT_LOOKBACK = 20  # avg body of prior 20 candles
+        QUADRANT_LOOKBACK = 60      # recent dealing range over 60 candles
+
+        def _displacement_ratio(i):
+            """c2 body / avg body of prior K candles."""
+            c2_body = abs(closes[i] - opens[i])
+            lookback_start = max(0, i - DISPLACEMENT_LOOKBACK)
+            prior = [abs(closes[j] - opens[j]) for j in range(lookback_start, i)]
+            if not prior:
+                return 1.0  # no comparison sample
+            avg_body = sum(prior) / len(prior)
+            if avg_body <= 0.01:  # avoid divide-by-zero on flat sample
+                return 1.0
+            return c2_body / avg_body
+
+        def _quadrant_position(top, bottom, i):
+            """FVG midpoint position in recent dealing range. 0=low, 1=high."""
+            lookback_start = max(0, i - QUADRANT_LOOKBACK)
+            range_window_h = max(highs[lookback_start:i + 1])
+            range_window_l = min(lows[lookback_start:i + 1])
+            range_size = range_window_h - range_window_l
+            if range_size <= 0:
+                return 0.5
+            fvg_mid = (top + bottom) / 2
+            pos = (fvg_mid - range_window_l) / range_size
+            return max(0.0, min(1.0, pos))
 
         for i in range(1, len(candles) - 1):
             ts = timestamps[i]
@@ -137,9 +176,11 @@ class FairValueGapDetector:
 
             # ── Bullish FVG ──────────────────────────────────────────
             if highs[i - 1] < lows[i + 1]:
+                top = float(lows[i + 1])
+                bottom = float(highs[i - 1])
                 fvg = FVG(
-                    top=float(lows[i + 1]),
-                    bottom=float(highs[i - 1]),
+                    top=top,
+                    bottom=bottom,
                     direction="bullish",
                     timeframe=timeframe,
                     candle_index=i,
@@ -147,21 +188,27 @@ class FairValueGapDetector:
                     # Candle 1 (pre-gap) LOW is the stop reference — a tick
                     # below this is where ICT anchors the Silver Bullet stop.
                     stop_reference=float(lows[i - 1]),
+                    displacement_ratio=_displacement_ratio(i),
+                    quadrant_position=_quadrant_position(top, bottom, i),
                 )
                 new_fvgs.append(fvg)
                 existing_keys.add((ts, timeframe))
 
             # ── Bearish FVG ──────────────────────────────────────────
             elif lows[i - 1] > highs[i + 1]:
+                top = float(lows[i - 1])
+                bottom = float(highs[i + 1])
                 fvg = FVG(
-                    top=float(lows[i - 1]),
-                    bottom=float(highs[i + 1]),
+                    top=top,
+                    bottom=bottom,
                     direction="bearish",
                     timeframe=timeframe,
                     candle_index=i,
                     timestamp=ts,
                     # Candle 1 HIGH — one tick above = short stop per ICT.
                     stop_reference=float(highs[i - 1]),
+                    displacement_ratio=_displacement_ratio(i),
+                    quadrant_position=_quadrant_position(top, bottom, i),
                 )
                 new_fvgs.append(fvg)
                 existing_keys.add((ts, timeframe))
