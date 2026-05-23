@@ -626,6 +626,7 @@ Requiere migration `0003_bot_state_overlays.sql` aplicada.
 ### A/B tests rejected (features stay OFF)
 - **equal_levels_refresh** (Q1 2024) — flat-to-neg (−$1,283). Kept OFF.
 - **Risk ladder + London 2L cap** (Q1 2024) — cuts P&L 82%. London cap would kill the KZ producing 64.9% of 7-year P&L. Rejected.
+- **FVG quality gate trio** (Q1 2025 Phase 1 EDA, 2026-05-22) — 3 ICT-canonical filters (displacement ≥2.0× avg body, sweep linkage within 10 bars, premium/discount quadrant) tested individually + combined. **ALL throw-out-winners.** Best variant (quadrant alone) cut 50% trades, +13pp WR, but P&L still fell 28%. Worst (sweep linkage) produced 7 trades in 3 months. The "noise FVGs" the filters target are net-profitable because structural gates downstream (sweep, 1m FVG, 5m MSS/BOS, KZ, framework ≥10pts) already filter effectively. Detector still computes `displacement_ratio` + `quadrant_position` on every FVG (zero perf cost, useful for vision-validator counterfactual). Phase 2 cross-period NOT run — Q1 2025 deltas too brutally negative to justify compute. Code stays behind `SB_FVG_REQUIRE_*` flags (default OFF). See `analysis/fvg_quality_phase1_q1_2025.py`. **Insight**: this REINFORCES the SB design — bias-agnostic, FVG permissive, downstream gates strict. Don't double-filter at the FVG level.
 
 ### Current feature decisions
 - **`RISK_LADDER_ENABLED` = False** (infrastructure in place, ready if needed)

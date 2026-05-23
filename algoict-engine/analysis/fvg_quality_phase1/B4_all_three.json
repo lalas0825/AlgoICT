@@ -1,0 +1,35 @@
+{
+  "strategy": "DynamicBiasStrategy",
+  "total_trades": 1,
+  "wins": 1,
+  "losses": 0,
+  "win_rate": 1.0,
+  "total_pnl": 61.43999999999869,
+  "max_drawdown_dollars": 0.0,
+  "peak_equity": 61.43999999999869,
+  "combine_resets": 0,
+  "combine_passes": 0,
+  "combine_fails": 0,
+  "combine_pass_rate": 0.0,
+  "combine_reset_events": [],
+  "start_date": "2025-01-01 08:30:00-06:00",
+  "end_date": "2025-03-31 15:00:00-05:00",
+  "trades": [
+    {
+      "strategy": "silver_bullet",
+      "symbol": "MNQ",
+      "direction": "long",
+      "entry_time": "2025-02-20 13:30:00-06:00",
+      "exit_time": "2025-02-20 14:46:00-06:00",
+      "entry_price": 2756.65,
+      "stop_price": 2761.77,
+      "target_price": 2927.32,
+      "exit_price": 2761.77,
+      "contracts": 6,
+      "pnl": 61.43999999999869,
+      "reason": "stop",
+      "confluence_score": 0,
+      "kill_zone": "ny_pm"
+    }
+  ]
+}
