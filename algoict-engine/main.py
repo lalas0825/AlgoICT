@@ -608,34 +608,47 @@ def _init_components(
     detectors = _init_detectors(risk)
 
     # ── HTF bias closure (strategies call htf_bias_fn(price)) ─────────
+    # 2026-05-23 — PRIORITY: use authoritative daily/weekly bars fetched
+    # directly from broker (state_ref["htf_daily_df"] / ["htf_weekly_df"]).
+    # FALLBACK: aggregate 1-min bars locally (the historical 1-min API
+    # returns only ~65% of full session coverage, corrupting daily H/L
+    # and the swing-structure bias — see parity-replay audit 2026-05-23).
     def _make_htf_bias_fn(tf_mgr: TimeframeManager, state_ref: dict) -> Callable:
         def _fn(price: float):
+            from timeframes.htf_bias import BiasResult
+            neutral = BiasResult(
+                direction="neutral",
+                premium_discount="",
+                htf_levels={},
+                confidence="low",
+                weekly_bias="neutral",
+                daily_bias="neutral",
+            )
+
+            # PRIORITY 1: direct broker daily/weekly cache
+            htf_daily = state_ref.get("htf_daily_df")
+            htf_weekly = state_ref.get("htf_weekly_df")
+            if htf_daily is not None and htf_weekly is not None \
+                    and not htf_daily.empty and not htf_weekly.empty:
+                try:
+                    return htf_bias_det.determine_bias(htf_daily, htf_weekly, price)
+                except Exception as exc:
+                    logger.warning(
+                        "htf_bias_fn (direct daily/weekly) failed: %s — "
+                        "falling back to 1-min aggregation", exc,
+                    )
+
+            # FALLBACK: aggregate 1-min bars (unreliable, see comment above)
             bars = state_ref.get("bars_1min")
             if bars is None or len(bars) < 50:
-                from timeframes.htf_bias import BiasResult
-                return BiasResult(
-                    direction="neutral",
-                    premium_discount="",
-                    htf_levels={},
-                    confidence="low",
-                    weekly_bias="neutral",
-                    daily_bias="neutral",
-                )
+                return neutral
             try:
                 df_daily = tf_mgr.aggregate(bars, "D")
                 df_weekly = tf_mgr.aggregate(bars, "W")
                 return htf_bias_det.determine_bias(df_daily, df_weekly, price)
             except Exception as exc:
-                logger.warning("htf_bias_fn failed: %s", exc)
-                from timeframes.htf_bias import BiasResult
-                return BiasResult(
-                    direction="neutral",
-                    premium_discount="",
-                    htf_levels={},
-                    confidence="low",
-                    weekly_bias="neutral",
-                    daily_bias="neutral",
-                )
+                logger.warning("htf_bias_fn (aggregation fallback) failed: %s", exc)
+                return neutral
         return _fn
 
     # state_ref is populated later in run(); for now pass an empty dict
@@ -1147,6 +1160,153 @@ async def _warmup_historical_bars(
         asyncio.create_task(_backfill())
 
     return len(state.bars_1min)
+
+
+# ---------------------------------------------------------------------------
+# 2026-05-23 — HTF bias direct fetch (replaces unreliable 1-min aggregation)
+# ---------------------------------------------------------------------------
+#
+# Root cause of week 2026-05-18 to 22 live divergence (parity replay analysis):
+# the broker's 1-min historical API returns only ~893 bars/day vs ~1380 in a
+# full 23h futures session = ~35% of ETH missing. When `tf_manager.aggregate`
+# rolls these into daily/weekly bars, the resulting H/L are corrupted (overnight
+# session contribution missing). `HTFBiasDetector._swing_bias` then produces
+# the WRONG bias (live was 56% bullish in a week backtest read as 84% bearish).
+#
+# Fix: fetch DAILY (unit=4) and WEEKLY (unit=5) bars directly from the broker.
+# These come pre-aggregated by the exchange / data vendor with FULL session
+# coverage. Then feed them directly into HTFBiasDetector instead of running
+# 1-min aggregation locally.
+#
+# The 1-min aggregation path remains as fallback for any broker that doesn't
+# implement unit=4/5 (silently degrades, no user impact).
+
+HTF_DAILY_LOOKBACK_DAYS = 90
+HTF_WEEKLY_LOOKBACK_DAYS = 180
+HTF_REFRESH_INTERVAL_S = 3600  # 1 hour — daily bars only change at 18:00 CT
+
+
+async def _fetch_htf_bars(
+    components: "Components",
+    state: "EngineState",
+) -> tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+    """Fetch authoritative daily + weekly bars from broker.
+
+    Returns (daily_df, weekly_df) in the same shape that
+    `TimeframeManager.aggregate(_, "D"/"W")` would produce:
+      - DatetimeIndex in US/Central
+      - Columns: open, high, low, close, volume
+      - Sorted oldest → newest
+
+    Returns (None, None) on any broker failure — caller falls back to the
+    1-min aggregation path.
+    """
+    broker = components.broker
+    if not hasattr(broker, "get_historical_bars") or not hasattr(broker, "lookup_contract"):
+        logger.warning("HTF fetch: broker missing get_historical_bars/lookup_contract")
+        return None, None
+    try:
+        contract = await broker.lookup_contract(state.symbol, live=False)
+        if contract is None:
+            logger.warning("HTF fetch: contract %s not found", state.symbol)
+            return None, None
+        end = datetime.now(timezone.utc)
+        daily_start = end - timedelta(days=HTF_DAILY_LOOKBACK_DAYS)
+        weekly_start = end - timedelta(days=HTF_WEEKLY_LOOKBACK_DAYS)
+
+        # Unit 4 = Day. ~100 daily bars covers 90 days incl. weekends.
+        daily_raw = await broker.get_historical_bars(
+            contract_id=contract["id"],
+            start=daily_start, end=end,
+            unit=4, unit_number=1, limit=100,
+        )
+        # Unit 5 = Week. ~30 weekly bars covers 6 months.
+        weekly_raw = await broker.get_historical_bars(
+            contract_id=contract["id"],
+            start=weekly_start, end=end,
+            unit=5, unit_number=1, limit=30,
+        )
+    except Exception as exc:
+        logger.warning("HTF bars fetch failed: %s", exc)
+        return None, None
+
+    if not daily_raw or not weekly_raw:
+        logger.warning(
+            "HTF bars: empty response (daily=%d, weekly=%d) — falling back to aggregation",
+            len(daily_raw or []), len(weekly_raw or []),
+        )
+        return None, None
+
+    daily_df = _bars_to_df(daily_raw)
+    weekly_df = _bars_to_df(weekly_raw)
+
+    if daily_df.empty or weekly_df.empty:
+        return None, None
+
+    logger.info(
+        "HTF bars fetched: daily=%d (%s -> %s) weekly=%d (%s -> %s)",
+        len(daily_df), daily_df.index[0], daily_df.index[-1],
+        len(weekly_df), weekly_df.index[0], weekly_df.index[-1],
+    )
+    return daily_df, weekly_df
+
+
+def _bars_to_df(raw_bars: list[dict]) -> pd.DataFrame:
+    """Convert broker bar dicts to a DataFrame matching tf_manager output.
+
+    Each bar dict has: symbol, timestamp (pd.Timestamp UTC), open, high, low,
+    close, volume. We convert timestamps to US/Central, sort, dedup by index.
+    """
+    rows = []
+    for bar in raw_bars:
+        ts = bar.get("timestamp")
+        if ts is None:
+            continue
+        if not isinstance(ts, pd.Timestamp):
+            ts = pd.Timestamp(ts)
+        if ts.tz is None:
+            ts = ts.tz_localize("UTC")
+        rows.append({
+            "timestamp": ts.tz_convert("US/Central"),
+            "open": float(bar.get("open", 0.0)),
+            "high": float(bar.get("high", 0.0)),
+            "low": float(bar.get("low", 0.0)),
+            "close": float(bar.get("close", 0.0)),
+            "volume": int(bar.get("volume", 0) or 0),
+        })
+    if not rows:
+        return pd.DataFrame(
+            columns=["open", "high", "low", "close", "volume"],
+        )
+    df = pd.DataFrame(rows).set_index("timestamp").sort_index()
+    # Dedup by index (broker can return overlapping)
+    df = df[~df.index.duplicated(keep="last")]
+    return df
+
+
+async def _refresh_htf_bars_loop(components: "Components", state: "EngineState") -> None:
+    """Background task — refresh HTF bars every HTF_REFRESH_INTERVAL_S.
+
+    Daily bars roll at 18:00 CT session boundary; weekly at Monday 18:00 CT.
+    Refreshing every 1 hour is overkill but cheap (2 API calls/hour) and
+    guarantees the bias picks up the new daily bar within an hour of close.
+    """
+    while True:
+        try:
+            await asyncio.sleep(HTF_REFRESH_INTERVAL_S)
+        except asyncio.CancelledError:
+            break
+        try:
+            daily_df, weekly_df = await _fetch_htf_bars(components, state)
+            if daily_df is not None and weekly_df is not None:
+                components._state_ref["htf_daily_df"] = daily_df  # type: ignore[attr-defined]
+                components._state_ref["htf_weekly_df"] = weekly_df  # type: ignore[attr-defined]
+                logger.debug(
+                    "HTF refresh ok: %d daily, %d weekly bars",
+                    len(daily_df), len(weekly_df),
+                )
+        except Exception as exc:
+            logger.warning("HTF refresh loop: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -2103,6 +2263,8 @@ async def _on_broker_fill(
         opened_at = pos.get("opened_at")
         current_stop = pos.get("current_stop_price", float(signal.stop_price))
         stop_points = abs(current_stop - entry_price)
+        signal_stop_points = abs(float(signal.stop_price) - entry_price)
+        stop_was_trailed = abs(current_stop - float(signal.stop_price)) > 0.01
 
         if direction == "long":
             pnl = (fill_price - entry_price) * contracts * config.MNQ_POINT_VALUE
@@ -2127,6 +2289,8 @@ async def _on_broker_fill(
             ),
             "kill_zone": getattr(signal, "kill_zone", ""),
             "stop_points": stop_points,
+            "signal_stop_points": signal_stop_points,
+            "stop_was_trailed": stop_was_trailed,
             "contracts": contracts,
             "reason": reason,
         }
@@ -2820,6 +2984,8 @@ async def _reconcile_positions(components: Components, state: EngineState) -> No
                 "ict_concepts": [],
                 "kill_zone": "ghost",
                 "stop_points": abs(entry_price - exit_price),
+                "signal_stop_points": None,
+                "stop_was_trailed": None,
                 "contracts": contracts,
                 "reason": "ghost_recovered_from_broker",
             }
@@ -3067,6 +3233,12 @@ async def _reconcile_positions(components: Components, state: EngineState) -> No
                         "current_stop_price", float(signal.stop_price),
                     )
                     stop_points = abs(current_stop - fallback_entry_price)
+                    signal_stop_points = abs(
+                        float(signal.stop_price) - fallback_entry_price
+                    )
+                    stop_was_trailed = (
+                        abs(current_stop - float(signal.stop_price)) > 0.01
+                    )
                     # Determine reason: stop fill, target fill, or external.
                     if close_fill is None:
                         reason = "broker_close_no_fill_match"
@@ -3093,6 +3265,8 @@ async def _reconcile_positions(components: Components, state: EngineState) -> No
                         ),
                         "kill_zone": sig_kz,
                         "stop_points": stop_points,
+                        "signal_stop_points": signal_stop_points,
+                        "stop_was_trailed": stop_was_trailed,
                         "contracts": contracts,
                         "reason": f"recovered:{reason}",
                     }
@@ -4583,60 +4757,19 @@ async def _on_new_bar(
                 except Exception:
                     pass
 
-                # ── 2026-05-20 AI Overlay validators (shadow mode) ──────
-                # Per-signal validation. DEDUP key on (direction, entry,
-                # stop, target) so same setup re-firing on each bar
-                # doesn't trigger duplicate Claude calls.
-                #
-                # Priority: vision-overlay (C4) > text-only (C2). If both
-                # enabled, vision wins. C2 left enableable for fallback.
-                try:
-                    setup_key = (
-                        str(getattr(signal, "direction", "?")),
-                        float(getattr(signal, "entry_price", 0) or 0),
-                        float(getattr(signal, "stop_price", 0) or 0),
-                        float(getattr(signal, "target_price", 0) or 0),
-                    )
-                    if setup_key != state.last_validator_setup_key:
-                        state.last_validator_setup_key = setup_key
-                        sb_kz = getattr(signal, "kill_zone", None) or "unknown"
-                        # Camino C4: vision-overlay (preferred)
-                        if (
-                            components.vision_validator is not None
-                            and config.cfg("VISION_VALIDATOR_ENABLED", False)
-                        ):
-                            asyncio.create_task(
-                                _run_vision_validator_shadow(
-                                    components, state, ts, bars, sb_kz, signal,
-                                )
-                            )
-                        # Camino C2: text-only (fallback, only when vision disabled)
-                        elif (
-                            components.kz_validator is not None
-                            and config.cfg("KZ_VALIDATOR_ENABLED", False)
-                        ):
-                            asyncio.create_task(
-                                _run_kz_validator_shadow(
-                                    components, state, ts, bars, sb_kz,
-                                    signal=signal,
-                                )
-                            )
-                except Exception as exc:
-                    logger.debug(
-                        "AI Overlay signal validator launch failed: %s",
-                        exc,
-                    )
-
                 # SINGLE-POSITION GUARD (2026-04-23 fix): see NY AM branch.
                 # 2026-05-13 Day 8 audit: extended with opportunity-replace
                 # so we don't sit blocked for hours on a limit that won't
                 # fill while fresher setups (closer to price OR opposite
                 # direction) go by suppressed.
+                executed_this_eval = False
                 if state.open_positions:
                     replaced = await _try_opportunity_replace(
                         signal, components, state,
                     )
-                    if not replaced:
+                    if replaced:
+                        executed_this_eval = True
+                    else:
                         logger.info(
                             "Silver Bullet signal suppressed: already %d open "
                             "position(s) (single-position rule)",
@@ -4651,6 +4784,7 @@ async def _on_new_bar(
                             state.pending_signal_ts = signal.timestamp
                             try:
                                 await _execute_signal(signal, components, state)
+                                executed_this_eval = True
                                 try:
                                     state.kz_stats["trades_taken"] += 1
                                 except Exception:
@@ -4659,6 +4793,62 @@ async def _on_new_bar(
                                 state.pending_signal_ts = None
                     else:
                         logger.info("Silver Bullet signal suppressed: %s", reason)
+
+                # ── 2026-05-20 AI Overlay validators (shadow mode) ──────
+                # Per-signal validation. DEDUP key on (direction, entry,
+                # stop, target) so same setup re-firing doesn't trigger
+                # duplicate Claude calls.
+                #
+                # 2026-05-21 fix — moved AFTER guard checks (single-position,
+                # cooldown, risk) and gated on `executed_this_eval`. Before
+                # this fix the validator fired on EVERY signal=FIRE eval,
+                # even those suppressed by guards — once a position was
+                # open the SB strategy kept producing the same SHORT family
+                # with slightly-different entries each bar (29350 → 29281
+                # → 29246 → ...), which bypassed the entry-based dedup
+                # and spammed Telegram + the Claude API with 20+ ignored
+                # validations per KZ. Now: validator fires only on signals
+                # the bot actually placed/replaced.
+                #
+                # Priority: vision-overlay (C4) > text-only (C2). If both
+                # enabled, vision wins. C2 left enableable for fallback.
+                if executed_this_eval:
+                    try:
+                        setup_key = (
+                            str(getattr(signal, "direction", "?")),
+                            float(getattr(signal, "entry_price", 0) or 0),
+                            float(getattr(signal, "stop_price", 0) or 0),
+                            float(getattr(signal, "target_price", 0) or 0),
+                        )
+                        if setup_key != state.last_validator_setup_key:
+                            state.last_validator_setup_key = setup_key
+                            sb_kz = getattr(signal, "kill_zone", None) or "unknown"
+                            # Camino C4: vision-overlay (preferred)
+                            if (
+                                components.vision_validator is not None
+                                and config.cfg("VISION_VALIDATOR_ENABLED", False)
+                            ):
+                                asyncio.create_task(
+                                    _run_vision_validator_shadow(
+                                        components, state, ts, bars, sb_kz, signal,
+                                    )
+                                )
+                            # Camino C2: text-only (fallback, only when vision disabled)
+                            elif (
+                                components.kz_validator is not None
+                                and config.cfg("KZ_VALIDATOR_ENABLED", False)
+                            ):
+                                asyncio.create_task(
+                                    _run_kz_validator_shadow(
+                                        components, state, ts, bars, sb_kz,
+                                        signal=signal,
+                                    )
+                                )
+                    except Exception as exc:
+                        logger.debug(
+                            "AI Overlay signal validator launch failed: %s",
+                            exc,
+                        )
             else:
                 # evaluate() returned None — inspect the rejection record set
                 # by the strategy. Only surface near-miss rejects (FVG present
@@ -4923,6 +5113,8 @@ async def _flatten_all(
             pnl = (entry_price - exit_price) * contracts * config.MNQ_POINT_VALUE
         current_stop = cap["current_stop_price"] if cap["current_stop_price"] is not None else float(signal.stop_price)
         stop_points = abs(current_stop - entry_price)
+        signal_stop_points = abs(float(signal.stop_price) - entry_price)
+        stop_was_trailed = abs(current_stop - float(signal.stop_price)) > 0.01
 
         trade_dict = {
             "id": cap["pos_key"],
@@ -4938,6 +5130,8 @@ async def _flatten_all(
             "ict_concepts": list(getattr(signal, "confluence_breakdown", {}).keys()),
             "kill_zone": getattr(signal, "kill_zone", ""),
             "stop_points": stop_points,
+            "signal_stop_points": signal_stop_points,
+            "stop_was_trailed": stop_was_trailed,
             "contracts": contracts,
             "reason": f"flatten:{reason}",
             "exit_price_is_proxy": exit_source != "broker_fill",
@@ -5719,6 +5913,42 @@ async def run(
             _replay_warmup_session_transitions(components, state)
         except Exception as exc:
             logger.warning("Session-tracker warmup replay failed: %s", exc)
+
+        # 2026-05-23 — Direct HTF fetch (Option C): pull authoritative
+        # daily + weekly bars from broker instead of relying on the
+        # broker's incomplete 1-min historical (only ~65% session coverage,
+        # corrupts daily H/L). One-shot here, then periodic refresh task
+        # below keeps them fresh. Fallback to 1-min aggregation if fetch
+        # fails — bot stays functional, just degrades to old behavior.
+        try:
+            htf_daily_df, htf_weekly_df = await _fetch_htf_bars(components, state)
+            if htf_daily_df is not None and htf_weekly_df is not None:
+                components._state_ref["htf_daily_df"] = htf_daily_df  # type: ignore[attr-defined]
+                components._state_ref["htf_weekly_df"] = htf_weekly_df  # type: ignore[attr-defined]
+                logger.info(
+                    "HTF direct fetch ok: %d daily + %d weekly bars cached",
+                    len(htf_daily_df), len(htf_weekly_df),
+                )
+            else:
+                logger.warning(
+                    "HTF direct fetch failed — HTF bias will fall back to "
+                    "1-min aggregation (less accurate, see Option C audit)"
+                )
+        except Exception as exc:
+            logger.warning("HTF direct fetch raised: %s", exc)
+
+        # Schedule periodic refresh — daily bars roll at 18:00 CT; weekly
+        # at Mon 18:00 CT. Refreshing hourly is cheap (2 API calls/h) and
+        # picks up the new daily within 1h of close. Cancellation handled
+        # via asyncio.CancelledError inside the loop.
+        try:
+            asyncio.create_task(_refresh_htf_bars_loop(components, state))
+            logger.info(
+                "HTF refresh loop scheduled (interval=%ds)",
+                HTF_REFRESH_INTERVAL_S,
+            )
+        except Exception as exc:
+            logger.warning("HTF refresh loop scheduling failed: %s", exc)
     elif seeded == 0:
         logger.warning(
             "Running with cold detectors — first %d WS bars will be "

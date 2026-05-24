@@ -652,6 +652,37 @@ Requiere migration `0003_bot_state_overlays.sql` aplicada.
 - **HTF-weak conditional gate** DISABLED (`SB_HTF_WEAK_MIN_CONF=0`) in favor
   of vision. Code retained.
 
+### 2026-05-23 — HTF bias direct-fetch fix (Option C SHIPPED)
+
+**Forensic chain** (week 5/18-5/22 audit):
+- Live: 41 trades, WR 29.3%, P&L −$504
+- Backtest replay (same bars, canonical config): **4 trades, WR 75%, P&L +$460**
+- Gap: $965 vs live = **execution divergence, not detection**
+
+**Root cause** (parity replay + bias snapshots):
+- Broker's 1-min historical API returns ~893 bars/day vs full ETH ~1380 = ~65% session coverage
+- Missing overnight session bars corrupt `tf_manager.aggregate(_, "D")` H/L
+- `HTFBiasDetector._swing_bias` reads wrong patterns → returns wrong direction
+- Live aggregate bias for the week: **56% bullish** (mostly wrong, market was bearish)
+- Backtest `--dynamic-bias` with full CSV: **84% bearish** (correct)
+- Live fired LONGs into bearish regime → lost. Backtest fired SHORTs → won.
+
+**Fix** (`main.py`):
+- New `_fetch_htf_bars()` calls broker `get_historical_bars(unit=4)` and `(unit=5)` for authoritative daily / weekly bars (exchange-aggregated, full session coverage)
+- New `_bars_to_df()` converts to `tf_manager.aggregate`-shape DataFrame
+- New `_refresh_htf_bars_loop()` async task refreshes every 1h (daily rolls at 18:00 CT)
+- `_make_htf_bias_fn` PRIORITY 1 = `state_ref["htf_daily_df"]` cache; FALLBACK = 1-min aggregation
+- Called once in warmup after `_warmup_historical_bars`; periodic task scheduled
+- Constants: `HTF_DAILY_LOOKBACK_DAYS = 90`, `HTF_WEEKLY_LOOKBACK_DAYS = 180`, `HTF_REFRESH_INTERVAL_S = 3600`
+
+**Tests**: 11 new in `test_htf_direct_fetch.py` covering `_bars_to_df` edge cases (empty, dedup, sort, naive ts) + closure priority logic (cache wins over 1-min, fallback when cache empty/None).
+
+**Risk / unknowns**:
+- TopstepX API behavior for `unit=4` / `unit=5` not verified live before ship (no test broker access). Fallback preserves old behavior on any error.
+- Daily bars may have different timestamp convention (open vs close); `_bars_to_df` localizes to US/Central but doesn't re-anchor. Detector mainly cares about OHLC values + order, not exact ts labels.
+
+**Verification post-launch**: confirm BAR log shows `bias=X(...) d=Y w=Z` matching the day's directional bias visually. If `HTF direct fetch failed` warnings appear, fallback to old behavior — investigate broker `unit=4`/`unit=5` response shape.
+
 ### Defensive systems now live
 - **Telegram alerts on state transitions**: fire, trade_opened (fill-gated), trade_closed, trail (broker-accept-gated), kill_switch, MLL zone change, phantom/orphan cleanup, NAKED stop, hard close, VPIN extreme/normalized
 - **`.engine.lock` PID file** — prevents zombie multi-fire (2026-04-17)
