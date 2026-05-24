@@ -175,6 +175,15 @@ SB_FVG_REQUIRE_QUADRANT = False         # bull FVG must be in lower half of deal
 SB_FVG_REQUIRE_C3_CONFIRMATION = False  # if True, reject FVG where c3 didn't close beyond c2
 SB_FVG_QUALITY_SHADOW_MODE = True       # True = log would-skip but don't act
 
+# 2026-05-23 — FIX #3: REQUIRE MSS/CHoCH FLIP AFTER COUNTER-DIRECTION EVENT.
+# Forensic-driven from Thu 5/21 trade #2: bot fired LONG with aligned struct
+# = [BOS, BOS, BOS] after big bearish drop. Per ICT canonical, BOS is
+# CONTINUATION (not flip). To trade against prior counter-direction event,
+# need MSS or CHoCH in aligned set — pure BOS chain is just continuation
+# of OPPOSITE trend. Trending sessions (no prior opposite event) unaffected.
+# Default OFF; validate via cross-period backtest before flipping to True.
+SB_REQUIRE_MSS_AFTER_COUNTER = False
+
 # Haiku reserved for simple tasks (enable when SDK lists it)
 # AI_MODEL_SIMPLE = "claude-haiku-4-5-20251001"
 

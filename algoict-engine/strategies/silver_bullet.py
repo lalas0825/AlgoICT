@@ -821,6 +821,48 @@ class SilverBulletStrategy:
             return None
         last_struct = aligned[-1]
 
+        # ── 2026-05-23 — FIX #3: REQUIRE FLIP EVENT AFTER COUNTER ─────
+        # Forensic-driven from Thu 5/21 trade #2 (-$143 WTF LONG): bot
+        # fired LONG with aligned = [BOS bull 13:10, BOS bull 13:15,
+        # BOS bull 13:30] after a 250pt bearish drop. Per ICT canonical:
+        #   - BOS = continuation event in direction of trend
+        #   - CHoCH = first sign of reversal (close beyond opposite swing)
+        #   - MSS = CHoCH confirmed by displacement = full flip
+        # Pure BOS chain after a counter-direction event = continuation of
+        # the OPPOSITE trend (recovery rally), NOT a flip. To legitimately
+        # trade with bias_dir after a counter-event, aligned must contain
+        # at least one MSS or CHoCH (a true flip event), not just BOS.
+        # Trending sessions with no prior opposite event (most_recent_opp
+        # is None) are unaffected — pure BOS chains are fine there.
+        #
+        # The existing BOS Exhaustion Gate (below) SKIPS when no MSS/CHoCH
+        # anchor exists — that's where this case falls through today.
+        # This gate plugs the hole. Default OFF, validate cross-period.
+        require_flip = bool(config.cfg("SB_REQUIRE_MSS_AFTER_COUNTER", False))
+        if require_flip and most_recent_opp is not None:
+            has_flip = any(e.type in ("MSS", "CHoCH") for e in aligned)
+            if not has_flip:
+                all_types = ",".join(e.type for e in aligned)
+                logger.info(
+                    "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, "
+                    "reason=no_valid_setup (no_flip_after_counter: aligned "
+                    "has %d events all of type [%s] — last opp %s @ %s "
+                    "requires MSS or CHoCH %s to flip, not just BOS)",
+                    _ts_hm(ts), len(aligned), all_types,
+                    most_recent_opp.type, _ts_hm(most_recent_opp.timestamp),
+                    bias_dir,
+                )
+                self._set_rejection(
+                    ts, "no_flip_after_counter", active_zone,
+                    is_near_miss=True,
+                    fvg_direction=bias_dir,
+                    aligned_count=len(aligned),
+                    aligned_types=all_types,
+                    last_opp_type=most_recent_opp.type,
+                    last_opp_ts=_ts_hm(most_recent_opp.timestamp),
+                )
+                return None
+
         # ── 2026-05-12 — BOS EXHAUSTION GATE (ICT "rule of three") ─────
         # ICT canonical sequence after a liquidity sweep:
         #   1. Sweep of opposite-side liquidity
