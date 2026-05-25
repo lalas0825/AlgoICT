@@ -1215,16 +1215,28 @@ async def _fetch_htf_bars(
         weekly_start = end - timedelta(days=HTF_WEEKLY_LOOKBACK_DAYS)
 
         # Unit 4 = Day. ~100 daily bars covers 90 days incl. weekends.
+        # 2026-05-25 — `include_partial=True` is REQUIRED. Without it,
+        # TopstepX's `/History/retrieveBars` only returns FULLY SETTLED
+        # daily bars (typically T-2 or T-3 lag) and OMITS today's forming
+        # bar entirely. Probe (`analysis/topstepx_daily_api_probe.py`)
+        # confirmed: default=False ends at 5/22 with no 5/25, partial=True
+        # ends at 5/25 (today's forming). HTFBiasDetector handles the
+        # forming bar correctly via iloc[:-1] (drops it for swing compare),
+        # so including it is safe AND ensures current premium/discount
+        # zone classification uses today's H/L instead of last week's.
         daily_raw = await broker.get_historical_bars(
             contract_id=contract["id"],
             start=daily_start, end=end,
             unit=4, unit_number=1, limit=100,
+            include_partial=True,
         )
         # Unit 5 = Week. ~30 weekly bars covers 6 months.
+        # Same `include_partial=True` rationale — include current forming week.
         weekly_raw = await broker.get_historical_bars(
             contract_id=contract["id"],
             start=weekly_start, end=end,
             unit=5, unit_number=1, limit=30,
+            include_partial=True,
         )
     except Exception as exc:
         logger.warning("HTF bars fetch failed: %s", exc)

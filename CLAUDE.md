@@ -683,6 +683,8 @@ Requiere migration `0003_bot_state_overlays.sql` aplicada.
 
 **Verification post-launch**: confirm BAR log shows `bias=X(...) d=Y w=Z` matching the day's directional bias visually. If `HTF direct fetch failed` warnings appear, fallback to old behavior — investigate broker `unit=4`/`unit=5` response shape.
 
+**2026-05-25 follow-up fix — `include_partial=True` required**: Post-launch audit (Memorial Day session, ran HTF fetch 12× via hourly loop) showed daily cache STUCK at 5/22 even when bot ran 13 hours into 5/25. Probe via `analysis/topstepx_daily_api_probe.py` confirmed: TopstepX `/History/retrieveBars` with default `includePartialBar=False` returns ONLY fully-settled bars (T-3 lag), omits today's forming daily AND the previous-day daily. With `include_partial=True` the API returns up to today's forming bar (5/25). `_fetch_htf_bars` now passes `include_partial=True` for both daily (unit=4) and weekly (unit=5). HTFBiasDetector's `_swing_bias` correctly handles the forming bar via `iloc[:-1]` (drops it for swing-direction comparison), and the zone classifier now uses today's actual H/L for premium/discount instead of last week's. Verified end-to-end via `analysis/verify_htf_fix_with_partial.py`.
+
 ### Defensive systems now live
 - **Telegram alerts on state transitions**: fire, trade_opened (fill-gated), trade_closed, trail (broker-accept-gated), kill_switch, MLL zone change, phantom/orphan cleanup, NAKED stop, hard close, VPIN extreme/normalized
 - **`.engine.lock` PID file** — prevents zombie multi-fire (2026-04-17)
