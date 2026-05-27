@@ -685,6 +685,35 @@ Requiere migration `0003_bot_state_overlays.sql` aplicada.
 
 **2026-05-25 follow-up fix — `include_partial=True` required**: Post-launch audit (Memorial Day session, ran HTF fetch 12× via hourly loop) showed daily cache STUCK at 5/22 even when bot ran 13 hours into 5/25. Probe via `analysis/topstepx_daily_api_probe.py` confirmed: TopstepX `/History/retrieveBars` with default `includePartialBar=False` returns ONLY fully-settled bars (T-3 lag), omits today's forming daily AND the previous-day daily. With `include_partial=True` the API returns up to today's forming bar (5/25). `_fetch_htf_bars` now passes `include_partial=True` for both daily (unit=4) and weekly (unit=5). HTFBiasDetector's `_swing_bias` correctly handles the forming bar via `iloc[:-1]` (drops it for swing-direction comparison), and the zone classifier now uses today's actual H/L for premium/discount instead of last week's. Verified end-to-end via `analysis/verify_htf_fix_with_partial.py`.
 
+### 2026-05-27 — Fix A: max entry-to-price distance gate (ACTIVE by default)
+
+**Forensic** (Wed 5/27 NY AM): bot fired SHORT @ 30,328.75 with current price
+at 30,016.75 — 312pts (1.04%) above price. The "valid" FVG at 30,328 was 2h
+old (formed during earlier bull regime); market had since flipped bearish
+(3 BOS bear in 10 min before fire). Limit had ~5-10% probability of fill.
+Closer FVGs at current price had `stop_pts < 15pt` floor → bot fell back
+to the stale far FVG.
+
+**Fix** (`strategies/silver_bullet.py`): new gate just before `Signal()`
+construction. If `abs(entry - current_price) / current_price * 100 > pct`,
+reject with `entry_too_far`. Default 1.0% = ~300pts on MNQ@30K. The
+forensic SHORT @ 30,328 would be blocked by this gate.
+
+**Config** (`config.py`): `SB_MAX_ENTRY_DISTANCE_PCT = 1.0` (ACTIVE default,
+unlike most filter flags we ship at 0/False). Rationale: this is a
+first-do-no-harm guard, not a strategy filter. Cross-period backtest
+pending — ship active to capture immediate improvement on the live
+"stale FVG zombie limits" pattern, will revisit if backtest shows harm.
+
+**Tests**: 14 new in `test_entry_distance_gate.py` covering disabled mode,
+default behavior, custom thresholds, short/long symmetric, the exact
+Wed 5/27 forensic numbers, plus config default verification.
+
+**Side-effect**: `test_silver_bullet.py` synthetic fixtures (price ~100,
+entry ~102 = 2% distance) needed the gate disabled via autouse fixture —
+the gate value is restored after each test so `test_entry_distance_gate.py`
+sees the canonical default.
+
 ### Defensive systems now live
 - **Telegram alerts on state transitions**: fire, trade_opened (fill-gated), trade_closed, trail (broker-accept-gated), kill_switch, MLL zone change, phantom/orphan cleanup, NAKED stop, hard close, VPIN extreme/normalized
 - **`.engine.lock` PID file** — prevents zombie multi-fire (2026-04-17)

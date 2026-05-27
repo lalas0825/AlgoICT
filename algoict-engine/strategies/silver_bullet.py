@@ -1743,6 +1743,42 @@ class SilverBulletStrategy:
                     }
                     return None
 
+        # 2026-05-27 — FIX A: MAX ENTRY-TO-PRICE DISTANCE GATE
+        # Forensic from Wed 5/27 NY AM: bot fired SHORT @ 30,328.75 when
+        # current price was 30,016.75 (312pts = 1.04% away). The "valid" FVG
+        # at 30,328 was 2h old (formed during earlier bull run), structurally
+        # stale (market had since flipped bearish via 3 BOS bear @ 09:30-09:40).
+        # Closer FVGs at current price had stop_pts < 15 (stop_too_tight floor)
+        # so bot fell back to the far FVG. Limit had ~5-10% probability of fill
+        # (price would need 312pt retrace UP).
+        #
+        # Gate: reject if abs(entry - current_price) / current_price exceeds
+        # SB_MAX_ENTRY_DISTANCE_PCT. Default 1.0% (= ~300pts on MNQ @ 30,000).
+        # When 0 or negative, gate is disabled (legacy behavior).
+        max_dist_pct = float(config.cfg("SB_MAX_ENTRY_DISTANCE_PCT", 0.0))
+        if max_dist_pct > 0 and last_close > 0:
+            dist_pct = abs(entry_price - last_close) / last_close * 100.0
+            if dist_pct > max_dist_pct:
+                logger.info(
+                    "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, "
+                    "reason=entry_too_far (entry=%.2f vs price=%.2f, "
+                    "dist=%.2f%% > %.2f%% max — likely stale FVG from earlier "
+                    "regime, unlikely to fill)",
+                    _ts_hm(ts), entry_price, last_close, dist_pct, max_dist_pct,
+                )
+                self._last_evaluated_bar_ts = ts
+                self.last_rejection = {
+                    "reason": "entry_too_far",
+                    "is_near_miss": True,
+                    "kz": active_zone,
+                    "ts": ts,
+                    "entry": float(entry_price),
+                    "current_price": float(last_close),
+                    "dist_pct": round(dist_pct, 3),
+                    "max_pct": max_dist_pct,
+                }
+                return None
+
         signal = Signal(
             strategy="silver_bullet",
             symbol=self.SYMBOL,

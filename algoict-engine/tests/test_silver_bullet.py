@@ -31,6 +31,22 @@ from timeframes.session_manager import SessionManager
 from timeframes.htf_bias import BiasResult
 from risk.risk_manager import RiskManager
 
+# 2026-05-27 — disable the entry-distance gate (Fix A) for synthetic tests.
+# The fixtures use price scales around 100 where a 2pt gap represents 2%
+# distance, exceeding the 1.0% default gate. Real MNQ at 30K has the same
+# 2pt gap = 0.007% (fine). Use autouse fixture so the default is restored
+# after this module's tests run — keeps test_entry_distance_gate.py
+# independent (its `test_default_is_active` reads the canonical value).
+import config as _config_module
+
+
+@pytest.fixture(autouse=True)
+def _disable_entry_distance_gate_for_sb_tests():
+    orig = getattr(_config_module, "SB_MAX_ENTRY_DISTANCE_PCT", 1.0)
+    _config_module.SB_MAX_ENTRY_DISTANCE_PCT = 0.0
+    yield
+    _config_module.SB_MAX_ENTRY_DISTANCE_PCT = orig
+
 
 CT = pytz.timezone("US/Central")
 

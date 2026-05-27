@@ -175,6 +175,21 @@ SB_FVG_REQUIRE_QUADRANT = False         # bull FVG must be in lower half of deal
 SB_FVG_REQUIRE_C3_CONFIRMATION = False  # if True, reject FVG where c3 didn't close beyond c2
 SB_FVG_QUALITY_SHADOW_MODE = True       # True = log would-skip but don't act
 
+# 2026-05-27 — FIX A: MAX ENTRY-TO-PRICE DISTANCE GATE (ACTIVE by default).
+# Forensic from Wed 5/27 NY AM: bot fired SHORT @ 30,328.75 when current
+# price was 30,016.75 (312pts = 1.04% away). Limit placed at a 2h-old FVG
+# from earlier bull regime; market had since flipped bearish. Limit had
+# ~5-10% probability of fill (would need 312pt retrace UP).
+# Closer FVGs at current price had stop_pts < 15pt floor → bot fell back
+# to the far stale FVG. This gate prevents that.
+#
+# Rule: reject signal if abs(entry - current_price) / current_price > pct.
+# 0.0 = disabled. 1.0 = ~300pts on MNQ@30K (today's WTF would be blocked).
+# Conservative default — extremely far entries are unlikely-fill AND
+# structurally stale (regime drift). Cross-period backtest validation
+# pending; ship as a "first-do-no-harm" guard.
+SB_MAX_ENTRY_DISTANCE_PCT = 1.0  # max distance entry-to-current-price (%)
+
 # 2026-05-23 — FIX #3: REQUIRE MSS/CHoCH FLIP AFTER COUNTER-DIRECTION EVENT.
 # Forensic-driven from Thu 5/21 trade #2: bot fired LONG with aligned struct
 # = [BOS, BOS, BOS] after big bearish drop. Per ICT canonical, BOS is
