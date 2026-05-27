@@ -194,18 +194,19 @@ class TestCustomThresholds:
 
 class TestConfigDefault:
 
-    def test_default_is_active(self):
-        """Ship-active default — 1.0% gate enabled out of the box."""
+    def test_default_is_disabled(self):
+        """2026-05-27 — user opted to keep code shipped but gate OFF by
+        default. Default 0.0 = disabled (legacy behavior preserved).
+        Activate via config override when needed."""
         import config
         max_pct = float(config.cfg("SB_MAX_ENTRY_DISTANCE_PCT", 0.0))
-        assert max_pct == 1.0
+        assert max_pct == 0.0
 
-    def test_default_blocks_wed_5_27_forensic(self):
-        """With default config, the Wed 5/27 trade WOULD be blocked."""
-        import config
-        max_pct = float(config.cfg("SB_MAX_ENTRY_DISTANCE_PCT", 0.0))
+    def test_forensic_blocks_when_activated_to_1pct(self):
+        """When user activates to 1.0% (the suggested setting), the Wed
+        5/27 trade WOULD be blocked. Documents the activation behavior."""
         out = _evaluate_distance_gate(
-            max_pct=max_pct,
+            max_pct=1.0,
             entry_price=30328.75,
             current_price=30016.75,
         )

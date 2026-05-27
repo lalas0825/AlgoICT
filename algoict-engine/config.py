@@ -188,7 +188,11 @@ SB_FVG_QUALITY_SHADOW_MODE = True       # True = log would-skip but don't act
 # Conservative default — extremely far entries are unlikely-fill AND
 # structurally stale (regime drift). Cross-period backtest validation
 # pending; ship as a "first-do-no-harm" guard.
-SB_MAX_ENTRY_DISTANCE_PCT = 1.0  # max distance entry-to-current-price (%)
+SB_MAX_ENTRY_DISTANCE_PCT = 0.0  # max distance entry-to-current-price (%)
+# 2026-05-27 — user opted to keep gate code shipped but NOT activate yet
+# (default 0.0 = disabled). Bot continues current behavior. Activate by
+# setting >0 (e.g., 1.0 for ~300pt threshold on MNQ@30K) if zombie limits
+# pattern returns in future sessions.
 
 # 2026-05-23 — FIX #3: REQUIRE MSS/CHoCH FLIP AFTER COUNTER-DIRECTION EVENT.
 # Forensic-driven from Thu 5/21 trade #2: bot fired LONG with aligned struct
