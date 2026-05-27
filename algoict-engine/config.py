@@ -194,6 +194,15 @@ SB_MAX_ENTRY_DISTANCE_PCT = 0.0  # max distance entry-to-current-price (%)
 # setting >0 (e.g., 1.0 for ~300pt threshold on MNQ@30K) if zombie limits
 # pattern returns in future sessions.
 
+# 2026-05-27 — Per-trade fee estimate for daily summary accounting.
+# TopstepX MNQ Combine REAL fee (calibrated against actual broker
+# statement on 2026-05-27: bot gross $741.50, broker net $712.98 =
+# $28.52 fees over 23 contracts = $1.24/round-trip per contract).
+# Used to ESTIMATE fees deducted from gross P&L in daily summary so the
+# user sees net P&L matching Combine reality. Does NOT affect daily_pnl
+# tracking (which uses broker-reported P&L, gross). Set to 0.0 to disable.
+MNQ_ROUND_TRIP_FEE = 1.24  # per contract, round trip (calibrated 2026-05-27)
+
 # 2026-05-23 — FIX #3: REQUIRE MSS/CHoCH FLIP AFTER COUNTER-DIRECTION EVENT.
 # Forensic-driven from Thu 5/21 trade #2: bot fired LONG with aligned struct
 # = [BOS, BOS, BOS] after big bearish drop. Per ICT canonical, BOS is

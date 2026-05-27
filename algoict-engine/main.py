@@ -2405,12 +2405,15 @@ async def _on_trade_closed(
     try:
         # 2026-04-29 — pass entry_price so risk_manager can detect the
         # same-setup-stopout pattern (2 losses at same FVG → halt).
+        # 2026-05-27 — pass contracts for fee accounting + daily summary.
         entry_for_risk = trade.get("entry_price")
+        contracts_for_risk = trade.get("contracts") or trade.get("qty") or 0
         risk_status = components.risk.record_trade(
             pnl,
             kill_zone=trade.get("kill_zone"),
             order_id=str(order_id),
             entry_price=float(entry_for_risk) if entry_for_risk is not None else None,
+            contracts=int(contracts_for_risk) if contracts_for_risk else 0,
         ) or {}
     except Exception as exc:
         logger.warning("risk.record_trade failed: %s", exc)
@@ -5180,16 +5183,26 @@ async def _flatten_all(
 
 
 async def _send_daily_summary(components: Components, state: EngineState) -> None:
-    """Push end-of-day summary to Telegram + Supabase."""
+    """Push end-of-day summary to Telegram + Supabase.
+
+    2026-05-27 — Wires real wins/losses from RiskManager counters (previously
+    hardcoded 0/0). Adds fees estimate so the Combine net P&L is visible.
+    Gross P&L (broker-reported) stays in daily_pnl; fees are shown separately.
+    """
     if state.daily_summary_sent:
         return
     state.daily_summary_sent = True
 
     risk = components.risk
     trades_count = risk.trades_today
-    wins = 0  # Would need to track win/loss per trade
-    losses = 0
-    total_pnl = risk.daily_pnl
+    # Real win/loss tracking (2026-05-27 fix — was hardcoded 0/0)
+    wins = int(getattr(risk, "_wins_today", 0))
+    losses = int(getattr(risk, "_losses_today", 0))
+    be = int(getattr(risk, "_be_today", 0))
+    total_pnl_gross = risk.daily_pnl
+    contracts_today = int(getattr(risk, "_contracts_today", 0))
+    fees_today = float(getattr(risk, "_fees_today", 0.0))
+    total_pnl_net = total_pnl_gross - fees_today
 
     date_str = datetime.now().strftime("%Y-%m-%d")
 
@@ -5200,8 +5213,25 @@ async def _send_daily_summary(components: Components, state: EngineState) -> Non
                 trades_count=trades_count,
                 wins=wins,
                 losses=losses,
-                total_pnl=total_pnl,
+                total_pnl=total_pnl_gross,
+                # 2026-05-27 — fees + BE tracking (new optional kwargs)
+                be=be,
+                contracts=contracts_today,
+                fees=fees_today,
+                net_pnl=total_pnl_net,
             )
+        except TypeError:
+            # Old telegram API without new kwargs — fall back
+            try:
+                await components.telegram.send_daily_summary(
+                    date_str=date_str,
+                    trades_count=trades_count,
+                    wins=wins,
+                    losses=losses,
+                    total_pnl=total_pnl_gross,
+                )
+            except Exception as exc:
+                logger.warning("Daily summary Telegram failed: %s", exc)
         except Exception as exc:
             logger.warning("Daily summary Telegram failed: %s", exc)
 
@@ -5212,7 +5242,7 @@ async def _send_daily_summary(components: Components, state: EngineState) -> Non
                 "trades_count": trades_count,
                 "wins": wins,
                 "losses": losses,
-                "total_pnl": total_pnl,
+                "total_pnl": total_pnl_gross,
                 "max_drawdown": 0.0,
                 "sharpe": 0.0,
             })

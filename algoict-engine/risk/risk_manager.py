@@ -128,6 +128,12 @@ class RiskManager:
         self._ladder_enabled: bool = bool(config.cfg("RISK_LADDER_ENABLED", False))
         self._ladder_schedule: tuple = tuple(config.cfg("RISK_LADDER", (250, 200, 150, 100, 50)))
         self._losses_today: int = 0     # count of LOSING trades today; only increments
+        # 2026-05-27 — daily summary support (Bug fix: Telegram showed 0/0 W/L)
+        self._wins_today: int = 0       # count of WINNING trades (pnl > 0)
+        self._be_today: int = 0         # count of break-even trades (pnl == 0)
+        self._contracts_today: int = 0  # total contracts traded today (sum of all qty)
+        # Per-trade fee accounting (TopstepX MNQ Combine ~$1.40/round trip)
+        self._fees_today: float = 0.0   # estimated fees deducted from gross P&L
         # Per-kill-zone losing-trade caps. Zones not listed have no cap.
         # Mutated via set_kz_loss_caps(). Stats in _kz_losing_trades mirror
         # the dict keys (plus any zone we see losses on). Both reset at EOD.
@@ -318,6 +324,7 @@ class RiskManager:
         kill_zone: str = None,
         order_id: str = None,
         entry_price: float = None,
+        contracts: int = 0,
     ) -> dict:
         """
         Record a completed trade P&L and update all risk counters.
@@ -384,6 +391,20 @@ class RiskManager:
 
         self.daily_pnl += pnl
         self.trades_today += 1
+
+        # 2026-05-27 — Daily summary support: win/loss/BE counts + contracts/fees
+        if pnl > 0:
+            self._wins_today += 1
+        elif pnl == 0:
+            self._be_today += 1
+        # loss case handled in the if pnl < 0 block below
+        if contracts and contracts > 0:
+            self._contracts_today += int(contracts)
+            try:
+                fee_rate = float(config.cfg("MNQ_ROUND_TRIP_FEE", 1.40))
+                self._fees_today += fee_rate * int(contracts)
+            except Exception:
+                pass  # fee tracking is informational, never fatal
 
         if pnl < 0:
             self.consecutive_losses += 1
@@ -863,6 +884,11 @@ class RiskManager:
         # Ladder + KZ caps reset daily — losses_today tallies from 0
         # each morning. The ladder schedule + caps themselves persist.
         self._losses_today = 0
+        # 2026-05-27 — daily summary support reset
+        self._wins_today = 0
+        self._be_today = 0
+        self._contracts_today = 0
+        self._fees_today = 0.0
         self._kz_losing_trades = {}
         # Clear dedup set so the same order_id could theoretically be
         # recorded across days (paranoid — order_ids are unique from

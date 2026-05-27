@@ -712,6 +712,11 @@ Trading HALTED for remainder of day.
         sharpe: float = 0.0,
         best_trade: Optional[float] = None,
         worst_trade: Optional[float] = None,
+        # 2026-05-27 — added BE + fees + net P&L for Combine reality
+        be: int = 0,
+        contracts: int = 0,
+        fees: float = 0.0,
+        net_pnl: Optional[float] = None,
     ) -> bool:
         """
         Send an end-of-day summary.
@@ -721,34 +726,57 @@ Trading HALTED for remainder of day.
         date_str : "2024-01-02"
         trades_count: total trades
         wins, losses: counts
-        total_pnl: net P&L
+        total_pnl: gross P&L (broker-reported, before fees)
         max_dd: max drawdown %
         sharpe: Sharpe ratio
         best_trade, worst_trade: best/worst PnL
+        be: count of break-even trades (pnl == 0)
+        contracts: total contracts traded today
+        fees: estimated fees deducted (MNQ Combine ~$1.40/RT/contract)
+        net_pnl: total_pnl - fees (Combine reality)
 
         Returns True on success.
         """
         try:
-            win_rate = (wins / trades_count * 100) if trades_count > 0 else 0.0
-            pnl_emoji = "📈" if total_pnl > 0 else "📉"
+            # WR computation: BE trades NOT counted as wins, but also not
+            # as losses. WR = wins / (wins + losses). If only BE trades,
+            # WR is 0% but no losses — keeps the metric meaningful.
+            decided = wins + losses
+            win_rate = (wins / decided * 100) if decided > 0 else 0.0
+            pnl_show = net_pnl if net_pnl is not None else total_pnl
+            pnl_emoji = "📈" if pnl_show > 0 else ("📉" if pnl_show < 0 else "⚪")
+
+            # BE line only appears if there were BE trades
+            be_line = f" | BE: {be}" if be > 0 else ""
 
             msg = f"""
 📊 DAILY SUMMARY — {date_str}
 
 Trades: {trades_count}
-Wins: {wins} | Losses: {losses}
+Wins: {wins} | Losses: {losses}{be_line}
 Win Rate: {win_rate:.1f}%
-
-P&L: {pnl_emoji} ${total_pnl:+,.2f}
-Max DD: {max_dd:.1f}%
-Sharpe: {sharpe:.2f}
 """
+            # Fees section — show only if we have contracts data (Combine mode)
+            if contracts > 0 or fees > 0:
+                msg += f"""
+Contracts: {contracts}
+Gross P&L: ${total_pnl:+,.2f}
+Fees est:  ${fees:,.2f}
+Net P&L:   {pnl_emoji} ${(net_pnl if net_pnl is not None else total_pnl - fees):+,.2f}
+"""
+            else:
+                msg += f"\nP&L: {pnl_emoji} ${total_pnl:+,.2f}\n"
+
+            if max_dd > 0:
+                msg += f"Max DD: {max_dd:.1f}%\n"
+            if sharpe != 0:
+                msg += f"Sharpe: {sharpe:.2f}\n"
             if best_trade is not None:
                 msg += f"Best Trade: ${best_trade:,.2f}\n"
             if worst_trade is not None:
                 msg += f"Worst Trade: ${worst_trade:,.2f}\n"
 
-            if total_pnl < -1000:
+            if pnl_show < -1000:
                 msg += "\n⚠️ NEGATIVE DAY — Monitor closely\n"
 
             await self._send_message(msg)
