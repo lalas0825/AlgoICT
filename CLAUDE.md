@@ -737,6 +737,101 @@ sees the canonical default.
 - **`record_trade(order_id=)` idempotency** — triple-path dedup (User Hub + poll + reconcile)
 - **Session-recency filters** — structure (Bug A) + displacement (C5). FVG/OB intentionally NOT filtered per ICT.
 
+### Future SB refinements (post-Combine validation queue)
+
+These are observed-in-live patterns that SUGGEST an edge improvement but
+are NOT shipped yet. Each requires cross-period 3-yr backtest before
+activation (per CLAUDE.md SB_MIN_LIVE_CONFLUENCE post-mortem lesson).
+
+**Watch-list seeded by Wed 5/27 loss trade forensic** (T7, LONG 4x @
+30,047.25 → -$70, MFE only 0.89R then chopped down to stop):
+
+#### 1. **Same-direction cooldown by zone, not just by setup**
+
+Live observation: 26 min after T6 closed (LONG winner @ 30,043.75), T7
+fired LONG @ 30,047.25 — same direction, +3.5pts higher, same chop range.
+The `same_setup_cooldown` only fires when re-entry price is within 5pts
+of a *stopped-out* setup, not when re-entering after a *winner* in the
+same direction/zone.
+
+Proposed: cooldown after ANY same-direction exit (W or L) for N minutes
+in the same zone (±X pts from last exit). Prevents back-to-back-LONGs
+chasing into chop tops.
+
+Implementation hint: extend `_same_setup_cooldown_armed` (silver_bullet.py)
+to track ALL recent exits + check both direction and zone-distance.
+Flag: `SB_SAME_DIRECTION_COOLDOWN_MIN` (default OFF until backtested).
+
+#### 2. **Late-session distant-target rejection**
+
+T7 fired @ 14:03 CT with target NAH@30,357 (+310pts) when only 57 min
+remained to hard close 15:00 CT. ICT canon: late-session distant-liquidity
+targets won't fill before flatten. Trail might catch a quick run but
+sustained 310pt moves in <1h are rare.
+
+Proposed: reject signals where target distance > (estimated remaining-
+session minutes × avg pts/min). Or simpler: in NY PM after 14:00 CT,
+require target within 1 ATR or within X pts of current price.
+
+Implementation hint: in silver_bullet.py around framework check,
+compute time_to_close vs target_distance and reject as `target_unreachable`.
+Flag: `SB_REJECT_LATE_DISTANT_TARGETS` (default OFF until backtested).
+
+#### 3. **Entry-price distance from current (= Fix A, code shipped, OFF)**
+
+Already in code (`SB_MAX_ENTRY_DISTANCE_PCT`) but default 0 = disabled.
+T7 was NOT this pattern (entry only 5pts below current), but T7 LONDON
+SHORT @ 30,328 was (312pts above current). Documented separately.
+
+Activation criteria: if another zombie-limit-far pattern shows in live
+weeks 2-3 post-Combine, flip flag to 1.0 (single line change).
+
+#### 4. **Narrow FVG with wide c1 — disproportionate displacement**
+
+T7's FVG was 30,044-30,047 = 3pts wide, but c1 (anchoring the stop)
+covered 20pts (low=30,027). Bot uses c1.low as stop reference, so a tight
+FVG with wide c1 gives narrow R/R reward but full c1 risk — asymmetric.
+
+Per ICT canonical, valid FVG should have meaningful displacement IN THE
+FVG itself, not just a wide c1. Quality metric: FVG_width / c1_range
+ratio. T7 ratio = 3/20 = 0.15 = very low.
+
+Proposed: reject FVGs where `FVG_width / c1_range < threshold` (e.g., 0.3).
+Detector already computes `displacement_ratio` (different metric) — could
+extend to add this ratio.
+
+Implementation hint: new field `FVG.fvg_to_c1_ratio` (computed in detect()).
+Gate in silver_bullet.py FVG-quality block (next to displacement/quadrant).
+Flag: `SB_FVG_REQUIRE_C1_PROPORTION` (default OFF). Backtest first.
+
+#### 5. **Chop-regime detector / size reduction**
+
+T7 fired in a tight 30,000-30,100 chop range (175pt over 4h = ~44pts/h
+average). Last big displacement was 5+ HOURS ago. Recent struct events
+were small intraday flips, not impulses. Bot has no awareness of
+"market is in chop, reduce conviction".
+
+Proposed: compute rolling 1h ATR vs 24h average ATR. If current ratio
+< 0.5 → mark regime=chop. In chop: (a) require higher confluence score,
+(b) reduce position size 50%, (c) skip late-session entries entirely,
+(d) or all of the above.
+
+Implementation hint: new file `regime/chop_detector.py`. Wire into
+strategy.evaluate() pre-fire. Flag: `SB_CHOP_FILTER_ENABLED` (default OFF).
+This is the LARGEST refinement on the list — likely needs 1-2 days of
+work + thorough backtest.
+
+#### Adjustment priority (after Combine starts and we have 1-2 weeks data)
+
+1. **Fix #1** (same-direction cooldown) — smallest code change, likely
+   biggest impact on "WTF back-to-back" pattern. Try first.
+2. **Fix #2** (late-distant-target reject) — also small, clear ICT
+   rationale, easy backtest.
+3. **Fix A** activation (entry-distance gate, already coded) — flip flag
+   if zombie limits reappear.
+4. **Fix #4** (narrow-FVG-wide-c1) — needs detector field + backtest.
+5. **Fix #5** (chop regime detector) — largest scope, save for last.
+
 ### Pendientes watch-list
 - Telegram "DELETE" banner on mobile (awaiting user screenshot)
 - C9 confluence-scorer missing-data flag (nice-to-have, deferred)
