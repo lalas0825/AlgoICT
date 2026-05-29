@@ -82,6 +82,7 @@ class Trade:
     confluence_score: int
     duration_bars: int          # number of 1-min bars held
     kill_zone: str = ""         # which KZ produced this trade
+    sweep_diag: dict = field(default_factory=dict)  # telemetry from Signal (sweep-gap study)
 
     def __repr__(self) -> str:
         return (
@@ -428,6 +429,7 @@ class Backtester:
                         )
 
                     for trade in closed_trades:
+                        trade.sweep_diag = open_position.get("sweep_diag", {})
                         self.trades.append(trade)
                         # Pass kill_zone so RiskManager can track per-KZ
                         # losing-trade counters for the cap + ladder.
@@ -599,6 +601,7 @@ class Backtester:
                 "target_price": sig_target,
                 "contracts": sig_contracts,
                 "confluence_score": int(signal.confluence_score),
+                "sweep_diag": getattr(signal, "sweep_diag", {}) or {},
                 "bars_waiting": 0,
             }
 

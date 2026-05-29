@@ -926,6 +926,7 @@ def main() -> int:
                     "reason": getattr(t, "reason", ""),
                     "confluence_score": int(getattr(t, "confluence_score", 0) or 0),
                     "kill_zone": getattr(t, "kill_zone", ""),
+                    "sweep_diag": getattr(t, "sweep_diag", {}) or {},
                 } for t in trades_sorted
             ],
         }

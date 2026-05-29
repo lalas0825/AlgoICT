@@ -136,6 +136,10 @@ class Signal:
     confluence_reasons: list = field(default_factory=list)
     timestamp: pd.Timestamp = None
     kill_zone: str = ""
+    # Diagnostic telemetry (2026-05-29): sweep recency/proximity/direction-
+    # alignment captured at fire. PURE TELEMETRY for the sweep-gap study —
+    # NOT read by any gate. See analysis/sweep_diagnostic_crossperiod.py.
+    sweep_diag: dict = field(default_factory=dict)
 
     def __repr__(self) -> str:
         return (
@@ -1793,6 +1797,50 @@ class SilverBulletStrategy:
             timestamp=ts,
             kill_zone=active_zone,
         )
+        # ── Sweep diagnostic (TELEMETRY ONLY — never gates) ─────────────
+        # At fire: how stale/far is the validating sweep, and does the MOST-
+        # RECENT sweep across all tracked levels agree with trade direction
+        # (ICT canon: sweep lows→long, highs→short)? Feeds the sweep-gap
+        # study. Wrapped so a telemetry error can never block a real fire.
+        try:
+            _qual_timed = [
+                (lv, lv.swept_at) for lv in sweeps
+                if getattr(lv, "swept_at", None) is not None
+            ]
+            if _qual_timed:
+                _trig, _trig_at = max(_qual_timed, key=lambda x: x[1])
+                _recency = abs((ts - _trig_at).total_seconds()) / 60.0
+            else:
+                _trig = sweeps[0] if sweeps else None
+                _recency = None
+            _prox = (
+                abs(float(entry_price) - float(_trig.price))
+                if _trig is not None else None
+            )
+            _all_swept = [
+                (lv, lv.swept_at) for lv in tracked_levels
+                if getattr(lv, "swept", False)
+                and not getattr(lv, "invalidated", False)
+                and getattr(lv, "swept_at", None) is not None
+            ]
+            _recent_side = None
+            _recent_aligned = None
+            if _all_swept:
+                _mr, _ = max(_all_swept, key=lambda x: x[1])
+                if _mr.type in self._LONG_SWEEP_TYPES:
+                    _recent_side, _recent_aligned = "low", (direction == "long")
+                elif _mr.type in self._SHORT_SWEEP_TYPES:
+                    _recent_side, _recent_aligned = "high", (direction == "short")
+            signal.sweep_diag = {
+                "recency_min": round(_recency, 1) if _recency is not None else None,
+                "proximity_pts": round(_prox, 2) if _prox is not None else None,
+                "trigger_type": getattr(_trig, "type", None) if _trig is not None else None,
+                "recent_sweep_side": _recent_side,
+                "recent_sweep_aligned": _recent_aligned,
+                "n_qualifying": len(sweeps),
+            }
+        except Exception:
+            signal.sweep_diag = {}
         self._last_evaluated_bar_ts = ts
         # 2026-05-04 — save FVG ref so notify_trade_closed can mitigate
         # it on a loss (ICT canonical: stopped FVG is dead).
