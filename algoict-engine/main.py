@@ -2440,6 +2440,13 @@ async def _on_trade_closed(
         )
         return
 
+    # Canonical trade id — trades.id AND post_mortems.trade_id (FK) must agree.
+    # Upstream builders set "id" to the open_positions key (pos_key), which is
+    # NOT unique per trade and differs from write_trade's computed id, so the
+    # post-mortem FK to trades(id) would fail. Pin one stable unique id here,
+    # before both write_trade and analyze_loss consume the dict.
+    trade["id"] = f"{trade.get('symbol')}_{trade.get('entry_time')}"
+
     # 2. supabase persistence
     if components.supabase is not None:
         try:

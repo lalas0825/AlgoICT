@@ -84,46 +84,83 @@ class SupabaseClient:
     # Trades
     # ------------------------------------------------------------------ #
 
+    # Cache of trades-table columns confirmed missing in the DB schema
+    # (PGRST204). Populated lazily on first failure; future writes strip them
+    # so the row still persists. Reset by restarting the bot after applying a
+    # migration. Mirrors _missing_signals_cols / _missing_bot_state_cols.
+    _missing_trades_cols: set = set()
+
     def write_trade(self, trade: dict) -> bool:
         """
         Write or update a trade record.
 
         Expected keys:
-            symbol, entry_time, exit_time, side, contracts, entry_price,
-            exit_price, pnl, confluence_score, vpin, toxicity, strategy
+            symbol, entry_time, exit_time, direction, contracts, entry_price,
+            exit_price, pnl, confluence_score, vpin, toxicity, strategy,
+            ict_concepts, stop_points, ...
+
+        On PGRST204 ("column X not found") the offending column is cached and
+        stripped, then the write is retried so the row still persists (minus
+        that column) — mirroring write_signal / update_bot_state. Apply the
+        pending migration (0006) + restart to restore full coverage.
+
+        NOTE: `side` is intentionally NOT written — the schema column is
+        `direction`, which the caller supplies and which arrives via the
+        spread of caller-provided extras below.
 
         Returns True on success, False on error.
         """
-        try:
-            trade_id = f"{trade.get('symbol')}_{trade.get('entry_time')}"
+        trade_id = trade.get("id") or f"{trade.get('symbol')}_{trade.get('entry_time')}"
+        explicit = {
+            "id": trade_id,
+            "symbol": trade.get("symbol"),
+            "entry_time": trade.get("entry_time"),
+            "exit_time": trade.get("exit_time"),
+            "contracts": trade.get("contracts"),
+            "entry_price": trade.get("entry_price"),
+            "exit_price": trade.get("exit_price"),
+            "pnl": trade.get("pnl"),
+            "confluence_score": trade.get("confluence_score"),
+            "vpin": trade.get("vpin"),
+            "toxicity": trade.get("toxicity"),
+            "strategy": trade.get("strategy"),
+        }
+        payload = {
+            **explicit,
+            **{k: v for k, v in trade.items() if k not in explicit},
+        }
+        for col in self._missing_trades_cols:
+            payload.pop(col, None)
 
-            self._client.table("trades").upsert(
-                {
-                    "id": trade_id,
-                    "symbol": trade.get("symbol"),
-                    "entry_time": trade.get("entry_time"),
-                    "exit_time": trade.get("exit_time"),
-                    "side": trade.get("side"),
-                    "contracts": trade.get("contracts"),
-                    "entry_price": trade.get("entry_price"),
-                    "exit_price": trade.get("exit_price"),
-                    "pnl": trade.get("pnl"),
-                    "confluence_score": trade.get("confluence_score"),
-                    "vpin": trade.get("vpin"),
-                    "toxicity": trade.get("toxicity"),
-                    "strategy": trade.get("strategy"),
-                    **{k: v for k, v in trade.items()
-                       if k not in [
-                           "id", "symbol", "entry_time", "exit_time",
-                           "side", "contracts", "entry_price", "exit_price",
-                           "pnl", "confluence_score", "vpin", "toxicity", "strategy"
-                       ]}
-                },
-                on_conflict="id"
-            ).execute()
+        try:
+            self._client.table("trades").upsert(payload, on_conflict="id").execute()
             logger.debug("Trade written: %s", trade_id)
             return True
         except Exception as exc:
+            missing = _parse_pgrst204_column(exc)
+            if missing and missing in payload and missing not in self._missing_trades_cols:
+                self._missing_trades_cols.add(missing)
+                logger.warning(
+                    "trades column %r missing in DB schema — stripping from "
+                    "future writes. Apply migration + restart to restore.",
+                    missing,
+                )
+                payload.pop(missing, None)
+                try:
+                    self._client.table("trades").upsert(
+                        payload, on_conflict="id"
+                    ).execute()
+                    logger.debug("Trade written (partial): %s", trade_id)
+                    return True
+                except Exception as exc2:
+                    missing2 = _parse_pgrst204_column(exc2)
+                    if missing2 and missing2 not in self._missing_trades_cols:
+                        self._missing_trades_cols.add(missing2)
+                        logger.warning(
+                            "trades column %r also missing — stripped.", missing2,
+                        )
+                    logger.error("Failed to write trade (retry): %s", exc2)
+                    return False
             logger.error("Failed to write trade: %s", exc)
             return False
 
@@ -371,38 +408,75 @@ class SupabaseClient:
     # Post-Mortems
     # ------------------------------------------------------------------ #
 
+    # Cache of post_mortems columns confirmed missing in the DB schema
+    # (PGRST204). Mirrors _missing_trades_cols / _missing_signals_cols.
+    _missing_post_mortems_cols: set = set()
+
     def write_post_mortem(self, postmortem: dict) -> bool:
         """
         Write an AI-generated trade post-mortem analysis.
 
         Expected keys:
-            timestamp, trade_id, reason_category, analysis, lesson, related_trades
+            timestamp, trade_id, pnl, reason_category, analysis, lesson,
+            related_trades, entry_analysis, ...
+
+        On PGRST204 ("column X not found") the offending column is cached and
+        stripped, then retried so the row still persists — mirroring
+        write_signal / write_trade. Apply migration 0006 + restart to restore
+        full coverage.
+
+        NOTE: post_mortems.trade_id is a FK to trades(id) and pnl is NOT NULL —
+        neither is recoverable by the self-heal (which only strips unknown
+        columns), so the referenced trade must persist first and the caller
+        must supply pnl.
 
         Returns True on success.
         """
-        try:
-            pm_id = f"{postmortem.get('trade_id')}_{postmortem.get('timestamp')}"
+        pm_id = f"{postmortem.get('trade_id')}_{postmortem.get('timestamp')}"
+        explicit = {
+            "id": pm_id,
+            "timestamp": postmortem.get("timestamp"),
+            "trade_id": postmortem.get("trade_id"),
+            "reason_category": postmortem.get("reason_category"),
+            "analysis": postmortem.get("analysis"),
+            "lesson": postmortem.get("lesson"),
+            "related_trades": postmortem.get("related_trades"),
+        }
+        payload = {
+            **explicit,
+            **{k: v for k, v in postmortem.items() if k not in explicit},
+        }
+        for col in self._missing_post_mortems_cols:
+            payload.pop(col, None)
 
-            self._client.table("post_mortems").insert(
-                {
-                    "id": pm_id,
-                    "timestamp": postmortem.get("timestamp"),
-                    "trade_id": postmortem.get("trade_id"),
-                    "reason_category": postmortem.get("reason_category"),
-                    "analysis": postmortem.get("analysis"),
-                    "lesson": postmortem.get("lesson"),
-                    "related_trades": postmortem.get("related_trades"),
-                    **{k: v for k, v in postmortem.items()
-                       if k not in [
-                           "id", "timestamp", "trade_id",
-                           "reason_category", "analysis", "lesson",
-                           "related_trades"
-                       ]}
-                }
-            ).execute()
+        try:
+            self._client.table("post_mortems").insert(payload).execute()
             logger.debug("Post-mortem written: %s", pm_id)
             return True
         except Exception as exc:
+            missing = _parse_pgrst204_column(exc)
+            if missing and missing in payload and missing not in self._missing_post_mortems_cols:
+                self._missing_post_mortems_cols.add(missing)
+                logger.warning(
+                    "post_mortems column %r missing in DB schema — stripping "
+                    "from future writes. Apply migration + restart to restore.",
+                    missing,
+                )
+                payload.pop(missing, None)
+                try:
+                    self._client.table("post_mortems").insert(payload).execute()
+                    logger.debug("Post-mortem written (partial): %s", pm_id)
+                    return True
+                except Exception as exc2:
+                    missing2 = _parse_pgrst204_column(exc2)
+                    if missing2 and missing2 not in self._missing_post_mortems_cols:
+                        self._missing_post_mortems_cols.add(missing2)
+                        logger.warning(
+                            "post_mortems column %r also missing — stripped.",
+                            missing2,
+                        )
+                    logger.error("Failed to write post-mortem (retry): %s", exc2)
+                    return False
             logger.error("Failed to write post-mortem: %s", exc)
             return False
 
