@@ -98,7 +98,8 @@ MENTHORQ_API_KEY = os.getenv("MENTHORQ_API_KEY", "")
 # Any caller of the Anthropic API must import from here — never hardcode
 # a model id in an agent file. Swap a single constant to re-route a role.
 # ---------------------------------------------------------------------------
-AI_MODEL_POST_MORTEM = "claude-sonnet-4-6"    # Loss analysis
+POST_MORTEM_ENABLED = False                    # 2026-06-01: DISABLED — AI loss analysis not useful + post_mortems schema drift
+AI_MODEL_POST_MORTEM = "claude-sonnet-4-6"    # Loss analysis (only used when POST_MORTEM_ENABLED)
 AI_MODEL_MOOD_SYNTHESIS = "claude-sonnet-4-6"  # SWC daily mood
 AI_MODEL_HYPOTHESIS_GEN = "claude-sonnet-4-6"  # Strategy Lab (when wired)
 AI_MODEL_KZ_VALIDATOR = "claude-sonnet-4-6"    # Camino C2 — per-KZ AI overlay
@@ -674,7 +675,7 @@ NY_OPEN_BUFFER_AFTER_MIN = 15   # block 15 min after each event
 # the target by 05:14 CT.
 #
 # When transitioning to live Combine: revert to 1500.
-DAILY_PROFIT_CAP = 10000      # paper research — effectively off (real Combine = 1500)
+DAILY_PROFIT_CAP = 1500       # live Combine canonical (reverted from 10000 paper-research 2026-05-29)
 HARD_CLOSE_HOUR = 15          # 3:00 PM CT — flatten everything
 HARD_CLOSE_MINUTE = 0
 MIN_CONFLUENCE = 7            # Minimum 7/20 to take a trade

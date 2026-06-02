@@ -721,7 +721,7 @@ def _init_components(
 
     # ── Optional: Post-Mortem agent ───────────────────────────────────
     post_mortem = None
-    if PostMortemAgent is not None:
+    if PostMortemAgent is not None and config.POST_MORTEM_ENABLED:
         try:
             post_mortem = PostMortemAgent(
                 supabase_client=supabase,
@@ -730,6 +730,8 @@ def _init_components(
             logger.info("PostMortemAgent ready")
         except Exception as exc:
             logger.warning("PostMortemAgent unavailable: %s", exc)
+    elif not config.POST_MORTEM_ENABLED:
+        logger.info("PostMortemAgent DISABLED (config.POST_MORTEM_ENABLED=False)")
 
     # ── Optional: KZ Validator (Camino C2 AI Overlay, shadow mode) ────
     kz_validator = None
@@ -6183,7 +6185,7 @@ def _confirm_live_mode() -> bool:
     print("  !!! LIVE MODE — Topstep Combine !!!")
     print("=" * 60)
     print("You are about to trade with real Combine capital.")
-    print("Risk rules: $250/trade, $750 kill switch, $1,500 cap, 3pm hard close.")
+    print("Risk rules: $250/trade, $900 kill switch, $1,500 cap, 3pm hard close.")
     print("Topstep rules: $2K MLL (trailing), $1K DLL, $3K profit target.")
     print()
     answer = input("Type 'YES I CONFIRM' to proceed, anything else to abort: ").strip()
