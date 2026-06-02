@@ -499,7 +499,8 @@ def _fresh_kz_stats() -> dict:
         "rejections": 0,
         "reject_reasons": {},
         "signals_fired": 0,
-        "trades_taken": 0,
+        "trades_taken": 0,       # orders PLACED (incl. limits that never fill)
+        "trades_filled": 0,      # orders that actually filled + closed in this KZ
         "pnl": 0.0,
     }
 
@@ -2441,6 +2442,16 @@ async def _on_trade_closed(
             order_id, pnl,
         )
         return
+
+    # Per-KZ telemetry: count this as a FILLED trade + tally realized P&L for
+    # the KZ-close summary. Distinct from kz_stats["trades_taken"] (orders
+    # PLACED at _execute_signal, which includes limits that never fill).
+    try:
+        if state.kz_stats is not None:
+            state.kz_stats["trades_filled"] = state.kz_stats.get("trades_filled", 0) + 1
+            state.kz_stats["pnl"] = state.kz_stats.get("pnl", 0.0) + pnl
+    except Exception:
+        pass
 
     # Canonical trade id — trades.id AND post_mortems.trade_id (FK) must agree.
     # Upstream builders set "id" to the open_positions key (pos_key), which is
@@ -4597,6 +4608,7 @@ async def _on_new_bar(
                     state.kz_history.append({
                         "kz": state.active_kz,
                         "trades": int(stats.get("trades_taken", 0)),
+                        "filled": int(stats.get("trades_filled", 0)),
                         "pnl": float(stats.get("pnl", 0.0)),
                         "signals_fired": int(stats.get("signals_fired", 0)),
                     })

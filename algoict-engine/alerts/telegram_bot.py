@@ -508,8 +508,9 @@ class TelegramBot:
             rejections     : int  — evaluate() calls that returned None
             reject_reasons : dict[str, int]  — counts by reason
             signals_fired  : int  — signals that passed all gates
-            trades_taken   : int  — trades actually executed
-            pnl            : float — realized PnL inside this KZ (if known)
+            trades_taken   : int  — orders PLACED (incl. limits that never fill)
+            trades_filled  : int  — orders that actually filled + closed in KZ
+            pnl            : float — realized PnL from filled trades in this KZ
         """
         if not self._should_send("kz_summary", (kz,), min_verbosity="normal"):
             return False
@@ -520,7 +521,8 @@ class TelegramBot:
                 f"FVGs seen:   {stats.get('fvgs_seen', 0)}",
                 f"Sweeps:      {stats.get('sweeps', 0)}",
                 f"Signals fired: {stats.get('signals_fired', 0)}",
-                f"Trades taken: {stats.get('trades_taken', 0)}",
+                f"Orders placed: {stats.get('trades_taken', 0)}",
+                f"Filled:        {stats.get('trades_filled', 0)}",
             ]
             pnl = stats.get("pnl")
             if pnl is not None:
