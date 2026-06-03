@@ -542,6 +542,24 @@ class SilverBulletStrategy:
                     )
                     return None
 
+        # 2026-06-03 — End-of-day cutoff: no NEW entries after SB_LATE_CUTOFF
+        # (14:45 CT = 3:45 PM ET), 15 min before the volatile 15:00 CT /
+        # 4:00 PM ET cash close. Pending unfilled limits are cancelled at the
+        # same time in main._poll_position_status. Live 6/3: a LONG limit
+        # pended into the close + had to be cancelled manually.
+        if config.SB_LATE_SESSION_CUTOFF:
+            cutoff_min = config.SB_LATE_CUTOFF_HOUR * 60 + config.SB_LATE_CUTOFF_MIN
+            if ts.hour * 60 + ts.minute >= cutoff_min:
+                logger.info(
+                    "EVAL silver_bullet [%s]: confluence=N/A, signal=reject, "
+                    "reason=late_session_cutoff (no new entries after %02d:%02d CT)",
+                    _ts_hm(ts), config.SB_LATE_CUTOFF_HOUR, config.SB_LATE_CUTOFF_MIN,
+                )
+                self._set_rejection(
+                    ts, "late_session_cutoff", active_zone, is_near_miss=False,
+                )
+                return None
+
         # Dynamic cancel check: last 10 minutes of the active window.
         kz_cfg = config.KILL_ZONES.get(active_zone, {})
         start_h, start_m = kz_cfg.get("start", (0, 0))

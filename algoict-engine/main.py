@@ -2724,7 +2724,22 @@ async def _poll_position_status(components: Components, state: EngineState) -> N
             # post-KZ grace before cancelling. NY AM 08:30-12:00 CT (210min)
             # → limit can wait the full session. London 01-04 CT (180min)
             # likewise. ICT-aligned + matches ICT 60-min SB window math.
-            if still_in_kz or bars_pending < ttl_bars:
+            #
+            # 2026-06-03 — End-of-day cutoff override: past SB_LATE_CUTOFF
+            # (14:45 CT = 3:45 PM ET) cancel any unfilled limit even if still
+            # in KZ, to clear it BEFORE the volatile 15:00 CT / 4:00 PM ET
+            # cash close. Mirrors the strategy-side late_session_cutoff. Live
+            # 6/3: a LONG limit pended into the close + was cancelled manually.
+            late_cutoff = False
+            if config.SB_LATE_SESSION_CUTOFF and bar_ts is not None:
+                try:
+                    late_cutoff = (
+                        bar_ts.hour * 60 + bar_ts.minute
+                        >= config.SB_LATE_CUTOFF_HOUR * 60 + config.SB_LATE_CUTOFF_MIN
+                    )
+                except Exception:
+                    late_cutoff = False
+            if (still_in_kz or bars_pending < ttl_bars) and not late_cutoff:
                 # Limit still legitimately waiting — not phantom.
                 # DO NOT increment bars_pending here (TTL sweep at
                 # line ~2364 does the incrementing). Just skip cleanup.
@@ -2739,6 +2754,9 @@ async def _poll_position_status(components: Components, state: EngineState) -> N
             # Both conditions hold: we're OUTSIDE the KZ AND beyond the
             # post-KZ TTL grace. Actually clean up.
             reason_str = (
+                f"late-session cutoff {config.SB_LATE_CUTOFF_HOUR:02d}:"
+                f"{config.SB_LATE_CUTOFF_MIN:02d} CT (pre-close)"
+                if late_cutoff else
                 f"KZ {sig_kz} closed + TTL post-KZ exhausted "
                 f"({bars_pending} bars >= {ttl_bars})"
             )

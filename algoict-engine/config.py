@@ -678,6 +678,15 @@ NY_OPEN_BUFFER_AFTER_MIN = 15   # block 15 min after each event
 DAILY_PROFIT_CAP = 1500       # live Combine canonical (reverted from 10000 paper-research 2026-05-29)
 HARD_CLOSE_HOUR = 15          # 3:00 PM CT — flatten everything
 HARD_CLOSE_MINUTE = 0
+
+# 2026-06-03 — End-of-day entry cutoff (live forensic 6/3: a LONG limit
+# pended into the volatile cash close and had to be cancelled manually). No
+# NEW SB entries after this time, and any pending unfilled limit is cancelled
+# at this time (main._poll_position_status), 15 min before the 15:00 CT /
+# 4:00 PM ET cash close. 14:45 CT = 3:45 PM ET.
+SB_LATE_SESSION_CUTOFF = True   # default ON (conservative end-of-day safety)
+SB_LATE_CUTOFF_HOUR = 14        # CT
+SB_LATE_CUTOFF_MIN = 45         # CT (14:45 CT = 3:45 PM ET)
 MIN_CONFLUENCE = 7            # Minimum 7/20 to take a trade
 MAX_MNQ_TRADES_PER_DAY = 15  # Global daily cap. Silver Bullet v4 RTH Mode
                               # uses kill_switch (3 consecutive losses) + per-KZ
