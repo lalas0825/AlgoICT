@@ -839,6 +839,22 @@ work + thorough backtest.
 - C10 `OrderResult` frozen-refactor wrapper (defensive, not urgent)
 - H6 flatten exit price accuracy via broker fill-query (workaround: last 1-min close, ~1pt off)
 - Bug G ICT-canonical refinement (currently OFF — see v12 below)
+- **SignalR market-hub stale-bar watchdog threshold** (2026-06-03, deferred):
+  `WS_BAR_STALE_THRESHOLD_S = 600` (brokers/topstepx.py:75) tolerates up to
+  10 min of no-bars before forcing a Market Hub reconnect. Live 6/3 02:10 CT
+  (London, Combine day 3): the market-hub WebSocket dropped (WinError 10053);
+  the watchdog correctly caught it at the 600s threshold and reconnected at
+  once — but a ~10-min bar gap occurred during an active KZ, so any setup
+  forming in that window was missed (no bars = no eval). Self-heals either
+  way (watchdog + reconnect both work); this is LATENCY tuning, not a bug.
+  Future improvement: KZ-aware threshold — tighter (e.g. 120-180s) during
+  London / NY AM / NY PM so feed drops recover faster and shrink the blind
+  window, looser off-KZ. Tradeoff: too-low risks false reconnects during
+  legitimately quiet / low-liquidity periods (overnight Asian, holidays,
+  pre-data lulls) where bars genuinely don't form for minutes — a reconnect
+  storm would be worse than the occasional gap. Only worth building if
+  KZ-hour feed drops RECUR (6/3 was an isolated blip). Validate against
+  historical feed-gap frequency before changing the default.
 - **NY_OPEN_BUFFER carry-in position exposure** (2026-05-19, deferred): the
   buffer rejects NEW signals during 07:20-07:45 and 08:20-08:45 CT but
   does NOT touch positions that are already open going INTO the buffer.
