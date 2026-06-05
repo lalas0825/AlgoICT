@@ -734,6 +734,17 @@ sees the canonical default.
   * **Pause during bot-off windows** (weekend, maintenance): `scripts\install_monitor.ps1 -Disable` (stops + clears state)
   * **Resume when bot relaunches**: `scripts\install_monitor.ps1 -Enable`
   * Uninstall: `scripts\install_monitor.ps1 -Uninstall`
+- **Auto-restart watchdog (`scripts\auto_restart.ps1` / `install_auto_restart.ps1`)** — Windows Task Scheduler runs "AlgoICT-AutoRestart" every 2 min, in its OWN background session (independent of the operator's interactive / Claude-Code-remote session). Where the monitor only ALERTS on death, this RELAUNCHES the bot. Built 2026-06-05 after the bot vanished at ~00:53 CT with NO traceback / NO power-sleep (last sleep 3/11) / NO reboot (up since 5/31) / NO app-crash event — coinciding with the operator losing Claude Code remote-control → a session/network event killed the PROCESS, and it stayed dead ~3h missing a London session. Because the relaunch comes from the Scheduler's background session, the new bot is no longer tied to the operator session that likely caused the death.
+  * **Only relaunches on a CLEAN death**: `.health.json` stale (>120s) AND `.engine.lock` PID gone. If the PID is still alive (hung), does nothing — that's the internal asyncio watchdog's + the monitor's job (avoid double-run / fighting an open position).
+  * **Anti-loop**: max 4 relaunches per rolling hour (`.auto_restart_state.json`), then backs off with a Telegram "manual intervention needed" alert (crash-loop guard).
+  * Relaunches LIVE with the "YES I CONFIRM" gate piped via a UNIQUE per-relaunch confirm file (avoids stdin-handle lock contention), account=21551969, User Hub re-subscribe on startup.
+  * Silent launch via `run_auto_restart_silent.vbs` (WSHShell windowStyle=0, no window flash — mirrors the monitor's VBS wrapper).
+  * Telegram alert on every relaunch + on back-off; writes `.auto_restart.log`.
+  * Install: `powershell -ExecutionPolicy Bypass -File scripts\install_auto_restart.ps1`
+  * Verify: `Get-ScheduledTask -TaskName AlgoICT-AutoRestart`
+  * Test (no-op while bot alive — safe): `Start-ScheduledTask -TaskName AlgoICT-AutoRestart`
+  * Tail: `Get-Content .auto_restart.log -Tail 20 -Wait`
+  * **Pause during bot-off windows** (weekend, maintenance — so it doesn't relaunch a bot you deliberately stopped): `scripts\install_auto_restart.ps1 -Disable`. Resume: `-Enable`. Uninstall: `-Uninstall`.
 - **Reconciler 5s grace period** — no false-orphan during broker fill propagation
 - **`record_trade(order_id=)` idempotency** — triple-path dedup (User Hub + poll + reconcile)
 - **Session-recency filters** — structure (Bug A) + displacement (C5). FVG/OB intentionally NOT filtered per ICT.
