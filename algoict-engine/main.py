@@ -2191,6 +2191,70 @@ def _update_edge_state(components: Components, state: EngineState) -> None:
     )
 
 
+async def _on_broker_cancel(
+    order_data: dict,
+    components: "Components",
+    state: "EngineState",
+) -> None:
+    """
+    Called by the broker's cancel callback (user hub GatewayUserOrder status=3).
+
+    When an order is cancelled — most importantly a *manual* cancel in the
+    TopstepX UI — any matching UNFILLED pending entry must be dropped from
+    state.open_positions, else it lingers as a phantom that occupies the
+    single-position slot and blocks new entries until a restart (the order
+    handler historically processed only fills, ignoring cancels: 2026-06-05).
+
+    Safety:
+      - Only an UNFILLED entry is cleared. A cancel whose id is a bracket leg
+        (stop/target) or an already-filled entry is left alone — the reconciler
+        owns live positions.
+      - ``order_data["_self_initiated"]`` (set by the broker) is True when the
+        bot itself cancelled (TTL / opportunity-replace). Those normally already
+        swapped local state, so this is a harmless no-op; we still clear if a key
+        survived a race, but suppress the user-facing alert.
+    """
+    oid = str(order_data.get("orderId") or order_data.get("id") or "")
+    if not oid or not state.open_positions:
+        return
+    self_initiated = bool(order_data.get("_self_initiated"))
+    for pos_key, pos in list(state.open_positions.items()):
+        entry_order = pos.get("entry_order")
+        entry_id = str(entry_order.order_id) if entry_order else ""
+        if not entry_id or entry_id != oid:
+            continue
+        if pos.get("entry_fill_confirmed"):
+            # Entry already filled — a cancel on this id shouldn't happen, and if
+            # it does we must NOT drop a live position. Leave it for the reconciler.
+            logger.warning(
+                "Cancel event for already-filled entry %s ignored "
+                "(live position; reconciler owns it).", oid)
+            return
+        sig = pos.get("signal")
+        desc = ""
+        if sig is not None:
+            entry_px = getattr(sig, "entry_price", getattr(sig, "entry", None))
+            px = f" @ {entry_px}" if entry_px is not None else ""
+            desc = f" ({getattr(sig, 'direction', '?')} {getattr(sig, 'symbol', '?')}{px})"
+        state.open_positions.pop(pos_key, None)
+        logger.info(
+            "Pending entry %s CANCELLED %s — cleared%s from local state; "
+            "open_positions now %d.",
+            oid, "by bot" if self_initiated else "EXTERNALLY",
+            desc, len(state.open_positions))
+        if not self_initiated and components.telegram is not None:
+            try:
+                await components.telegram.send_emergency_alert(
+                    f"Pending entry cancelled externally{desc} — phantom cleared "
+                    f"from local state; bot can take new entries.")
+            except Exception as exc:
+                logger.debug("cancel-notice telegram failed: %s", exc)
+        return
+    # oid matched no pending entry — most likely a bracket stop/target leg whose
+    # OCO partner (the entry) was cancelled, or an already-removed key.
+    logger.debug("Cancel event for %s matched no pending entry (bracket leg?).", oid)
+
+
 async def _on_broker_fill(
     order_data: dict,
     components: "Components",
@@ -2459,6 +2523,10 @@ async def _on_trade_closed(
     # post-mortem FK to trades(id) would fail. Pin one stable unique id here,
     # before both write_trade and analyze_loss consume the dict.
     trade["id"] = f"{trade.get('symbol')}_{trade.get('entry_time')}"
+    # This handler IS the close path (realized pnl + exit_time), so mark the
+    # row closed. trades.status is NOT NULL DEFAULT 'open'; without this the
+    # dashboard shows closed trades as phantom open positions (2026-06-05 fix).
+    trade["status"] = "closed"
 
     # 2. supabase persistence
     if components.supabase is not None:
@@ -5789,6 +5857,16 @@ async def run(
             await _on_broker_fill(order_data, components, state)
         components.broker.set_fill_callback(_fill_cb)
         logger.info("Registered broker fill callback")
+
+    # Register cancel callback — clears an unfilled pending entry from local
+    # state when its order is cancelled (manual UI cancel / TTL / OCO sweep),
+    # so a hand-cancelled limit doesn't linger as a phantom blocking new
+    # entries until restart (2026-06-05 fix).
+    if hasattr(components.broker, "set_cancel_callback"):
+        async def _cancel_cb(order_data: dict) -> None:
+            await _on_broker_cancel(order_data, components, state)
+        components.broker.set_cancel_callback(_cancel_cb)
+        logger.info("Registered broker cancel callback")
 
     # ── 2b. Connect broker (starts SignalR with symbols already registered) ─
     try:

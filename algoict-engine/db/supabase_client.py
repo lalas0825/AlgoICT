@@ -129,6 +129,14 @@ class SupabaseClient:
             **explicit,
             **{k: v for k, v in trade.items() if k not in explicit},
         }
+        # Lifecycle status. trades.status is NOT NULL DEFAULT 'open'. The live
+        # close path (_on_trade_closed) is the only writer and historically
+        # omitted status, so a closed trade INSERTed fresh landed on the 'open'
+        # default — and the dashboard ("Open Positions" filters status='open')
+        # then showed closed trades as phantom open positions. Derive it from
+        # the row lifecycle unless the caller set it explicitly.
+        if not payload.get("status"):
+            payload["status"] = "closed" if trade.get("exit_time") else "open"
         for col in self._missing_trades_cols:
             payload.pop(col, None)
 

@@ -230,6 +230,14 @@ class TopstepXClient:
         # WebSocket — user hub (order fills)
         self._user_hub_task: Optional[asyncio.Task] = None
         self._fill_callback: Optional[Callable] = None
+        # Invoked when an order is CANCELLED (user-hub status=3) so the engine
+        # can drop an unfilled pending entry from local state (else it lingers
+        # as a phantom that blocks new entries until restart).
+        self._cancel_callback: Optional[Callable] = None
+        # Order ids the bot itself cancelled (TTL / opportunity-replace /
+        # flatten). Lets the cancel handler tell bot-initiated cancels apart
+        # from external (manual UI) cancels so it doesn't false-alert.
+        self._self_cancelled_ids: set = set()
         # Tracks consecutive user-hub failures. After _USER_HUB_MAX_FAILURES
         # the loop stops reconnecting; engine falls back to position polling.
         self._user_hub_failure_count: int = 0
@@ -559,6 +567,10 @@ class TopstepXClient:
         success = bool(data.get("success"))
         if success:
             logger.info("Cancelled order %s", order_id)
+            # Tag as bot-initiated so the status=3 handler can distinguish this
+            # from an external/manual cancel (avoids a false "phantom cleared"
+            # alert when the bot itself cancels via TTL / opportunity-replace).
+            self._self_cancelled_ids.add(str(order_id))
             return True
 
         err_code = data.get("errorCode")
@@ -1015,8 +1027,27 @@ class TopstepXClient:
                     order_data.get("filledPrice"),
                 )
 
-                # ProjectX status codes: 2 = Filled
-                if order_data.get("status") != 2:
+                # ProjectX status codes: 1=Working, 2=Filled, 3=Cancelled.
+                status = order_data.get("status")
+                # A cancelled order (manual UI cancel, TTL sweep, or OCO partner
+                # of a cancelled entry) must clear any matching UNFILLED pending
+                # entry from local state — otherwise it lingers as a phantom that
+                # blocks new entries until a restart. The handler previously
+                # ignored everything but fills, which is the 2026-06-05 bug.
+                if status == 3:
+                    coid = order_data.get("orderId") or order_data.get("id")
+                    order_data["_self_initiated"] = str(coid) in self._self_cancelled_ids
+                    self._self_cancelled_ids.discard(str(coid))
+                    logger.info(
+                        "User hub: order %s CANCELLED (status=3, self=%s)",
+                        coid, order_data["_self_initiated"],
+                    )
+                    if self._cancel_callback is not None:
+                        asyncio.run_coroutine_threadsafe(
+                            self._cancel_callback(order_data), loop
+                        )
+                    return
+                if status != 2:
                     return
 
                 # Ignore partial fills — wait for the complete fill event
@@ -1302,6 +1333,17 @@ class TopstepXClient:
         TopstepX user hub (contains orderId, filledPrice, status, etc.).
         """
         self._fill_callback = callback
+
+    def set_cancel_callback(self, callback: Callable) -> None:
+        """Register callback invoked when an order is CANCELLED (status=3).
+
+        Same signature as ``set_fill_callback``: ``async def cb(order_data)``.
+        ``order_data["_self_initiated"]`` is True when the bot itself issued the
+        cancel (vs an external/manual cancel). Lets the engine drop an unfilled
+        pending entry from local state so a hand-cancelled limit doesn't linger
+        as a phantom that blocks new entries.
+        """
+        self._cancel_callback = callback
 
     def set_on_ws_exhausted(self, callback: Callable[[], Any]) -> None:
         """Register an emergency-flatten callback invoked when the SignalR
