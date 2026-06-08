@@ -90,7 +90,18 @@ código retenido. Scripts: `analysis/vision_counterfactual.py`, `vision_separabi
   falsas "cancelled externally" hoy (todas eran opportunity-replace del bot).
   Fix: pre-registrar antes del await. (commit fd94bd5)
 
-### 📌 Próxima dirección de research: Camino B (regime detection determinístico)
-Lo que la data SÍ respalda (vs la visión que no): separadores determinísticos
-— NY PM = KZ débil, rango-alto, give-back cascade. Session tracker
-backteseable. Ver explicación abajo cuando se construya.
+### Lunes 06/08 día completo — 1W/5L, −$508 neto (todos longs)
+Régimen diario bajista, el bot fadeó/chopeó. Seguís VERDE en el Combine
+(+$441 neto wk1+wk2). No se intervino — kill-switch $900 es el freno.
+
+### 🛑 Camino B (regime circuit-breaker) — TESTEADO y RECHAZADO (06/08)
+Backtest 3-año post-hoc de TODAS las variantes (halt por N pérdidas
+consecutivas/totales, instant-adverse quick-stop, cross-KZ cascade).
+**Todas throw-out-winner, 0 sobrevive.** Los trades que saltaría tras una
+racha de pérdidas son net-GANADORES (N=2: 263 skipped = +$39,020). Cross-KZ:
+los trades de una KZ que sigue a una KZ net-negativa son net-positivos cada
+año. **Después de pérdidas, el bot RECUPERA — las rachas no predicen más
+pérdidas.** Cierra la investigación "regime detection / darle ojos al bot":
+ningún circuit-breaker de performance-reciente sobrevive. La protección que SÍ
+sirve = los caps por MONTO que ya tenemos ($900 kill-switch + $2000 MLL).
+7º throw-out-winner. Scripts: analysis/camino_b_crossperiod.py + camino_b_extra.py.
