@@ -423,10 +423,11 @@ Este patrón cerró el bug 2026-04-18 donde flatten paths perdían P&L silently.
 
 ## Telegram Verbosity (2026-04-22)
 
-Tres niveles vía `TELEGRAM_VERBOSITY` en `.env` (default `normal`):
+Cuatro niveles vía `TELEGRAM_VERBOSITY` en `.env` (default `normal`):
 
 | Level | Alertas | Volumen/día |
 |-------|---------|-------------|
+| `results` | **SOLO** daily summary + risk/emergencias (kill switch, heartbeat OFFLINE, VPIN extreme, MLL danger, orphan/naked). **CERO trade-por-trade** (no entries/exits/fires/trails/KZ/sweeps). El antídoto para el screen-watching / la urgencia de intervenir (2026-06-08). | 1–3 |
 | `quiet` | Entries/exits, kill switch, heartbeat, daily summary, VPIN shield | 5–10 |
 | `normal` | Anterior + **KZ enter** (bias + tracked levels + VPIN + SWC) + **KZ close summary** (evals, sweeps, rejects top-4) + **liquidity sweep detected** (level, candle, watch-for) + signal fired (dual /19 /10 display) | 15–25 |
 | `verbose` | Anterior + **near-miss rejects** (FVG present + no sweep, framework <10pts, no 5min MSS, etc.) | 40–80 |

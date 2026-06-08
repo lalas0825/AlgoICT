@@ -239,7 +239,10 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 #               5-min MSS/BOS events. ~40-80 msgs/day.
 # Override via env: TELEGRAM_VERBOSITY=verbose in .env
 TELEGRAM_VERBOSITY = os.getenv("TELEGRAM_VERBOSITY", "normal").lower().strip()
-if TELEGRAM_VERBOSITY not in ("quiet", "normal", "verbose"):
+# "results" = results-only: daily summary + risk/emergency alerts ONLY, no
+# per-trade execution noise (entries/exits/fires/trails/KZ/sweeps). The
+# antidote for screen-watching / the urge to intervene. Below "quiet".
+if TELEGRAM_VERBOSITY not in ("results", "quiet", "normal", "verbose"):
     TELEGRAM_VERBOSITY = "normal"
 
 # Per-alert-type throttle floors (seconds). The TelegramBot enforces these

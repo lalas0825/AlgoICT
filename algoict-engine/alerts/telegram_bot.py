@@ -158,10 +158,12 @@ class TelegramBot:
         alert_type : str — key into config.TELEGRAM_THROTTLE_SEC (e.g. "sweep")
         bucket_key : tuple — extra discriminators so similar alerts don't
                      collide (e.g. (kz, reason) for near-miss rejects).
-        min_verbosity : "quiet" | "normal" | "verbose" — minimum verbosity
-                     level at which this alert type is permitted to send.
+        min_verbosity : "results" | "quiet" | "normal" | "verbose" — minimum
+                     verbosity at which this alert type is permitted to send.
+                     "results" (below quiet) = results-only mode: daily summary
+                     + risk/emergency alerts only, no per-trade execution noise.
         """
-        levels = {"quiet": 0, "normal": 1, "verbose": 2}
+        levels = {"results": -1, "quiet": 0, "normal": 1, "verbose": 2}
         if levels.get(self._verbosity, 1) < levels.get(min_verbosity, 1):
             return False
 
@@ -218,6 +220,8 @@ class TelegramBot:
         size_pct: float = 1.0,
     ) -> bool:
         """Send the rich SIGNAL FIRED alert when a setup is confirmed."""
+        if self._verbosity == "results":
+            return False  # results-only mode: no per-trade execution noise
         try:
             direction = signal.direction.upper()
             bd = signal.confluence_breakdown
@@ -311,6 +315,8 @@ class TelegramBot:
         fill_price: float,
     ) -> bool:
         """Send confirmation when entry order is filled."""
+        if self._verbosity == "results":
+            return False  # results-only mode: no per-trade execution noise
         try:
             side = "BUY" if direction == "long" else "SELL"
             msg = f"✅ TRADE OPENED: {side} {contracts}x {symbol} @ ${fill_price:,.2f}"
@@ -329,6 +335,8 @@ class TelegramBot:
         close_price: float,
     ) -> bool:
         """Send result when position closes (target hit or stop hit)."""
+        if self._verbosity == "results":
+            return False  # results-only mode: no per-trade execution noise
         try:
             is_win = pnl >= 0
             emoji = "✅" if is_win else "❌"
@@ -353,6 +361,8 @@ class TelegramBot:
         confluence_score: Optional[int] = None,
     ) -> bool:
         """Legacy trade alert — kept for backward compatibility with existing callers."""
+        if self._verbosity == "results":
+            return False  # results-only mode: no per-trade execution noise
         try:
             side_upper = side.upper()
             is_entry = exit_price is None
@@ -390,6 +400,8 @@ class TelegramBot:
         new_stop: float,
     ) -> bool:
         """Notify when trailing stop tightens by a meaningful amount."""
+        if self._verbosity == "results":
+            return False  # results-only mode: no per-trade execution noise
         try:
             delta = new_stop - old_stop if direction == "long" else old_stop - new_stop
             sign = "+" if delta >= 0 else ""
