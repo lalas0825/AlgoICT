@@ -10,9 +10,10 @@ distinguishing bot-initiated cancels (no alert) from external ones (alert).
 """
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, AsyncMock, patch
 
 import main
+import brokers.topstepx as tx
 
 
 def _pos(order_id, filled=False, direction="short", symbol="MNQ", entry=29922.5):
@@ -75,3 +76,35 @@ def test_self_initiated_cancel_clears_but_no_alert():
     asyncio.run(main._on_broker_cancel({"orderId": 386, "_self_initiated": True}, comp, state))
     assert state.open_positions == {}  # still cleared (race safety)
     assert sent == []                  # but no user-facing alert
+
+
+# --- race fix (2026-06-08): cancel_order must tag self BEFORE the API await,
+#     else the status=3 user-hub event (handled during the await) reads the
+#     cancel as external and fires a false "phantom cleared externally" alert.
+
+def _broker():
+    c = tx.TopstepXClient(username="u", api_key="k", account_id="123")
+    c._account_id = "123"  # normally set during connect()/account selection
+    return c
+
+
+def test_cancel_order_pre_registers_self_tag_before_api():
+    client = _broker()
+    seen = {}
+    def _post_side(path, body):  # sync side_effect runs at await-time
+        seen["tagged_during_call"] = str(body["orderId"]) in client._self_cancelled_ids
+        return {"success": True}
+    with patch.object(client, "_post", new=AsyncMock(side_effect=_post_side)):
+        ok = asyncio.run(client.cancel_order("3089072228"))
+    assert ok is True
+    # the id was already tagged self when the cancel API was hit (race-safe)
+    assert seen["tagged_during_call"] is True
+
+
+def test_cancel_order_drops_tag_on_rejection():
+    client = _broker()
+    with patch.object(client, "_post", new=AsyncMock(
+            return_value={"success": False, "errorCode": 1, "errorMessage": "not found"})):
+        ok = asyncio.run(client.cancel_order("999"))
+    assert ok is False
+    assert "999" not in client._self_cancelled_ids  # optimistic tag dropped

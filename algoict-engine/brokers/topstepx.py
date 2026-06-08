@@ -551,6 +551,14 @@ class TopstepXClient:
         """
         if not order_id:
             raise TopstepXOrderError("order_id cannot be empty")
+        # Tag as bot-initiated BEFORE the API call. The user-hub status=3 event
+        # routinely arrives and is handled before _post() returns (the cancel
+        # callback runs on the loop during this await), so tagging AFTER the
+        # await loses the race — the handler reads self=False and fires a false
+        # "phantom cleared externally" alert. Pre-register intent; the status=3
+        # handler discards the id when it consumes it. Drop the tag if the
+        # cancel never went through.
+        self._self_cancelled_ids.add(str(order_id))
         try:
             data = await self._post(
                 "/Order/cancel",
@@ -560,6 +568,7 @@ class TopstepXClient:
                 },
             )
         except aiohttp.ClientResponseError as exc:
+            self._self_cancelled_ids.discard(str(order_id))
             raise TopstepXOrderError(
                 f"Failed to cancel order {order_id}: {exc}"
             ) from exc
@@ -567,11 +576,10 @@ class TopstepXClient:
         success = bool(data.get("success"))
         if success:
             logger.info("Cancelled order %s", order_id)
-            # Tag as bot-initiated so the status=3 handler can distinguish this
-            # from an external/manual cancel (avoids a false "phantom cleared"
-            # alert when the bot itself cancels via TTL / opportunity-replace).
-            self._self_cancelled_ids.add(str(order_id))
             return True
+        # Cancel rejected → no status=3 will come for this attempt; drop the
+        # optimistic tag so a later/external cancel isn't mis-attributed.
+        self._self_cancelled_ids.discard(str(order_id))
 
         err_code = data.get("errorCode")
         err_msg = data.get("errorMessage") or ""
