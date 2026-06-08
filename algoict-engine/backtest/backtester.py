@@ -380,11 +380,19 @@ class Backtester:
                     # / NY PM window.
                     sig_kz = pending_entry.get("kill_zone")
                     still_in_kz = False
-                    if sig_kz and self.session is not None:
+                    if self.session is not None:
                         try:
-                            still_in_kz = self.session.is_kill_zone(
-                                current_ts, sig_kz,
-                            )
+                            if config.cfg("CARRY_LIMITS_ACROSS_KZ", False):
+                                # Contiguous KZs as ONE window: limit persists
+                                # while we're in ANY kill zone, not only its own.
+                                still_in_kz = any(
+                                    self.session.is_kill_zone(current_ts, k)
+                                    for k in ("london", "ny_am", "ny_pm")
+                                )
+                            elif sig_kz:
+                                still_in_kz = self.session.is_kill_zone(
+                                    current_ts, sig_kz,
+                                )
                         except Exception:
                             still_in_kz = False
                     keep_alive = (

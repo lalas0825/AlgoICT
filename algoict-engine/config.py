@@ -1101,6 +1101,14 @@ OB_FVG_LOOKFORWARD = 3        # bars after OB candle to find the confirming FVG
 # without holding through the next major session move.
 # ---------------------------------------------------------------------------
 LIMIT_ORDER_TTL_BARS = 10         # cancel unfilled limit entry after N bars
+# 2026-06-08 SHIPPED (default ON): a pending limit persists while we're in ANY
+# kill zone (London/NY AM/NY PM are contiguous → treat as one continuous window)
+# instead of only its originating KZ. Motivated by a live NY-AM limit cancelled
+# at the KZ boundary that would have filled +133pts 11 min later. **Cross-period
+# validated: +8.5% (+$32,889) over 2023-25, POSITIVE all 3 years (2024 +20.2%).**
+# First strategy experiment to survive cross-period (after 8 throw-out-winners).
+# Bias-flip + late-cutoff (14:45 CT) cancels still apply. Flip to False to revert.
+CARRY_LIMITS_ACROSS_KZ = True
 
 # ---------------------------------------------------------------------------
 # OB Age Decay

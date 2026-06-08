@@ -2775,9 +2775,20 @@ async def _poll_position_status(components: Components, state: EngineState) -> N
             )
             sig_kz = getattr(signal, "kill_zone", None)
             still_in_kz = False
-            if bar_ts is not None and sig_kz and hasattr(components, "session"):
+            if bar_ts is not None and hasattr(components, "session"):
                 try:
-                    still_in_kz = components.session.is_kill_zone(bar_ts, sig_kz)
+                    if config.cfg("CARRY_LIMITS_ACROSS_KZ", False):
+                        # 2026-06-08: contiguous KZs (London→NY AM→NY PM) as ONE
+                        # window — keep the limit alive while in ANY kill zone,
+                        # not only its originating KZ. Cross-period validated
+                        # +8.5% (+$32,889, positive all 3 yrs). Matches the
+                        # backtester. Bias-flip + late-cutoff cancels still apply.
+                        still_in_kz = any(
+                            components.session.is_kill_zone(bar_ts, k)
+                            for k in ("london", "ny_am", "ny_pm")
+                        )
+                    elif sig_kz:
+                        still_in_kz = components.session.is_kill_zone(bar_ts, sig_kz)
                 except Exception:
                     still_in_kz = False
 

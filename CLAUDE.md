@@ -645,6 +645,20 @@ Requiere migration `0003_bot_state_overlays.sql` aplicada.
 - **NY Open Buffer SHIPPED** (2026-05-19) — `NY_OPEN_BUFFER_BEFORE_MIN=10`,
   `NY_OPEN_BUFFER_AFTER_MIN=15`, events at 07:30 + 08:30 CT. +14.7% 3-yr P&L
   with disclosure that ~7% is generic cascade effect (placebo also helped).
+- **`CARRY_LIMITS_ACROSS_KZ = True` SHIPPED (2026-06-08)** — 🎉 **FIRST strategy
+  experiment to SURVIVE cross-period** (after 8 throw-out-winner rejections incl.
+  vision + Camino B). A pending limit now persists while we're in ANY kill zone
+  (London→NY AM→NY PM are contiguous → ONE continuous window) instead of being
+  cancelled at the originating-KZ boundary. **3-yr: +$32,889 (+8.5%), POSITIVE
+  all 3 years — 2023 +0.6%, 2024 +20.2%, 2025 +4.5%.** Adds ~8 trades/yr (the
+  cross-KZ fills the per-KZ cancel was killing). Motivated by a live NY-AM limit
+  (LONG @29491.75) cancelled at the NY AM→NY PM boundary on 6/8 that would have
+  filled +133pts 11 min later — user spotted it. Wired in BOTH backtester
+  (`backtest/backtester.py` keep-alive) AND live (`main.py` `_poll_position_status`
+  still_in_kz). Bias-flip + late-cutoff (14:45 CT) cancels still apply. Flip flag
+  to False to revert. **Lesson**: the 2024-06 single-month smoke test showed
+  −24.6% (would've killed it) but full 2024 was +20.2% — single-month smoke
+  tests validate WIRING only, never the verdict. See `analysis/kz_carry_crossperiod.py`.
 - **Camino C4 Vision-overlay AI validator** — **DISABLED 2026-06-08**
   (`VISION_VALIDATOR_ENABLED=False`). Ran shadow 2026-05-20 → 06-08; the live
   counterfactual killed it (anti-correlated with P&L, −$1,000 over 15 trades;
