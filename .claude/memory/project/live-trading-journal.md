@@ -60,3 +60,37 @@ sistemática ES el edge. Veta-discrecional = apostar corazonada contra
 
 ### Combine progress
 **+$949.54 = ~32% del target $3,000 en 1 semana.** MLL normal, 0 violaciones.
+
+---
+
+## Semana 2 — notas
+
+### London 06/08 — give-back contra-tendencia (−$204 neto)
+4 LONGs, todos conf=1 (sentiment), en régimen DIARIO BAJISTA. T1 ganó +$427
+(MFE +3.0R), después T2/T3/T4 fadearon el downtrend y perdieron (T4 fue a
++1.9R y reversó full). Bot siguió sus reglas (SB bias-agnostic). Es variance +
+el gap de regime-detection. NO se intervino (set & forget). Frenos: $900 DD +
+cap 15 trades, ninguno cerca.
+
+### 🔬 Camino C4 Vision overlay — DISABLED (06/08)
+Contrafactual sobre 15 trades live: **obedecer visión = +$745 → −$254 (−$1,000).**
+SKIP calls 62% WR, FIRE calls 33% WR — anti-correlada. Separabilidad: da el
+MISMO rationale ("chop, FVG marginal") a ganadores y perdedores → la info que
+los distingue no está en el chart al fire. **No es problema de prompt, es
+fundamental.** 6º filtro throw-out-winner. `VISION_VALIDATOR_ENABLED=False`,
+código retenido. Scripts: `analysis/vision_counterfactual.py`, `vision_separability.py`.
+
+### Bugs fixed Semana 2
+- **status='open' en trades cerrados** (regresión) → write_trade deriva status
+  de exit_time + backfill de 11 filas. Dashboard "Open Positions" ya no muestra
+  fantasmas. (commit f328eea)
+- **Cancel-fantasma** (Friday's chip) → cancel callback limpia entry pendiente
+  no-llena en status=3, self-vs-external aware. (commit f328eea)
+- **Race en el self-cancel tag** → se registraba después del await; 8 alertas
+  falsas "cancelled externally" hoy (todas eran opportunity-replace del bot).
+  Fix: pre-registrar antes del await. (commit fd94bd5)
+
+### 📌 Próxima dirección de research: Camino B (regime detection determinístico)
+Lo que la data SÍ respalda (vs la visión que no): separadores determinísticos
+— NY PM = KZ débil, rango-alto, give-back cascade. Session tracker
+backteseable. Ver explicación abajo cuando se construya.

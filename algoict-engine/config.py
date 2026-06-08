@@ -125,7 +125,14 @@ KZ_VALIDATOR_SHADOW_MODE = True     # legacy, ignored when ENABLED=False
 #
 # Cost ~$0.017/call (Sonnet with 2 images) at ~5 unique signals/day after
 # dedup = ~$0.10/day = $3/month. Latency 3-6 sec.
-VISION_VALIDATOR_ENABLED = True
+# 2026-06-08: DISABLED after the shadow counterfactual. Over 15 live trades
+# obeying vision would have turned +$745 -> -$254 (-$1,000). Its SKIP calls won
+# 62% (5/8), FIRE calls won 33% (1/3) — anti-correlated with P&L. Separability
+# analysis: vision gives IDENTICAL rationales ("chop, marginal FVG") to the
+# winners it skipped and the losers — the discriminating info isn't in the chart
+# at fire time. 7th throw-out-winner filter. Not a prompt problem; fundamental.
+# Code retained; flip to True to resume shadow. See live-trading-journal.md.
+VISION_VALIDATOR_ENABLED = False
 VISION_VALIDATOR_SHADOW_MODE = True
 VISION_VALIDATOR_BARS_1MIN = 90      # bars in 1-min signal chart
 VISION_VALIDATOR_BARS_5MIN = 60      # bars in 5-min HTF context chart
