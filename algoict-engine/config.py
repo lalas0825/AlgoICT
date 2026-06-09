@@ -1109,6 +1109,13 @@ LIMIT_ORDER_TTL_BARS = 10         # cancel unfilled limit entry after N bars
 # First strategy experiment to survive cross-period (after 8 throw-out-winners).
 # Bias-flip + late-cutoff (14:45 CT) cancels still apply. Flip to False to revert.
 CARRY_LIMITS_ACROSS_KZ = True
+# 2026-06-09 experiment: Tier 1.5 bias-flip auto-cancel — when a pending limit
+# is open and an OPPOSITE 5min CHoCH/MSS registers, cancel proactively. Live
+# 6/9 fired on a fakeout wick (CHoCH bear @07:25, price then rallied +66pts).
+# Since it's the ONE cancel that still kills limits under KZ-carry, A/B-testing
+# whether it nets positive. Default ON (current/validated). Under cross-period
+# test. Flip to False to disable the bias-flip cancel entirely.
+SB_BIAS_FLIP_CANCEL = True
 
 # ---------------------------------------------------------------------------
 # OB Age Decay

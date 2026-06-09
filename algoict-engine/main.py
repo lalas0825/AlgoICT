@@ -2818,7 +2818,19 @@ async def _poll_position_status(components: Components, state: EngineState) -> N
                     )
                 except Exception:
                     late_cutoff = False
-            if (still_in_kz or bars_pending < ttl_bars) and not late_cutoff:
+            # NY-open blackout: cancel a resting limit so it can't fill on the
+            # cash-open wick (2026-06-09 fix — 6/9 NY-AM limit filled 08:31:47 +
+            # stopped 08:32:05 = -$142). The -10m BEFORE buffer gives time to
+            # cancel before the 08:30 CT wick. Pending limits only; already-open
+            # positions run to their trailing stop.
+            ny_blackout = False
+            if bar_ts is not None:
+                try:
+                    from strategies.silver_bullet import is_ny_open_blackout
+                    ny_blackout = is_ny_open_blackout(bar_ts)
+                except Exception:
+                    ny_blackout = False
+            if (still_in_kz or bars_pending < ttl_bars) and not late_cutoff and not ny_blackout:
                 # Limit still legitimately waiting — not phantom.
                 # DO NOT increment bars_pending here (TTL sweep at
                 # line ~2364 does the incrementing). Just skip cleanup.
@@ -2833,6 +2845,8 @@ async def _poll_position_status(components: Components, state: EngineState) -> N
             # Both conditions hold: we're OUTSIDE the KZ AND beyond the
             # post-KZ TTL grace. Actually clean up.
             reason_str = (
+                "NY-open blackout (no fills in cash-open window)"
+                if ny_blackout else
                 f"late-session cutoff {config.SB_LATE_CUTOFF_HOUR:02d}:"
                 f"{config.SB_LATE_CUTOFF_MIN:02d} CT (pre-close)"
                 if late_cutoff else

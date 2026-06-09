@@ -26,6 +26,17 @@ from strategies.ny_am_reversal import Signal  # same shape as SB.Signal
 from risk.risk_manager import RiskManager
 from timeframes.tf_manager import TimeframeManager
 from timeframes.session_manager import SessionManager
+import config as _cfg
+
+
+@pytest.fixture(autouse=True)
+def _disable_ny_open_buffer(monkeypatch):
+    """Synthetic _build_day spans the 08:20-08:45 CT NY-open blackout window.
+    These tests aren't about the buffer, so disable it — otherwise pending
+    limits get cancelled mid-day (2026-06-09 fix) and never reach their fill.
+    Mirrors the entry-distance-gate autouse fixture in test_silver_bullet."""
+    monkeypatch.setattr(_cfg, "NY_OPEN_BUFFER_BEFORE_MIN", 0)
+    monkeypatch.setattr(_cfg, "NY_OPEN_BUFFER_AFTER_MIN", 0)
 
 
 CT = pytz.timezone("US/Central")

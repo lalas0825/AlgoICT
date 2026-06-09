@@ -88,6 +88,29 @@ def _ts_hm(ts) -> str:
         return str(ts)
 
 
+def is_ny_open_blackout(ts) -> bool:
+    """True if ``ts`` (CT) falls inside a NY-open buffer blackout window.
+
+    No NEW evals are taken AND pending limits are cancelled in this window —
+    a resting limit that fills on the violent cash-open wick (e.g. 6/9 NY-AM:
+    filled 08:31:47, stopped 08:32:05, -$142) is exactly what the buffer is
+    meant to dodge. Returns False if the buffer is disabled (BEFORE=AFTER=0).
+    """
+    before_min = int(config.cfg("NY_OPEN_BUFFER_BEFORE_MIN", 0))
+    after_min = int(config.cfg("NY_OPEN_BUFFER_AFTER_MIN", 0))
+    if before_min <= 0 and after_min <= 0:
+        return False
+    try:
+        cur = ts.hour * 60 + ts.minute
+    except AttributeError:
+        return False
+    for (ev_h, ev_m) in config.cfg("NY_OPEN_EVENTS_CT", [(8, 30)]):
+        ev = ev_h * 60 + ev_m
+        if (ev - before_min) <= cur < (ev + after_min):
+            return True
+    return False
+
+
 def sb_applicable_score(breakdown: dict) -> tuple[int, int]:
     """
     Compute the SB-applicable sub-score from a ConfluenceResult breakdown.

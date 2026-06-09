@@ -351,6 +351,14 @@ class Backtester:
                 # (no-op — intentionally keep it; a new day may or may not advance the idx)
 
             # ── 0. Pending limit entry: check fill or TTL ────────────
+            # NY-open blackout: cancel a RESTING limit BEFORE the fill check so
+            # it cannot fill on the violent cash-open wick (2026-06-09 fix —
+            # live NY-AM limit filled 08:31:47 + stopped 08:32:05 = -$142).
+            # Only pending limits; already-open positions run to their stop.
+            if pending_entry is not None and open_position is None:
+                from strategies.silver_bullet import is_ny_open_blackout
+                if is_ny_open_blackout(current_ts):
+                    pending_entry = None
             if pending_entry is not None and open_position is None:
                 lp = pending_entry["limit_price"]
                 if pending_entry["direction"] == "long" and bar_low <= lp:
@@ -512,7 +520,10 @@ class Backtester:
             # If a pending limit has been sitting and an OPPOSITE 5min
             # CHoCH/MSS event has now registered, the structural thesis is
             # dead — cancel proactively (no need to wait for new signal).
-            if pending_entry is not None:
+            # 2026-06-09: gated by SB_BIAS_FLIP_CANCEL for cross-period A/B —
+            # the 5min-CHoCH detector flags fakeout wicks too, so this cancel
+            # may be killing limits that would persist+win under KZ-carry.
+            if pending_entry is not None and config.cfg("SB_BIAS_FLIP_CANCEL", True):
                 try:
                     from strategies.opportunity_replace import should_autocancel_pending
                     struct_det = self.detectors.get("structure")
