@@ -659,6 +659,21 @@ Requiere migration `0003_bot_state_overlays.sql` aplicada.
   to False to revert. **Lesson**: the 2024-06 single-month smoke test showed
   −24.6% (would've killed it) but full 2024 was +20.2% — single-month smoke
   tests validate WIRING only, never the verdict. See `analysis/kz_carry_crossperiod.py`.
+- **`SB_LATE_SESSION_CUTOFF = True` VALIDATED retroactively (2026-06-09)** — shipped
+  2026-06-03 on instinct ("no need to backtest", end-of-day safety: no new trades
+  after 14:45 CT to dodge the volatile 4PM cash close). Clean 3-yr A/B (cutoff ON
+  vs OFF, both with carry ON) proved it's a real EDGE, not just safety: **ON
+  $420,089 vs OFF $380,872 = +$39,217 (+9.3%), positive all 3 years (2024 +19.8%).**
+  Late-session trades near the 4PM close are net-losers; cutting them avoids the
+  losses. (An earlier cross-RUN inference wrongly guessed it "cost ~$40K" — the
+  clean same-config A/B reversed that. Lesson: never infer a feature's impact by
+  comparing two different backtest runs; run the isolated A/B.) See `analysis/final_backtests.py`.
+- **Combine $50K pass rate (current shipped config, 2026-06-09)**: rolling sim over
+  the 3-yr backtest trades = **98.4% (124/126 combine attempts pass)** — 2023 96.2%,
+  2024 100%, 2025 100%. Only 2 fails in 126, both 2023. 3-yr backtest P&L $420,089,
+  WR 64.1%, 2,722 trades, worst yearly max-DD $2,753. `--combine-reset-on-breach`
+  in run_backtest does NOT populate combine_pass_rate (stays 0) — use the rolling
+  sim in `analysis/final_backtests.py` notes instead.
 - **Camino C4 Vision-overlay AI validator** — **DISABLED 2026-06-08**
   (`VISION_VALIDATOR_ENABLED=False`). Ran shadow 2026-05-20 → 06-08; the live
   counterfactual killed it (anti-correlated with P&L, −$1,000 over 15 trades;
