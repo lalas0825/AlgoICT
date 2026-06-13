@@ -47,10 +47,20 @@ interface Cycle2Theme {
   status: string;
 }
 
+interface HypothesisRow {
+  id: string;
+  name: string;
+  domain: string; // 'ict' | 'quant'
+  theme: string | null;
+  status: string; // RECOMMENDED | RUNNING | QUEUED | PENDING | DEAD | DEFERRED | SKIPPED | NOT_PURSUED
+}
+
 interface EdgeHuntStatePayload {
   funnel_phases?: FunnelPhase[];
   sb_autopsy?: SBAutopsyCard[];
   cycle2_themes?: Cycle2Theme[];
+  hypotheses?: HypothesisRow[];
+  hypothesis_counts?: Record<string, number>;
   criterion?: {
     ratio_min?: number;
     p2r_min?: number;
@@ -293,10 +303,16 @@ export default function EdgeHuntPage() {
         )}
       </div>
 
-      {/* (c) SB closed-chapter cards */}
+      {/* (c) Hypotheses inventory — the full generated ledger by status */}
+      <HypothesesSection
+        hypotheses={state?.hypotheses ?? []}
+        counts={state?.hypothesis_counts ?? {}}
+      />
+
+      {/* (d) SB closed-chapter cards */}
       <SBAutopsy cards={state?.sb_autopsy ?? []} />
 
-      {/* (d) Cycle-2 themes */}
+      {/* (e) Cycle-2 themes */}
       <Cycle2Themes themes={state?.cycle2_themes ?? []} />
 
       <div className="text-center text-xs text-zinc-700 font-mono pb-4">
@@ -584,11 +600,254 @@ function SBAutopsy({ cards }: { cards: SBAutopsyCard[] }) {
 }
 
 // ===================================================================== //
-// (d) Cycle-2 themes
+// (c) Hypotheses inventory
+// ===================================================================== //
+
+// Per-status palette. green=recommended, blue=running/queued, amber=pending,
+// zinc/red=dead/skipped/deferred/not-pursued (de-emphasized).
+const HYP_STATUS_STYLES: Record<
+  string,
+  { chip: string; dot: string; label: string }
+> = {
+  RECOMMENDED: {
+    chip: 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400',
+    dot: 'bg-emerald-400',
+    label: 'next to code',
+  },
+  RUNNING: {
+    chip: 'bg-sky-500/10 border-sky-500/30 text-sky-400',
+    dot: 'bg-sky-400 animate-pulse',
+    label: 'coded + screening',
+  },
+  QUEUED: {
+    chip: 'bg-blue-500/10 border-blue-500/30 text-blue-400',
+    dot: 'bg-blue-400',
+    label: 'coded, in queue',
+  },
+  PENDING: {
+    chip: 'bg-amber-500/10 border-amber-500/30 text-amber-400',
+    dot: 'bg-amber-400',
+    label: 'generated, not prioritized',
+  },
+  DEAD: {
+    chip: 'bg-red-500/10 border-red-500/30 text-red-400',
+    dot: 'bg-red-500',
+    label: 'screened, died',
+  },
+  DEFERRED: {
+    chip: 'bg-zinc-800 border-zinc-700 text-zinc-400',
+    dot: 'bg-zinc-500',
+    label: 'needs cross-asset data',
+  },
+  SKIPPED: {
+    chip: 'bg-zinc-800 border-zinc-700 text-zinc-500',
+    dot: 'bg-zinc-600',
+    label: 'no data / Occam',
+  },
+  NOT_PURSUED: {
+    chip: 'bg-zinc-800 border-zinc-700 text-zinc-500',
+    dot: 'bg-zinc-600',
+    label: 'cycle-1 dead-ends',
+  },
+};
+
+// Display order: actionable first, de-emphasized last.
+const HYP_STATUS_ORDER = [
+  'RECOMMENDED',
+  'RUNNING',
+  'QUEUED',
+  'PENDING',
+  'DEAD',
+  'DEFERRED',
+  'SKIPPED',
+  'NOT_PURSUED',
+] as const;
+
+// Statuses shown expanded (full row lists). The rest are collapsed into a
+// de-emphasized <details> so dead/skipped/dead-end noise doesn't dominate.
+const HYP_EXPANDED = new Set(['RECOMMENDED', 'RUNNING', 'QUEUED', 'PENDING']);
+
+function hypStyle(status: string) {
+  return (
+    HYP_STATUS_STYLES[status] ?? {
+      chip: 'bg-zinc-800 border-zinc-700 text-zinc-500',
+      dot: 'bg-zinc-600',
+      label: '',
+    }
+  );
+}
+
+// Order an arbitrary set of status keys by the canonical order, appending
+// any unknown ones alphabetically at the end.
+function orderedStatuses(keys: string[]): string[] {
+  const known = HYP_STATUS_ORDER.filter((s) => keys.includes(s));
+  const extra = keys.filter((s) => !HYP_STATUS_ORDER.includes(s as never)).sort();
+  return [...known, ...extra];
+}
+
+function HypothesesSection({
+  hypotheses,
+  counts,
+}: {
+  hypotheses: HypothesisRow[];
+  counts: Record<string, number>;
+}) {
+  // Graceful when an older state row has no inventory.
+  if (hypotheses.length === 0) return null;
+
+  // Group rows by status, then order groups canonically.
+  const byStatus = new Map<string, HypothesisRow[]>();
+  for (const h of hypotheses) {
+    if (!byStatus.has(h.status)) byStatus.set(h.status, []);
+    byStatus.get(h.status)!.push(h);
+  }
+  const statusKeys = orderedStatuses(Array.from(byStatus.keys()));
+
+  // Count strip uses the published counts when present, else derives from rows.
+  const countKeys = orderedStatuses(
+    Object.keys(counts).length > 0 ? Object.keys(counts) : Array.from(byStatus.keys())
+  );
+  const countOf = (s: string) => counts[s] ?? byStatus.get(s)?.length ?? 0;
+
+  const expanded = statusKeys.filter((s) => HYP_EXPANDED.has(s));
+  const collapsed = statusKeys.filter((s) => !HYP_EXPANDED.has(s));
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-baseline gap-2 flex-wrap">
+        <h2 className="text-lg font-semibold text-zinc-200">Hypotheses</h2>
+        <span className="text-xs text-zinc-600">
+          full generated inventory · {hypotheses.length} total · grouped by status
+        </span>
+      </div>
+
+      {/* Status-count summary strip */}
+      <div className="flex flex-wrap gap-2">
+        {countKeys.map((s) => {
+          const st = hypStyle(s);
+          return (
+            <div
+              key={s}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-mono ${st.chip}`}
+            >
+              <span className={`w-2 h-2 rounded-full ${st.dot}`} />
+              <span className="font-semibold uppercase tracking-wide">{s}</span>
+              <span className="opacity-70">{countOf(s)}</span>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Expanded groups (actionable) */}
+      <div className="space-y-4">
+        {expanded.map((s) => (
+          <HypothesisGroup key={s} status={s} rows={byStatus.get(s) ?? []} />
+        ))}
+      </div>
+
+      {/* Collapsed groups (de-emphasized: dead / deferred / skipped / dead-ends) */}
+      {collapsed.length > 0 && (
+        <details className="group rounded-xl border border-zinc-800 bg-zinc-900/50">
+          <summary className="cursor-pointer select-none px-4 py-2.5 text-sm text-zinc-400 hover:text-zinc-300 flex items-center gap-2">
+            <span className="text-zinc-600 group-open:rotate-90 transition-transform">
+              ▶
+            </span>
+            <span className="font-semibold">Archived</span>
+            <span className="text-xs text-zinc-600 font-mono">
+              {collapsed
+                .map((s) => `${s} ${countOf(s)}`)
+                .join(' · ')}
+            </span>
+          </summary>
+          <div className="px-4 pb-4 pt-1 space-y-4">
+            {collapsed.map((s) => (
+              <HypothesisGroup key={s} status={s} rows={byStatus.get(s) ?? []} dim />
+            ))}
+          </div>
+        </details>
+      )}
+    </div>
+  );
+}
+
+function HypothesisGroup({
+  status,
+  rows,
+  dim = false,
+}: {
+  status: string;
+  rows: HypothesisRow[];
+  dim?: boolean;
+}) {
+  if (rows.length === 0) return null;
+  const st = hypStyle(status);
+  const sorted = [...rows].sort((a, b) => a.id.localeCompare(b.id));
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-2">
+        <span className={`w-2 h-2 rounded-full ${st.dot}`} />
+        <span
+          className={`text-xs font-mono font-semibold uppercase tracking-wide ${
+            st.chip.split(' ').find((c) => c.startsWith('text-')) ?? 'text-zinc-400'
+          }`}
+        >
+          {status}
+        </span>
+        <span className="text-xs text-zinc-600">{rows.length}</span>
+        {st.label && (
+          <span className="text-[11px] text-zinc-600 italic">— {st.label}</span>
+        )}
+      </div>
+      <div
+        className={`rounded-xl border border-zinc-800 bg-zinc-900 divide-y divide-zinc-800/60 overflow-hidden ${
+          dim ? 'opacity-70' : ''
+        }`}
+      >
+        {sorted.map((h) => (
+          <div
+            key={h.id}
+            className="flex items-center gap-3 px-3 py-2 hover:bg-zinc-800/30 transition"
+          >
+            <span className="font-mono text-xs text-zinc-500 w-12 shrink-0">{h.id}</span>
+            <span className="text-sm text-zinc-200 flex-1 min-w-0 truncate" title={h.name}>
+              {h.name}
+            </span>
+            <DomainThemeTag domain={h.domain} theme={h.theme} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DomainThemeTag({ domain, theme }: { domain: string; theme: string | null }) {
+  const domainStyle =
+    domain === 'quant'
+      ? 'bg-violet-500/10 border-violet-500/30 text-violet-300'
+      : 'bg-teal-500/10 border-teal-500/30 text-teal-300';
+  return (
+    <div className="flex items-center gap-1.5 shrink-0">
+      <span
+        className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-mono uppercase border ${domainStyle}`}
+      >
+        {domain}
+      </span>
+      {theme && (
+        <span className="hidden sm:inline-block px-1.5 py-0.5 rounded text-[10px] font-mono border border-zinc-700 bg-zinc-800 text-zinc-400">
+          {theme}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// ===================================================================== //
+// (e) Cycle-2 themes
 // ===================================================================== //
 
 const THEME_STATUS_STYLES: Record<string, string> = {
   generating: 'text-sky-400 bg-sky-500/10 border-sky-500/30',
+  generated: 'text-blue-400 bg-blue-500/10 border-blue-500/30',
   screening: 'text-amber-400 bg-amber-500/10 border-amber-500/30',
   survives: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30',
   dead: 'text-zinc-500 bg-zinc-800 border-zinc-700',
