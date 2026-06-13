@@ -28,6 +28,9 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
               <Link href="/backtest" className="px-3 py-1.5 text-sm text-zinc-400 hover:text-zinc-50 hover:bg-zinc-800 rounded transition">
                 Backtest
               </Link>
+              <Link href="/edge-hunt" className="px-3 py-1.5 text-sm text-zinc-400 hover:text-zinc-50 hover:bg-zinc-800 rounded transition">
+                Edge Hunt
+              </Link>
               <Link href="/post-mortems" className="px-3 py-1.5 text-sm text-zinc-400 hover:text-zinc-50 hover:bg-zinc-800 rounded transition">
                 Analysis
               </Link>
